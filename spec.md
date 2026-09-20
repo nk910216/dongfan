@@ -1357,7 +1357,9 @@ Service Worker 要求 secure context，規範定義為「HTTPS **或 localhost**
    Workers Assets **預設是 assets 優先**：平台會先嘗試比對靜態檔，找不到才呼叫 Worker。這代表 API 的 navigation request 有可能直接收到 SPA 的 HTML，而你的 handler 根本不會被執行。`run_worker_first: ["/api/*"]` 才能反轉這個順序。
    **驗收**：打一個不存在的 API 路徑（如 `/api/nope`），必須回 JSON 格式的 404，不能回 HTML。
 2. **SPA fallback**：`not_found_handling: "single-page-application"`，否則直接開 `/stats` 會 404。
-3. **建置順序**：`pnpm -C packages/web build && wrangler deploy`，部署腳本必須包含前端建置，否則會部署到過期的 `dist`。
+3. **建置順序**：`npm run build -w packages/web && wrangler deploy`，部署腳本必須包含前端建置，否則會部署到過期的 `dist`。
+
+**套件管理器用 npm workspaces**（不是 pnpm）：Node 內建、無須額外安裝，沙箱環境（§13.5）一定有。
 - D1 建立時指定 location hint 為 **APAC**，降低從台灣連線的延遲。
 - Migration 以 `wrangler d1 migrations apply` 執行，部署流程需包含此步驟。
 
