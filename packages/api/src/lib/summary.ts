@@ -7,34 +7,14 @@
  * milliseconds of CPU (spec 5.6).
  */
 
+import type { SummaryDto, TypeSummaryDto } from '@dongfan/shared';
+
 /** The two types the "how long since a feed" line covers (spec 5.5). */
 const FEED_TYPE_IDS = ['nursing', 'bottle'] as const;
 
-export type TypeSummary = {
-  typeId: string;
-  lastStartedAt: number;
-  lastValue: number;
-  /** Null unless a timer is running; not derived from endedAt (spec 3.5). */
-  activeEventId: string | null;
-  activeStartedAt: number | null;
-  /** Needed to stop the timer, because PATCH demands a version (spec 6.3). */
-  activeVersion: number | null;
-};
-
-export type DiaperCounts = {
-  pee: number;
-  poo: number;
-  both: number;
-  unknown: number;
-  total: number;
-};
-
-export type Summary = {
-  types: TypeSummary[];
-  today: { totalBottleMl: number; diaper: DiaperCounts };
-  /** Deliberately not scoped to today: at 00:30 the last feed was yesterday. */
-  lastFeedAt: number | null;
-};
+/** The wire shape lives in shared, beside the request schemas. */
+export type TypeSummary = TypeSummaryDto;
+export type Summary = Omit<SummaryDto, 'date'>;
 
 /**
  * The newest row per type, plus whichever row is running.

@@ -4,19 +4,20 @@ import {
   ageAt, eventTypeName, formatValue, getEventType, interpolate,
   metadataOptionLabel, zhTW,
 } from '@dongfan/shared';
+import type { EventDto } from '@dongfan/shared';
 import { EventIconBadge, FALLBACK_COLOR } from '../components/EventIcon.js';
 import { QuickActions } from '../components/QuickActions.js';
 import { formatClock, formatDuration, relativeTime } from '../lib/format.js';
-import { useStore, useTodaysEvents } from '../lib/store.js';
-import type { MockEvent } from '../mock/data.js';
+import { typeSummary, useStore } from '../lib/store.js';
+import { useSession } from '../lib/session.js';
 
 export function Home(): React.JSX.Element {
-  const { baby, summary, now } = useStore();
-  const events = useTodaysEvents();
+  const { baby, summary, events, now, stale } = useStore();
+  const { signOut } = useSession();
 
   const age = ageAt(baby.birthDate, now, baby.timezone);
-  const height = summary.types.get('height')?.lastValue ?? null;
-  const weight = summary.types.get('weight')?.lastValue ?? null;
+  const height = typeSummary(summary, 'height')?.lastValue ?? null;
+  const weight = typeSummary(summary, 'weight')?.lastValue ?? null;
   const heightSpec = getEventType('height')?.value ?? null;
   const weightSpec = getEventType('weight')?.value ?? null;
 
@@ -26,8 +27,15 @@ export function Home(): React.JSX.Element {
         <button type="button" aria-label={zhTW.a11y.openMenu} className="flex size-11 items-center justify-center text-ink-muted">
           <Menu size={22} />
         </button>
-        <span className="text-[13px] text-ink-faint">{zhTW.home.syncedJustNow}</span>
-        <button type="button" aria-label={zhTW.a11y.openSettings} className="flex size-11 items-center justify-center text-ink-muted">
+        <span className="text-[13px] text-ink-faint" data-testid="sync-state">
+          {stale ? zhTW.home.syncFailed : zhTW.home.syncedJustNow}
+        </span>
+        <button
+          type="button"
+          onClick={signOut}
+          aria-label={zhTW.auth.signOut}
+          className="flex size-11 items-center justify-center text-ink-muted"
+        >
           <Settings size={22} />
         </button>
       </header>
@@ -152,7 +160,7 @@ function EmptyState(): React.JSX.Element {
   );
 }
 
-function EventRow({ event, timezone }: { event: MockEvent; timezone: string }): React.JSX.Element {
+function EventRow({ event, timezone }: { event: EventDto; timezone: string }): React.JSX.Element {
   const type = getEventType(event.typeId);
   const color = type?.color ?? FALLBACK_COLOR;
   const spec = type?.value ?? null;
@@ -165,11 +173,13 @@ function EventRow({ event, timezone }: { event: MockEvent; timezone: string }): 
     details.push(formatDuration(event.endedAt - event.startedAt));
   }
   for (const [key, value] of Object.entries(event.metadata)) {
-    details.push(metadataOptionLabel(key, value));
+    if (value !== '') details.push(metadataOptionLabel(key, value));
   }
 
   return (
-    <div
+    <Link
+      to={`/event/${event.id}`}
+      aria-label={interpolate(zhTW.event.open, { name: eventTypeName(event.typeId) })}
       className="flex items-center gap-2.5 border-b border-line-soft px-1 py-2.5"
       data-testid={`event-row-${event.typeId}`}
     >
@@ -191,6 +201,6 @@ function EventRow({ event, timezone }: { event: MockEvent; timezone: string }): 
           <span className="text-[11px] text-ink-faint">{spec.unit}</span>
         </span>
       ) : null}
-    </div>
+    </Link>
   );
 }

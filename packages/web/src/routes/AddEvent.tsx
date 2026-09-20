@@ -1,10 +1,12 @@
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
 import {
-  CATEGORY_IDS, categoryName, deriveEventTimes, eventTypeName,
+  CATEGORY_IDS, categoryName, eventTypeName,
   eventTypesInCategory, getEventType, metadataOptionLabel, zhTW,
 } from '@dongfan/shared';
 import { EventIcon, EventIconBadge } from '../components/EventIcon.js';
+import { ErrorLine } from '../components/FieldErrors.js';
 import { useStore } from '../lib/store.js';
 
 /**
@@ -16,22 +18,32 @@ import { useStore } from '../lib/store.js';
  */
 export function AddEvent(): React.JSX.Element {
   const navigate = useNavigate();
-  const { addEvent, baby } = useStore();
+  const { addEvent } = useStore();
+  const [failure, setFailure] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
 
   const diaper = getEventType('diaper');
 
-  const recordDiaper = (kind: string): void => {
-    if (!diaper) return;
-    const times = deriveEventTimes(diaper, Date.now(), 'record', baby.timezone);
-    addEvent({
-      typeId: diaper.id,
-      intent: 'record',
-      ...times,
-      value: 1,
-      note: '',
-      metadata: { diaper_kind: kind },
-    });
-    navigate('/');
+  const recordDiaper = async (kind: string): Promise<void> => {
+    if (!diaper || busy) return;
+    setBusy(true);
+    setFailure(null);
+    try {
+      await addEvent({
+        typeId: diaper.id,
+        intent: 'record',
+        // Read once, here: this is the moment the button was pressed, not
+        // whenever the request reached the server.
+        startedAt: Date.now(),
+        endedAt: null,
+        note: '',
+        metadata: { diaper_kind: kind },
+      });
+      navigate('/');
+    } catch (error) {
+      setFailure(error);
+      setBusy(false);
+    }
   };
 
   return (
@@ -54,8 +66,9 @@ export function AddEvent(): React.JSX.Element {
                 <button
                   key={kind}
                   type="button"
-                  onClick={() => recordDiaper(kind)}
-                  className="flex flex-col items-center gap-1.5 rounded-2xl border p-3"
+                  disabled={busy}
+                  onClick={() => void recordDiaper(kind)}
+                  className="flex min-h-11 flex-col items-center gap-1.5 rounded-2xl border p-3 disabled:opacity-60"
                   style={{ borderColor: `${diaper.color}55`, backgroundColor: `${diaper.color}14` }}
                 >
                   <EventIconBadge icon={diaper.icon} color={diaper.color} diameter={40} size={20} />
@@ -63,6 +76,7 @@ export function AddEvent(): React.JSX.Element {
                 </button>
               ))}
             </div>
+            <ErrorLine failure={failure} />
           </section>
         ) : null}
 

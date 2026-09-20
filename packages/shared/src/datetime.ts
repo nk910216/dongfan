@@ -243,3 +243,33 @@ export function isPlausibleBirthDate(value: string, now: number, timeZone: strin
   if (value < EARLIEST_BIRTH_DATE) return false;
   return value <= addLocalDays(toLocalDate(now, timeZone), 1);
 }
+
+const pad = (value: number, width = 2): string => String(value).padStart(width, '0');
+
+/**
+ * A wall-clock reading in the baby's timezone, in the form a datetime input
+ * expects.
+ *
+ * The browser control works in the *device's* timezone, so its value can
+ * never be used directly: a parent travelling would file a night feed under
+ * the wrong day. Both directions go through here instead (spec 3.4).
+ */
+export function toLocalInput(instant: number, timeZone: string): string {
+  const p = partsOf(instant, timeZone);
+  return `${pad(p.year, 4)}-${pad(p.month)}-${pad(p.day)}T${pad(p.hour)}:${pad(p.minute)}`;
+}
+
+/** Reads such a value back. Null when it is not a complete, real moment. */
+export function fromLocalInput(value: string, timeZone: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::\d{2})?$/.exec(value);
+  if (!match) return null;
+
+  const [, year, month, day, hour, minute] = match as unknown as string[];
+  if (!isRealLocalDate(`${year}-${month}-${day}`)) return null;
+  if (Number(hour) > 23 || Number(minute) > 59) return null;
+
+  return localToUtc(
+    { year: Number(year), month: Number(month), day: Number(day), hour: Number(hour), minute: Number(minute) },
+    timeZone,
+  );
+}

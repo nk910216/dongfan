@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { eventTags, events, tags } from '../db/schema.js';
+import type { EventDto, EventPageDto } from '@dongfan/shared';
 import type { Env } from './types.js';
 
 /**
@@ -24,27 +25,8 @@ export const NEXT_REV = '(SELECT COALESCE(MAX(rev), 0) + 1 FROM events WHERE bab
 
 export type EventRow = typeof events.$inferSelect;
 
-export type EventResponse = {
-  id: string;
-  babyId: string;
-  typeId: string;
-  createdBy: string;
-  createdAt: number;
-  updatedAt: number;
-  startedAt: number;
-  endedAt: number | null;
-  localDate: string;
-  value: number;
-  note: string;
-  metadata: Record<string, string>;
-  version: number;
-  rev: number;
-  /** A running timer, never derived from endedAt (spec 3.5). */
-  active: boolean;
-  /** Non-null marks a tombstone the client must keep (spec 6.2). */
-  deletedAt: number | null;
-  tagIds: string[];
-};
+/** The wire shape lives in shared, beside the request schemas. */
+export type EventResponse = EventDto;
 
 /** Stored metadata is trusted to be an object; anything else is a bug. */
 export function parseMetadata(raw: string): Record<string, string> {
@@ -113,7 +95,7 @@ export async function babyTagIds(db: Db, babyId: string): Promise<Set<string>> {
   return new Set(rows.map((row) => row.id));
 }
 
-export type EventPage = { events: EventResponse[]; nextRev: number; hasMore: boolean };
+export type EventPage = EventPageDto;
 
 /**
  * One page of the incremental sync feed (spec 5.4).

@@ -4,10 +4,13 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "outDir": "./dist-types",
-    "rootDir": "./src",
+    "rootDir": ".",
     "noEmit": false,
     "types": ["vite/client"]
   },
-  "include": ["src/**/*"],
+  // Tests are included on purpose. Left out, a screen test can drift from the
+  // response contract and only say so when it runs, which is exactly the
+  // drift the shared types exist to prevent.
+  "include": ["src/**/*", "test/**/*"],
   "references": [{ "path": "../shared" }]
 }

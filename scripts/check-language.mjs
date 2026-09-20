@@ -14,10 +14,6 @@ const ALLOWED = [
   /^spec\.md$/,
   /^packages\/shared\/src\/i18n\/zh-TW\.ts$/,
   /^packages\/[^/]+\/test\/fixtures\/user-content\.ts$/,
-  // Prototype scaffolding: sample user content so the screens can be
-  // reviewed. Deleted together with the mock before M1 is complete,
-  // at which point this entry goes too (spec 12.1).
-  /^packages\/web\/src\/mock\//,
 ];
 
 /**

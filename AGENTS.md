@@ -158,9 +158,14 @@ raw code to the user.
 3. Attach the correct permission middleware — `requireBabyAccess`,
    `requireEventAccess`, `requireTagAccess` or `requireOwner` (spec 6.4).
    **Never write a permission check inside a handler.**
-4. Write the handler. Multi-step writes go in a single `batch()` with the
-   version guard as a predicate on every statement (spec 4.3) — checking
-   `meta.changes` after the batch returns is too late to roll anything back.
+4. Write the handler. Reads use Drizzle. **Writes do not**: they are raw
+   statements sent through `c.env.DB.batch()`, because the version guard has
+   to be a predicate on every statement in the transaction (spec 4.3) and the
+   query builder cannot express that. Checking `meta.changes` after the batch
+   returns is too late to roll anything back. `meta.changes` on the last
+   statement decides the *response* and nothing else.
+   Every write that touches `events` takes its new `rev` from the `NEXT_REV`
+   constant in `src/lib/events.ts`. Never write that subquery out by hand.
 5. Add an integration test against a real local D1 covering: success,
    unauthenticated, cross-baby access denied, validation failure, and version
    conflict.
@@ -172,8 +177,11 @@ Priority order, highest value first (spec 11):
 1. **Pure functions** in `shared` — date bucketing, midnight splitting, unit
    scaling, aggregation, age calculation. Chase coverage here.
 2. **API integration tests** on a real local D1, not a mocked SQL layer.
-3. **Component tests** with MSW intercepting at the network boundary. Do not
-   mock your own functions; that removes the thing under test.
+3. **Component tests** with MSW intercepting at the network boundary
+   (`packages/web/test/server.ts`). Do not mock your own functions; that
+   removes the thing under test. These cover the wiring — whether a tap
+   sends the body the contract describes — not the rules, which are tested
+   where they live.
 4. **A few end-to-end paths**, not a suite.
 
 Do not chase a global coverage number. Layer 1 is where the bugs are.

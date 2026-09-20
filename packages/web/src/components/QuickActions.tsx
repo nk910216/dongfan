@@ -1,9 +1,10 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { EVENT_TYPES, eventTypeName, interpolate, quickActionTypes, zhTW } from '@dongfan/shared';
 import type { EventTypeConfig } from '@dongfan/shared';
 import { EventIcon, EventIconBadge } from './EventIcon.js';
 import { formatStopwatch, relativeTime } from '../lib/format.js';
-import { useStore } from '../lib/store.js';
+import { typeSummary, useStore } from '../lib/store.js';
 
 /**
  * The strip of one-tap shortcuts.
@@ -14,19 +15,20 @@ import { useStore } from '../lib/store.js';
  */
 export function QuickActions(): React.JSX.Element {
   const { summary, now, stopTimer } = useStore();
+  const [stopping, setStopping] = useState<string | null>(null);
 
   // A running timer must always be stoppable from here. Walk and play can be
   // started from the picker but are not shortcuts, so without this they
   // would run with no way to end them until editing exists.
   const running: EventTypeConfig[] = EVENT_TYPES.filter(
-    (type) => !type.quickAction && summary.types.get(type.id)?.activeEventId != null,
+    (type) => !type.quickAction && typeSummary(summary, type.id)?.activeEventId != null,
   );
   const visible = [...running, ...quickActionTypes()];
 
   return (
     <div className="flex shrink-0 gap-2.5 overflow-x-auto px-3.5 pb-3.5 [scrollbar-width:none]">
       {visible.map((type) => {
-        const entry = summary.types.get(type.id);
+        const entry = typeSummary(summary, type.id);
         const isRunning = entry?.activeEventId != null && entry.activeStartedAt != null;
 
         if (isRunning && entry) {
@@ -48,8 +50,18 @@ export function QuickActions(): React.JSX.Element {
               </span>
               <button
                 type="button"
-                onClick={() => stopTimer(entry.activeEventId ?? '')}
-                className="min-h-11 rounded-lg px-3 text-[13px] font-bold text-ground"
+                disabled={stopping === entry.activeEventId}
+                onClick={() => {
+                  const id = entry.activeEventId;
+                  const version = entry.activeVersion;
+                  if (id === null || version === null) return;
+                  setStopping(id);
+                  // The end time is read once, here, so what gets stored is
+                  // the moment the button was pressed rather than whenever
+                  // the request happened to reach the server.
+                  void stopTimer(id, version, Date.now()).finally(() => setStopping(null));
+                }}
+                className="min-h-11 rounded-lg px-3 text-[13px] font-bold text-ground disabled:opacity-60"
                 style={{ backgroundColor: type.color }}
               >
                 {zhTW.timer.stop}
