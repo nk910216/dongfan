@@ -1,0 +1,22 @@
+{
+  "name": "dongfan",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "npm run dev -w @dongfan/web",
+    "build": "npm run build -w @dongfan/shared && npm run build -w @dongfan/web",
+    "typecheck": "tsc --build --force",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "check:lang": "node scripts/check-language.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "eslint": "^9.18.0",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0",
+    "vitest": "^3.0.4"
+  }
+}

@@ -1,0 +1,101 @@
+import { Link, useNavigate } from 'react-router-dom';
+import { ChevronLeft } from 'lucide-react';
+import {
+  CATEGORY_IDS, categoryName, eventTypeName, eventTypesInCategory,
+  getEventType, metadataOptionLabel, zhTW,
+} from '@dongfan/shared';
+import { EventIcon, EventIconBadge } from '../components/EventIcon.js';
+import { useStore } from '../lib/store.js';
+
+/**
+ * Type picker, grouped by category.
+ *
+ * Diaper is expanded into its three kinds rather than opening a form,
+ * because a shortcut that still needs a second screen gets skipped at 3am
+ * and the day ends up full of unclassified entries (spec 7.3).
+ */
+export function AddEvent(): React.JSX.Element {
+  const navigate = useNavigate();
+  const { addEvent } = useStore();
+
+  const diaper = getEventType('diaper');
+
+  const recordDiaper = (kind: string): void => {
+    addEvent({
+      typeId: 'diaper',
+      intent: 'record',
+      startedAt: Date.now(),
+      endedAt: Date.now(),
+      value: 1,
+      note: '',
+      metadata: { diaper_kind: kind },
+    });
+    navigate('/');
+  };
+
+  return (
+    <div className="flex h-full flex-col overflow-hidden">
+      <header className="flex shrink-0 items-center border-b border-line-soft px-2 py-2">
+        <Link to="/" aria-label={zhTW.addEvent.cancel} className="flex size-11 items-center justify-center text-ink-muted">
+          <ChevronLeft size={22} />
+        </Link>
+        <span className="-ml-11 flex-1 text-center text-base font-medium">{zhTW.addEvent.title}</span>
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-3.5 pt-3.5 pb-8">
+        {diaper ? (
+          <section className="mb-4">
+            <h2 className="mb-2 text-xs font-medium tracking-widest text-ink-faint">
+              {eventTypeName('diaper')}
+            </h2>
+            <div className="grid grid-cols-3 gap-2.5">
+              {['pee', 'poo', 'both'].map((kind) => (
+                <button
+                  key={kind}
+                  type="button"
+                  onClick={() => recordDiaper(kind)}
+                  className="flex flex-col items-center gap-1.5 rounded-2xl border p-3"
+                  style={{ borderColor: `${diaper.color}55`, backgroundColor: `${diaper.color}14` }}
+                >
+                  <EventIconBadge icon={diaper.icon} color={diaper.color} diameter={40} size={20} />
+                  <span className="text-xs text-ink-muted">{metadataOptionLabel('diaper_kind', kind)}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {CATEGORY_IDS.map((category) => {
+          const types = eventTypesInCategory(category).filter((t) => t.id !== 'diaper');
+          if (types.length === 0) return null;
+          return (
+            <section key={category} className="mb-4">
+              <h2 className="mb-2 text-xs font-medium tracking-widest text-ink-faint">
+                {categoryName(category)}
+              </h2>
+              <div className="grid grid-cols-5 gap-2.5">
+                {types.map((type) => (
+                  <Link
+                    key={type.id}
+                    to={`/add/${type.id}`}
+                    className="flex flex-col items-center gap-1.5"
+                  >
+                    <span
+                      className="flex size-12 items-center justify-center rounded-full border"
+                      style={{ borderColor: `${type.color}52`, backgroundColor: `${type.color}24` }}
+                    >
+                      <EventIcon icon={type.icon} color={type.color} size={22} />
+                    </span>
+                    <span className="text-center text-[11px] leading-tight text-ink-muted">
+                      {eventTypeName(type.id)}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
