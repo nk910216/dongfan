@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import type { EventDto } from '@dongfan/shared';
 import { ApiFailure, NetworkFailure } from './api.js';
-import { clearPending, pendingFor, writePending } from './pending-create.js';
+import { forgetPending, pendingFor, rememberPending } from './pending-create.js';
 import { useSession } from './session.js';
 import { newEventId, useStore } from './store.js';
 import type { NewEventInput } from './store.js';
@@ -86,10 +86,7 @@ export function useCreateEvent(typeId: string): CreateEvent {
 
   // Picked up from storage when it belongs to this user, this baby and
   // this type. A nappy shortcut must not resend somebody's bottle.
-  const [resumed] = useState(() => {
-    const found = pendingFor(userId, baby.id);
-    return found && found.input.typeId === typeId ? found : null;
-  });
+  const [resumed] = useState(() => pendingFor(userId, baby.id, typeId));
 
   const [eventId] = useState(() => resumed?.eventId ?? newEventId());
   const [sent, setSent] = useState<NewEventInput | null>(resumed?.input ?? null);
@@ -109,7 +106,9 @@ export function useCreateEvent(typeId: string): CreateEvent {
         const created = await addEvent(eventId, payload);
         setOutcomeUnknown(false);
         setSent(null);
-        clearPending();
+        // This add and no other. A nappy going through says nothing about
+        // a bottle still waiting to be confirmed.
+        forgetPending(userId, baby.id, eventId);
         setBusy(false);
         return created;
       } catch (error) {
@@ -123,7 +122,7 @@ export function useCreateEvent(typeId: string): CreateEvent {
           if (provesNotStored(error)) {
             setOutcomeUnknown(false);
             setSent(null);
-            clearPending();
+            forgetPending(userId, baby.id, eventId);
           }
           return null;
         }
@@ -133,7 +132,7 @@ export function useCreateEvent(typeId: string): CreateEvent {
           setOutcomeUnknown(true);
           // Written down before the screen has a chance to disappear,
           // which a 401 makes it do immediately.
-          writePending({ userId, babyId: baby.id, eventId, input: payload });
+          rememberPending({ userId, babyId: baby.id, eventId, input: payload });
         }
         return null;
       }

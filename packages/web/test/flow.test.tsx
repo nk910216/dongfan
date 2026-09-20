@@ -578,6 +578,105 @@ describe('saving again after a save that said nothing', () => {
     expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('150');
   });
 
+  it('is left alone when a different event is recorded successfully', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    // Life carries on. A nappy going through says nothing whatsoever about
+    // whether the bottle landed, and must not take its id with it.
+    cleanup();
+    const next = openSignedIn('/');
+    await waitForHome();
+    await next.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await next.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'pee') }));
+    await waitForHome();
+
+    expect(screen.getByTestId('pending-create')).toBeInTheDocument();
+    await next.click(screen.getByTestId('pending-create'));
+    expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('150');
+  });
+
+  it('is not overwritten when a different event also goes unanswered', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    cleanup();
+    const next = openSignedIn('/');
+    await waitForHome();
+    await next.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+
+    api.loseNextResponse = true;
+    await next.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'pee') }));
+    await screen.findByTestId('outcome-unknown');
+
+    // Two in doubt, and one store: the second must not land on top of the
+    // first. Both ids have to survive to be worth keeping at all.
+    cleanup();
+    const third = openSignedIn('/');
+    await waitForHome();
+    expect(screen.getByTestId('pending-create')).toHaveTextContent(
+      interpolate(zhTW.home.pendingUnknownMany, { count: 2 }),
+    );
+
+    await third.click(screen.getByTestId('pending-create'));
+    expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('150');
+  });
+
+  it('is left alone by another account recording successfully', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    cleanup();
+    api.signInAs('the-other-parent');
+    const other = openSignedIn('/add/bottle');
+
+    // The form offers the last amount, which here is the very bottle that
+    // is in doubt, so it has to be cleared before typing a new one.
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    await other.clear(amount);
+    await other.type(amount, '90');
+    await other.click(screen.getByTestId('submit'));
+    await waitForHome();
+
+    // Back as the first parent, whose bottle is still unaccounted for.
+    cleanup();
+    api.signInAs('user-1');
+    const first = openSignedIn('/');
+    await waitForHome();
+
+    await first.click(await screen.findByTestId('pending-create'));
+    expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('150');
+  });
+
+  it('is gone once its own add is confirmed', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    await user.click(screen.getByTestId('submit'));
+    await waitFor(() => expect(screen.queryByTestId('outcome-unknown')).not.toBeInTheDocument());
+
+    cleanup();
+    openSignedIn('/');
+    await waitForHome();
+    expect(screen.queryByTestId('pending-create')).not.toBeInTheDocument();
+  });
+
   it('leaves the home screen alone when there is nothing pending', async () => {
     openSignedIn();
     await waitForHome();

@@ -10,7 +10,7 @@ import { EventIconBadge, FALLBACK_COLOR } from '../components/EventIcon.js';
 import { QuickActions } from '../components/QuickActions.js';
 import { formatClock, formatDuration, relativeTime } from '../lib/format.js';
 import { typeSummary, useStore } from '../lib/store.js';
-import { pendingFor } from '../lib/pending-create.js';
+import { pendingList } from '../lib/pending-create.js';
 import { useSession } from '../lib/session.js';
 
 export function Home(): React.JSX.Element {
@@ -21,9 +21,10 @@ export function Home(): React.JSX.Element {
   // in unmounts the form it started on, and without a way back the parent
   // would simply record it a second time (spec 6.1).
   const pending = useMemo(
-    () => pendingFor(me?.user.id ?? '', baby.id),
+    () => pendingList(me?.user.id ?? '', baby.id),
     [me, baby.id, events],
   );
+  const oldestPending = pending[0] ?? null;
 
   const age = ageAt(baby.birthDate, now, baby.timezone);
   const height = typeSummary(summary, 'height')?.lastValue ?? null;
@@ -108,13 +109,15 @@ export function Home(): React.JSX.Element {
         </SummaryCell>
       </section>
 
-      {pending ? (
+      {oldestPending ? (
         <Link
-          to={`/add/${pending.input.typeId}`}
+          to={`/add/${oldestPending.input.typeId}`}
           data-testid="pending-create"
           className="mx-3.5 mb-3 flex shrink-0 items-center gap-2 rounded-xl border border-warn/50 bg-warn/10 px-3.5 py-2.5 text-[13px] text-warn-soft"
         >
-          {interpolate(zhTW.home.pendingUnknown, { name: eventTypeName(pending.input.typeId) })}
+          {pending.length === 1
+            ? interpolate(zhTW.home.pendingUnknown, { name: eventTypeName(oldestPending.input.typeId) })
+            : interpolate(zhTW.home.pendingUnknownMany, { count: pending.length })}
         </Link>
       ) : null}
 
