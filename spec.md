@@ -1574,6 +1574,7 @@ ln -s AGENTS.md CLAUDE.md
 | 禁止 N+1 查詢（§4.2） | D1 查詢計數 helper，超過 30 次即 fail（§11.2） |
 | 各欄位長度上限（§5.7） | Zod schema 的 `maxLength` |
 | PBKDF2 迭代數 | `packages/shared` 的具名常數，不得在 handler 內寫死 |
+| repo 內不得出現中文（§13.1） | CI 檢查：掃描追蹤中的檔案是否含 CJK 字元，`spec.md` 與 UI 文案檔為白名單。**這條特別需要機器檢查**——它是人最容易在趕時間時破例的規則，而破例後不會有任何症狀 |
 
 `AGENTS.md` 只保留**真的無法機器化**的部分。
 
