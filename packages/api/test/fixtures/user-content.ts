@@ -11,4 +11,6 @@ export const USER_CONTENT = {
   note: '喝完馬上吐了一點',
   noteWithEmoji: '第一次翻身 \u{1F389}',
   tagName: '夜奶',
+  /** One character, but two UTF-16 units. */
+  astralCharacter: '\u{1F389}',
 } as const;

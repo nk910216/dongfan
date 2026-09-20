@@ -3,8 +3,9 @@ import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 import { describe, expect, it } from 'vitest';
 import { users } from '../src/db/schema.js';
-import { hashPassword, verifyPassword } from '@dongfan/shared';
+import { MAX_PASSWORD_LENGTH, hashPassword, verifyPassword } from '@dongfan/shared';
 import { createUser, json, login, request, signedInUser } from './helpers.js';
+import { USER_CONTENT } from './fixtures/user-content.js';
 
 const PASSWORD = 'correct-horse-battery-staple-9021';
 
@@ -96,6 +97,34 @@ describe('login', () => {
     expect(body.error.details.fields).toEqual(
       expect.arrayContaining([{ field: 'username', code: 'REQUIRED', params: {} }]),
     );
+  });
+
+  it('refuses a password longer than the maximum', async () => {
+    const response = await request('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'someone', password: 'a'.repeat(MAX_PASSWORD_LENGTH + 1) }),
+    });
+
+    expect(response.status).toBe(422);
+    const body = await json<{ error: { details: { fields: { field: string; code: string }[] } } }>(response);
+    expect(body.error.details.fields[0]).toEqual({
+      field: 'password',
+      code: 'TOO_LONG',
+      params: { maxLength: MAX_PASSWORD_LENGTH },
+    });
+  });
+
+  it('accepts a password at the maximum length made of astral characters', async () => {
+    // Counted as UTF-16 units this is twice the limit, and the account it
+    // belongs to would exist but be impossible to log into.
+    const password = USER_CONTENT.astralCharacter.repeat(MAX_PASSWORD_LENGTH);
+    await createUser('emoji-user', password);
+
+    const response = await request('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'emoji-user', password }),
+    });
+    expect(response.status).toBe(200);
   });
 
   it('refuses a disabled account', async () => {

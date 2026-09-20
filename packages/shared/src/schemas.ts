@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { MAX_NOTE_LENGTH } from './constants.js';
+import { MAX_NOTE_LENGTH, MAX_PASSWORD_LENGTH } from './constants.js';
+import { passwordLength } from './crypto.js';
 
 /**
  * Request contracts shared by both sides.
@@ -16,7 +17,26 @@ const LOCAL_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 export const loginRequest = z.object({
   username: z.string().min(1).max(100),
-  password: z.string().min(1).max(200),
+  /**
+   * Counted the same way the CLI counts it, so a password that could be set
+   * can always be used. `.max()` would count UTF-16 units and refuse a
+   * password of two hundred emoji that the CLI happily accepted.
+   *
+   * Only the upper bound is checked here. The minimum is a policy applied
+   * when an account is created; enforcing it at login would lock out every
+   * existing account the day the policy is raised, and silently.
+   */
+  password: z.string().min(1).superRefine((value, ctx) => {
+    if (passwordLength(value) > MAX_PASSWORD_LENGTH) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.too_big,
+        type: 'string',
+        maximum: MAX_PASSWORD_LENGTH,
+        inclusive: true,
+        message: 'password too long',
+      });
+    }
+  }),
 });
 
 export const createBabyRequest = z.object({

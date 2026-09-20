@@ -36,6 +36,16 @@ export const DEFAULT_TIMEZONE = 'Asia/Taipei';
 export const MIN_PASSWORD_LENGTH = 20;
 
 /**
+ * Maximum password length.
+ *
+ * An upper bound on work, not on security: every character is hashed, and
+ * the worker has ten milliseconds of CPU for the whole request. Enforced
+ * identically wherever a password is accepted, because a value one side
+ * takes and the other refuses produces an account that cannot log in.
+ */
+export const MAX_PASSWORD_LENGTH = 200;
+
+/**
  * Timezones the first version supports.
  *
  * Taipei has no daylight saving, which is what makes "at most 24 hours means

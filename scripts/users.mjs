@@ -14,7 +14,9 @@
 
 import { randomUUID, randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
-import { MIN_PASSWORD_LENGTH, hashPassword, isPasswordLongEnough } from '../packages/shared/dist/index.js';
+import {
+  MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, hashPassword, isPasswordLengthValid, passwordLength,
+} from '../packages/shared/dist/index.js';
 import { execute, literal } from './lib/d1.mjs';
 
 const GENERATED_PASSWORD_BYTES = 18; // 24 base64url characters, 144 bits.
@@ -41,9 +43,10 @@ async function resolvePassword() {
   const chosen = await promptPassword();
   if (chosen === '') return { password: generatePassword(), generated: true };
 
-  if (!isPasswordLongEnough(chosen)) {
+  if (!isPasswordLengthValid(chosen)) {
     throw new Error(
-      `Password must be at least ${MIN_PASSWORD_LENGTH} characters. ` +
+      `Password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} ` +
+        `characters; that one is ${passwordLength(chosen)}. ` +
         'Leave the prompt blank to generate one.',
     );
   }

@@ -1,4 +1,4 @@
-import { MIN_PASSWORD_LENGTH, PBKDF2_ITERATIONS } from './constants.js';
+import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, PBKDF2_ITERATIONS } from './constants.js';
 
 /**
  * Password hashing and token digests.
@@ -102,7 +102,19 @@ export async function hashToken(token: string): Promise<string> {
 export const DUMMY_PASSWORD_HASH =
   `pbkdf2$sha256$${PBKDF2_ITERATIONS}$${toBase64(new Uint8Array(SALT_BYTES))}$${toBase64(new Uint8Array(KEY_BITS / 8))}`;
 
-/** Length and nothing else; see MIN_PASSWORD_LENGTH for why. */
-export function isPasswordLongEnough(password: string): boolean {
-  return [...password].length >= MIN_PASSWORD_LENGTH;
+/**
+ * Password length in characters.
+ *
+ * Iterating the string counts code points; `.length` counts UTF-16 units and
+ * reports an emoji as two. Mixing the two is how a password can be accepted
+ * when the account is made and refused when it is used.
+ */
+export function passwordLength(password: string): number {
+  return [...password].length;
+}
+
+/** Both bounds, used wherever a password is created or changed. */
+export function isPasswordLengthValid(password: string): boolean {
+  const length = passwordLength(password);
+  return length >= MIN_PASSWORD_LENGTH && length <= MAX_PASSWORD_LENGTH;
 }

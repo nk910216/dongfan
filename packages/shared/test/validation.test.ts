@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DUMMY_PASSWORD_HASH, MIN_PASSWORD_LENGTH, PBKDF2_ITERATIONS,
-  SUPPORTED_TIMEZONES, isPasswordLongEnough,
+  DUMMY_PASSWORD_HASH, MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, PBKDF2_ITERATIONS,
+  SUPPORTED_TIMEZONES, isPasswordLengthValid, loginRequest, passwordLength,
 } from '../src/index.js';
 import { EARLIEST_BIRTH_DATE, isPlausibleBirthDate, isRealLocalDate, localToUtc } from '../src/datetime.js';
 import { USER_CONTENT } from './fixtures/user-content.js';
@@ -62,17 +62,74 @@ describe('isPlausibleBirthDate', () => {
   });
 });
 
-describe('password rules', () => {
-  it('requires the documented length', () => {
-    expect(isPasswordLongEnough('a'.repeat(MIN_PASSWORD_LENGTH))).toBe(true);
-    expect(isPasswordLongEnough('a'.repeat(MIN_PASSWORD_LENGTH - 1))).toBe(false);
+describe('password length', () => {
+  const repeat = (character: string, times: number): string => character.repeat(times);
+
+  it('accepts exactly the minimum and rejects one character less', () => {
+    expect(isPasswordLengthValid(repeat('a', MIN_PASSWORD_LENGTH))).toBe(true);
+    expect(isPasswordLengthValid(repeat('a', MIN_PASSWORD_LENGTH - 1))).toBe(false);
+  });
+
+  it('accepts exactly the maximum and rejects one character more', () => {
+    expect(isPasswordLengthValid(repeat('a', MAX_PASSWORD_LENGTH))).toBe(true);
+    expect(isPasswordLengthValid(repeat('a', MAX_PASSWORD_LENGTH + 1))).toBe(false);
+  });
+
+  it('rejects an empty password', () => {
+    expect(isPasswordLengthValid('')).toBe(false);
   });
 
   it('counts characters rather than bytes', () => {
-    // Twenty characters is twenty characters whatever the encoding costs.
-    const twenty = USER_CONTENT.multiByteCharacter.repeat(MIN_PASSWORD_LENGTH);
+    const twenty = repeat(USER_CONTENT.multiByteCharacter, MIN_PASSWORD_LENGTH);
     expect(new TextEncoder().encode(twenty).length).toBeGreaterThan(MIN_PASSWORD_LENGTH);
-    expect(isPasswordLongEnough(twenty)).toBe(true);
+    expect(isPasswordLengthValid(twenty)).toBe(true);
+  });
+
+  it('counts an astral character once, not twice', () => {
+    // The distinction that matters: `.length` would report this as double.
+    const emoji = USER_CONTENT.astralCharacter;
+    expect(emoji.length).toBe(2);
+    expect(passwordLength(emoji)).toBe(1);
+  });
+
+  it('accepts the maximum in astral characters', () => {
+    const maximum = repeat(USER_CONTENT.astralCharacter, MAX_PASSWORD_LENGTH);
+    expect(maximum.length).toBe(MAX_PASSWORD_LENGTH * 2);
+    expect(isPasswordLengthValid(maximum)).toBe(true);
+  });
+});
+
+describe('login schema and the account rules agree', () => {
+  const password = (value: string): boolean =>
+    loginRequest.safeParse({ username: 'someone', password: value }).success;
+
+  it('accepts every password the account rules allow', () => {
+    // The bug this guards: a password the CLI accepted being refused at
+    // login, leaving an account that exists and cannot be used.
+    for (const value of [
+      'a'.repeat(MIN_PASSWORD_LENGTH),
+      'a'.repeat(MAX_PASSWORD_LENGTH),
+      USER_CONTENT.astralCharacter.repeat(MAX_PASSWORD_LENGTH),
+      USER_CONTENT.multiByteCharacter.repeat(MAX_PASSWORD_LENGTH),
+    ]) {
+      expect(isPasswordLengthValid(value)).toBe(true);
+      expect(password(value), `length ${passwordLength(value)}`).toBe(true);
+    }
+  });
+
+  it('refuses a password longer than the maximum', () => {
+    expect(password('a'.repeat(MAX_PASSWORD_LENGTH + 1))).toBe(false);
+    expect(password(USER_CONTENT.astralCharacter.repeat(MAX_PASSWORD_LENGTH + 1))).toBe(false);
+  });
+
+  it('does not apply the minimum, which belongs to account creation', () => {
+    // Enforcing it here would lock out every existing account the day the
+    // policy is raised, and do so silently.
+    expect(password('short')).toBe(true);
+  });
+
+  it('still refuses an empty password', () => {
+    expect(password('')).toBe(false);
   });
 });
 
