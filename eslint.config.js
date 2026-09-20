@@ -64,6 +64,13 @@ export default tseslint.config(
   {
     // Build and maintenance scripts run under Node, not in a Worker.
     files: ['scripts/**/*.mjs', '*.config.{js,ts}'],
-    languageOptions: { globals: { console: 'readonly', process: 'readonly' } },
+    languageOptions: {
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+      },
+    },
   },
 );

@@ -10,6 +10,7 @@
   },
   "scripts": {
     "dev": "npm run dev -w @dongfan/web",
+    "dev:all": "node scripts/dev.mjs",
     "dev:api": "npm run build -w @dongfan/web && npm run dev -w @dongfan/api",
     "build": "npm run build -w @dongfan/shared && npm run build -w @dongfan/web",
     "typecheck": "tsc --build --force",

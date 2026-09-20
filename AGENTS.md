@@ -66,6 +66,20 @@ Three paths are whitelisted for CJK characters, enforced by a CI scan
 When talking to the repository owner, use Traditional Chinese. When writing
 anything that lands in the repository, use English.
 
+## Where the project is
+
+Local only. Nothing is deployed, there is no remote database, and the plan
+is to reach M4 running on one machine before deciding about deploying at
+all. `docs/deployment.md` is written and ready; nothing in it has happened.
+
+The acceptance criteria in spec 12.1 that need a real deployment — the login
+CPU measurement, a backup of the deployed database, the scheduled workflow
+— are **outstanding**. Do not describe them as passed, and do not try to
+carry them out.
+
+`npm run dev:all` starts both halves against the local database and prints
+the address for a phone. `docs/running-locally.md` covers the rest.
+
 ## Before you call something done
 
 ```sh

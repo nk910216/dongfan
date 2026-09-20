@@ -1,11 +1,23 @@
 # Deploying, and what has to be checked by hand
 
+> **Nothing in this file has been done.** The plan is to build and use the
+> app locally through M4 and decide about deploying afterwards, so there is
+> no deployed worker, no remote database and no account on Cloudflare
+> holding anything. Every step below is written down so it is ready, not
+> because it has happened.
+>
+> For running and using the app today, see
+> [`running-locally.md`](running-locally.md).
+
 Written for whoever is putting this in front of a real family for the first
 time. Everything here needs a Cloudflare account and a phone, so none of it
 can be settled by the test suite.
 
-`spec.md` section 12.1 lists the acceptance criteria; this is how to work
-through them.
+`spec.md` section 12.1 lists the acceptance criteria. Two of them turned out
+not to need a deployment after all — the worker serves the built assets
+locally through the same bindings — and those have moved to
+[`running-locally.md`](running-locally.md). What is left here genuinely
+cannot be checked without deploying.
 
 ## Two configurations, one file
 
@@ -140,42 +152,14 @@ or the others keep failing exactly as before. `npm run users -- list
 Record the measured figure somewhere. It is the only evidence this was
 checked.
 
-### 2. Adding an event from a phone over plain HTTP
+### 2. Adding an event from a phone
 
-`crypto.randomUUID()` needs a secure context, which a phone on a LAN address
-over HTTP is not. The client falls back to `crypto.getRandomValues`, and
-without it the id generation throws and no event can be created at all
-(spec 10.1).
+Done locally over plain HTTP, which is the case that matters — see
+[`running-locally.md`](running-locally.md). Worth repeating once over HTTPS
+after deploying, though that path exercises less: over HTTPS the
+insecure-context fallback never runs.
 
-```sh
-npm run dev:api     # one terminal
-npm run dev         # another
-```
-
-On a phone on the same network, open `http://<laptop-ip>:5180`, sign in, and
-add one event. The event id in the request must be a well-formed UUID and
-the event must appear in the list.
-
-This is worth doing over plain HTTP specifically. Over HTTPS the fallback
-never runs, so testing there proves nothing about it.
-
-### 3. The API is not shadowed by the static assets
-
-Workers Assets answers before the Worker by default, so an API request can
-come back as the app's HTML with the handler never running.
-`run_worker_first` reverses that (spec 10.2), and it is worth confirming on
-the deployed version rather than locally.
-
-```sh
-curl -i https://<worker>.workers.dev/api/nope
-curl -i https://<worker>.workers.dev/event/anything
-```
-
-The first must be a JSON 404 (`{"error":{"code":"NOT_FOUND"...}}`), not
-HTML. The second must be the app's HTML, so that opening a link to an event
-directly does not 404.
-
-### 4. A restore drill on a real backup
+### 3. A restore drill on a real backup
 
 A file with `INSERT INTO events` in it proves there is a file. Only a
 restore proves the records come back (spec 12.2).
@@ -211,7 +195,7 @@ partway with `no such table: main.users`. The drill applies every `CREATE`
 first and every `INSERT` second, with `PRAGMA defer_foreign_keys=TRUE` on
 the second pass.
 
-### 5. The scheduled backup actually runs
+### 4. The scheduled backup actually runs
 
 `.github/workflows/backup.yml` runs weekly. It needs two repository secrets:
 
@@ -238,7 +222,7 @@ contains both the `.sql` and the `.counts.json`.
 Actions. A scheduled backup whose failures are silent is not a backup; it is
 a belief about a backup (spec 12.2).
 
-### 6. Signing in on a phone
+### 5. Signing in on a phone
 
 Open the deployed URL on a phone, sign in, and add an event.
 

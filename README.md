@@ -8,32 +8,25 @@ See [`spec.md`](spec.md) for what is being built and why, and
 
 ## Getting started
 
-The app talks to a real local API, so two processes are needed. In one
-terminal:
-
 ```sh
 npm install
 npm run db:migrate   # create the local dongfan-dev database
 npm run db:seed      # fill it with invented records, and print an account
-npm run dev:api      # the worker on http://localhost:8787
+npm run dev:all      # the worker and the web server together
 ```
 
-In another:
-
-```sh
-npm run dev          # http://localhost:5180, proxying /api to the worker
-```
-
-Sign in with the account the seed script printed. If that has scrolled away,
+`dev:all` prints the address to open on a phone on the same network. Sign in
+with the account the seed script printed; if that has scrolled away,
 `npm run users -- password dev-parent-a` issues a new one.
 
-No build step is needed first: the web package resolves `@dongfan/shared`
-from source, so a fresh checkout runs and edits to the shared config reach
-the screen immediately.
+[`docs/running-locally.md`](docs/running-locally.md) has the rest: which
+address does what, how to create an account on an empty database, and the
+M1 checks that can be done without deploying.
 
-The port is fixed and strict. If it is taken the server refuses to start
-rather than quietly moving, because a second server on a shared port can
-end up serving a different application at the same address.
+It will refuse to start if something already holds a port. Stop the old one
+rather than working around it — a dev server left running serves the code it
+had when it started, and a phone pointed at it looks completely normal while
+being hours behind.
 
 ## Backend
 
@@ -83,9 +76,11 @@ drill proves anything can be recovered.
 
 ## Deploying
 
-See [`docs/deployment.md`](docs/deployment.md). It covers the one-time
-setup, making accounts against the deployed database, and the checks that
-can only be done with a real deployment and a real phone.
+Not yet. The plan is to build and use the app locally through M4 and decide
+about deploying afterwards, so there is no deployed worker and no remote
+database. [`docs/deployment.md`](docs/deployment.md) is written and ready
+for when that changes; none of it has been done, and the acceptance checks
+that need a real deployment are outstanding, not passed.
 
 ## Checks
 
