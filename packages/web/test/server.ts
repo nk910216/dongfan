@@ -51,6 +51,12 @@ class Api {
   private gate: Promise<void> | null = null;
   private rev = 0;
 
+  /** The next rev, allocated the way the server does (spec 5.4). */
+  nextRev(): number {
+    this.rev += 1;
+    return this.rev;
+  }
+
   /** Switches which account the token belongs to, for isolation tests. */
   signInAs(userId: string): void {
     ME.user = { id: userId, username: userId };
@@ -253,6 +259,27 @@ export const server = setupServer(
     return HttpResponse.json(created, { status: 201 });
   }),
 
+  http.get('/api/babies/:babyId/events', async ({ request }) => {
+    await record(request);
+    const url = new URL(request.url);
+    const since = Number(url.searchParams.get('since') ?? 0);
+    const limit = Number(url.searchParams.get('limit') ?? 200);
+
+    // Tombstones travel too, or the other phone never learns about a
+    // deletion (spec 5.4).
+    const ordered = [...api.events].sort((a, b) => a.rev - b.rev).filter((e) => e.rev > since);
+    const page = ordered.slice(0, limit);
+    const last = page[page.length - 1];
+
+    return HttpResponse.json({
+      events: page,
+      // The last rev of the page, never the highest in the table, and the
+      // cursor it was given when the page is empty (spec 5.4).
+      nextRev: last ? last.rev : since,
+      hasMore: ordered.length > page.length,
+    });
+  }),
+
   http.get('/api/babies/:babyId/events/summary', async ({ request }) => {
     await record(request);
     return HttpResponse.json(api.summary());
@@ -315,6 +342,7 @@ export const server = setupServer(
       : body['endedAt'] === null ? null : Number(body['endedAt']);
 
     Object.assign(event, {
+      rev: api.nextRev(),
       startedAt: body['startedAt'] === undefined ? event.startedAt : Number(body['startedAt']),
       endedAt,
       value: body['value'] === undefined ? event.value : Number(body['value']),
@@ -339,6 +367,8 @@ export const server = setupServer(
     event.deletedAt = Date.now();
     event.active = false;
     event.version += 1;
+    // A tombstone with the old rev never reaches the other device.
+    event.rev = api.nextRev();
     return HttpResponse.json(event);
   }),
 );

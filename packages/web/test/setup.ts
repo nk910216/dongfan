@@ -1,7 +1,10 @@
+import 'fake-indexeddb/auto';
 import { afterAll, afterEach, beforeAll } from 'vitest';
+import { IDBFactory } from 'fake-indexeddb';
 import { cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { api, server } from './server.js';
+import { closeDb } from '../src/lib/db.js';
 
 /**
  * A working Storage for the tests.
@@ -73,6 +76,12 @@ beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => {
   server.resetHandlers();
   api.reset();
+
+  // A brand new IndexedDB for every test. Emptying the stores would leave
+  // whatever the previous test's sync cursor was, and a cursor is exactly
+  // the thing that makes a sync quietly return nothing.
+  closeDb();
+  globalThis.indexedDB = new IDBFactory();
   // A test may have left a Storage that throws in place.
   installStorage();
   localStorage.clear();

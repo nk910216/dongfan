@@ -2,21 +2,29 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react';
 import { getEventType, toLocalDate, zhTW } from '@dongfan/shared';
 import { Message } from '../components/Message.js';
-import type { BabyDto, DayDto, EventDto, EventIntent, SummaryDto, TypeSummaryDto } from '@dongfan/shared';
+import type { BabyDto, EventDto, EventIntent, SummaryDto, TypeSummaryDto } from '@dongfan/shared';
 import { ApiFailure, apiRequest } from './api.js';
+import * as local from './db.js';
+import { scopeOf } from './db.js';
+import { syncEvents, syncSummary } from './sync.js';
 import { useSession } from './session.js';
 
 /**
- * The screens' data, read from the API.
+ * The screens' data.
  *
- * Deliberately thin: today's list and the summary, refetched after every
- * write. Narrowing the invalidation would be guesswork, because a sleep that
- * began last night changes today's figures too, and a corrected timestamp
- * changes two days at once (spec 6.2).
+ * Read from the local database, filled by pulling changes from the server.
+ * The screens never wait on the network to show something they already
+ * have, which is what makes the app usable on a train and at three in the
+ * morning in a room with no signal (spec 6.2).
  *
- * There is no offline queue and no IndexedDB here. Both belong to M2, and a
- * half-built queue is worse than none: it would look like it was keeping a
- * parent's records safe.
+ * The summary is the exception and stays the server's: what changes when an
+ * event moves is not something a client can work out, so it is fetched and
+ * cached, and shown as old rather than as current when the fetch fails
+ * (spec 5.5, 6.2).
+ *
+ * Writes still go straight to the server. The queue that lets them wait is
+ * the next stage; a half-built one is worse than none, because it would
+ * look like it was keeping a parent's records safe.
  */
 
 export type NewEventInput = {
@@ -46,6 +54,8 @@ export type Store = {
   loading: boolean;
   /** Set when the last refresh did not reach the server. */
   stale: boolean;
+  /** When the last successful pull finished, or null if there never was one. */
+  syncedAt: number | null;
   refresh: () => Promise<void>;
   findEvent: (eventId: string) => Promise<EventDto>;
   /**
@@ -68,11 +78,16 @@ function allDayFirst(events: EventDto[]): EventDto[] {
 }
 
 export function StoreProvider({ baby, children }: { baby: BabyDto; children: ReactNode }): React.JSX.Element {
-  const { token, expire } = useSession();
+  const { token, expire, me } = useSession();
+  // One account, one baby. Everything below reads and writes under this,
+  // so switching accounts cannot show the previous one's records and a
+  // record cannot be filed against the wrong baby (spec 6.1, 6.2).
+  const scope = scopeOf(me?.user.id ?? '', baby.id);
   const [events, setEvents] = useState<EventDto[]>([]);
   const [summary, setSummary] = useState<SummaryDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [stale, setStale] = useState(false);
+  const [syncedAt, setSyncedAt] = useState<number | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [now, setNow] = useState(() => Date.now());
 
@@ -102,14 +117,35 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     [token, expire],
   );
 
-  const refresh = useCallback(async () => {
-    const [day, next] = await Promise.all([
-      call<DayDto>(`/babies/${baby.id}/events/day/${today}`),
-      call<SummaryDto>(`/babies/${baby.id}/events/summary`),
+  /** Shows whatever is already here, without asking the network. */
+  const readLocal = useCallback(async () => {
+    const [day, meta] = await Promise.all([
+      local.eventsOnDate(scope, today),
+      local.readMeta(scope),
     ]);
-    setEvents(allDayFirst(day.events));
+    setEvents(allDayFirst(day));
+    setSyncedAt(meta.syncedAt);
+    if (meta.summary) setSummary(meta.summary);
+    return meta;
+  }, [scope, today]);
+
+  /**
+   * Local first, then the network.
+   *
+   * The order is the point: a screen that has yesterday's data shows it
+   * immediately and corrects itself, rather than showing a spinner over
+   * records that are sitting on the device.
+   */
+  const refresh = useCallback(async () => {
+    await readLocal();
+
+    await syncEvents(scope, baby.id, call);
+    const next = await syncSummary(scope, baby.id, call);
+
+    setEvents(allDayFirst(await local.eventsOnDate(scope, today)));
     setSummary(next);
-  }, [call, baby.id, today]);
+    setSyncedAt((await local.readMeta(scope)).syncedAt);
+  }, [call, readLocal, scope, baby.id, today]);
 
   // Kept in a ref so a mutation can refresh without depending on a callback
   // that changes identity every time the date string does.
@@ -124,8 +160,12 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
       .then(() => {
         if (!cancelled) setStale(false);
       })
-      .catch(() => {
-        if (!cancelled) setStale(true);
+      .catch(async () => {
+        if (cancelled) return;
+        // The network is gone, which is not the same as having nothing to
+        // show. Whatever was pulled before is still here.
+        setStale(true);
+        await readLocal().catch(() => undefined);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -189,22 +229,30 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     [call, settle],
   );
 
+  /**
+   * One event, from here if we have it.
+   *
+   * Falling back to the network covers the event that has not been pulled
+   * yet -- a link opened before the first sync finished, for instance.
+   */
   const findEvent = useCallback(
-    (eventId: string): Promise<EventDto> => call<EventDto>(`/events/${eventId}`),
-    [call],
+    async (eventId: string): Promise<EventDto> =>
+      (await local.findEvent(scope, eventId)) ?? call<EventDto>(`/events/${eventId}`),
+    [call, scope],
   );
 
   const value = useMemo<Store>(
     () => ({
-      baby, events, summary: summary as SummaryDto, now, loading, stale,
+      baby, events, summary: summary as SummaryDto, now, loading, stale, syncedAt,
       refresh: settle, findEvent, addEvent, updateEvent, stopTimer, removeEvent,
     }),
-    [baby, events, summary, now, loading, stale, settle, findEvent, addEvent, updateEvent, stopTimer, removeEvent],
+    [baby, events, summary, now, loading, stale, syncedAt, settle, findEvent, addEvent, updateEvent, stopTimer, removeEvent],
   );
 
   // Nothing below this point has to cope with an absent summary. Gating here
   // rather than threading a null through every screen keeps "we have not
-  // loaded yet" from looking like "there is nothing recorded".
+  // loaded yet" from looking like "there is nothing recorded". A cached one
+  // from a previous run counts, which is what lets the app open offline.
   if (summary === null) {
     return loading
       ? <Message text={zhTW.app.loading} />

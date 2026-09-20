@@ -346,7 +346,7 @@ describe('the home screen', () => {
     const user = openSignedIn();
     await waitForHome();
 
-    server.use(http.get('/api/babies/:babyId/events/day/:date', () => HttpResponse.error()));
+    server.use(http.get('/api/babies/:babyId/events', () => HttpResponse.error()));
 
     await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
     await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'pee') }));
@@ -354,7 +354,96 @@ describe('the home screen', () => {
     // The write landed; only the refresh after it did not. Saying "synced"
     // here would be a lie about data the other phone may already have.
     expect(api.events).toHaveLength(1);
-    expect(await screen.findByTestId('sync-state')).toHaveTextContent(zhTW.home.syncFailed);
+    await waitFor(() =>
+      expect(screen.getByTestId('sync-state')).toHaveTextContent(zhTW.home.syncFailed),
+    );
+  });
+});
+
+describe('with no network at all', () => {
+  /** Every request fails to arrive, as it does on a train. */
+  function goOffline(): void {
+    server.use(
+      http.get('*', () => HttpResponse.error()),
+      http.post('*', () => HttpResponse.error()),
+      http.patch('*', () => HttpResponse.error()),
+      http.delete('*', () => HttpResponse.error()),
+    );
+  }
+
+  it('opens and shows what was pulled before', async () => {
+    api.add({ typeId: 'bottle', value: 140, startedAt: Date.now() - 2 * HOUR });
+    api.add({ typeId: 'diaper', metadata: { diaper_kind: 'pee' } });
+
+    openSignedIn();
+    await waitForHome();
+    expect(screen.getAllByTestId('event-row-bottle')).toHaveLength(1);
+
+    // A fresh start with the network gone: a reload in a tunnel, or the
+    // app reopened from the home screen.
+    cleanup();
+    goOffline();
+    openSignedIn();
+
+    // Not the sign-in screen. Only the server saying "not signed in" ends
+    // a session; a tunnel does not (spec 9.2).
+    await waitForHome();
+    const rows = screen.getAllByTestId('event-row-bottle');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent('140');
+    expect(screen.getAllByTestId('event-row-diaper')).toHaveLength(1);
+  });
+
+  it('says its figures are out of date rather than pretending', async () => {
+    api.add({ typeId: 'bottle', value: 140 });
+    openSignedIn();
+    await waitForHome();
+
+    cleanup();
+    goOffline();
+    openSignedIn();
+    await waitForHome();
+
+    // Waited for rather than read once: the screen shows what is stored
+    // before it knows the network is gone, which is the whole point of the
+    // order, and "out of date" arrives a moment later.
+    await waitFor(() =>
+      expect(screen.getByTestId('sync-state')).toHaveTextContent(zhTW.home.syncFailed),
+    );
+  });
+
+  it('still signs out when the server says the session is over', async () => {
+    openSignedIn();
+    await waitForHome();
+
+    cleanup();
+    server.use(http.get('/api/me', () => HttpResponse.json(
+      { error: { code: 'UNAUTHENTICATED', details: null } },
+      { status: 401 },
+    )));
+    openSignedIn();
+
+    // A revoked session is not an offline one, and keeping the cached
+    // account here would leave a signed-out device showing records.
+    expect(await screen.findByLabelText(zhTW.auth.username)).toBeInTheDocument();
+  });
+
+  it('shows nothing at all once somebody has signed out', async () => {
+    api.add({ typeId: 'bottle', value: 140 });
+    const user = openSignedIn();
+    await waitForHome();
+
+    await user.click(screen.getByRole('button', { name: zhTW.auth.signOut }));
+    expect(await screen.findByLabelText(zhTW.auth.username)).toBeInTheDocument();
+
+    // Signing out has to take the remembered account with it, or the next
+    // person to open the app without a network is shown the records of the
+    // one who signed out.
+    cleanup();
+    goOffline();
+    open();
+
+    expect(await screen.findByLabelText(zhTW.auth.username)).toBeInTheDocument();
   });
 });
 
