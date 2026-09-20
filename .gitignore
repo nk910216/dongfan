@@ -1,0 +1,37 @@
+# 依賴
+node_modules/
+.pnpm-store/
+
+# 建置產物
+dist/
+build/
+*.tsbuildinfo
+
+# Cloudflare Wrangler
+# .dev.vars 存本機密鑰；.wrangler/ 存本機 D1 資料庫（含真實紀錄）
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.wrangler/
+
+# 資料庫備份（見 spec.md §12.2，內含真實資料，不可進版控）
+backup-*.sql
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# 環境變數
+.env
+.env.*
+!.env.example
+
+# 測試
+coverage/
+
+# 編輯器與系統
+.DS_Store
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.claude/settings.local.json
