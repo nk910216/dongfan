@@ -4,6 +4,7 @@ import type { BabyDto } from '@dongfan/shared';
 import { apiRequest } from '../lib/api.js';
 import { describeFailure } from '../components/FieldErrors.js';
 import { useSession } from '../lib/session.js';
+import { newClientId } from '../lib/ids.js';
 
 /**
  * The first thing a new account sees, and the only way past it.
@@ -19,6 +20,15 @@ import { useSession } from '../lib/session.js';
  */
 export function CreateBaby(): React.JSX.Element {
   const { token, reload } = useSession();
+
+  // Generated once and reused, so pressing the button again after a failure
+  // reaches the same record. A duplicate baby is worse than a duplicate
+  // event: nothing merges them, and every record afterwards goes to
+  // whichever one the app happens to pick (spec 5.8).
+  const [babyId] = useState(newClientId);
+  // Set as soon as the server has answered. After that the button is only
+  // retrying the account refresh, and must not send the creation again.
+  const [created, setCreated] = useState(false);
 
   const [nickname, setNickname] = useState('');
   const [gender, setGender] = useState<'male' | 'female' | 'other'>('other');
@@ -46,11 +56,19 @@ export function CreateBaby(): React.JSX.Element {
 
     setBusy(true);
     try {
-      await apiRequest<BabyDto>('/babies', {
-        method: 'POST',
-        token: token ?? undefined,
-        body: { nickname: nickname.trim(), gender, birthDate },
-      });
+      if (!created) {
+        await apiRequest<BabyDto>('/babies', {
+          method: 'POST',
+          token: token ?? undefined,
+          body: { id: babyId, nickname: nickname.trim(), gender, birthDate },
+        });
+        // Remembered before anything else can fail. The refresh below is a
+        // separate request with its own way of going wrong, and pressing
+        // the button after it did would otherwise send the creation a
+        // second time.
+        setCreated(true);
+      }
+
       // The account's baby list comes from /me, so it has to be read again
       // before anything below can find one.
       await reload();
@@ -66,6 +84,7 @@ export function CreateBaby(): React.JSX.Element {
       <p className="mb-7 text-center text-sm leading-relaxed text-ink-faint">{zhTW.baby.createHint}</p>
 
       <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-4">
+        <fieldset disabled={created} className="contents">
         <label className="flex flex-col gap-1.5">
           <span className="text-xs tracking-wide text-ink-faint">{zhTW.baby.nickname}</span>
           <input
@@ -109,6 +128,13 @@ export function CreateBaby(): React.JSX.Element {
             className="rounded-xl border border-line bg-surface px-4 py-3.5 text-base outline-none focus:border-ink-faint"
           />
         </label>
+        </fieldset>
+
+        {created ? (
+          <p className="text-xs leading-relaxed text-amber-300/90" data-testid="created-pending-refresh">
+            {zhTW.baby.createdNeedsRefresh}
+          </p>
+        ) : null}
 
         {failure !== null ? (
           <p className="text-sm text-red-300" data-testid="form-error">{describeFailure(failure)}</p>
@@ -120,7 +146,7 @@ export function CreateBaby(): React.JSX.Element {
           data-testid="submit"
           className="mt-2 min-h-11 rounded-2xl bg-accent py-4 text-base font-bold text-ground disabled:opacity-60"
         >
-          {busy ? zhTW.baby.creating : zhTW.baby.create}
+          {busy ? zhTW.baby.creating : created ? zhTW.error.retry : zhTW.baby.create}
         </button>
       </form>
     </div>

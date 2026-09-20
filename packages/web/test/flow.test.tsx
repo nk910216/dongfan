@@ -9,6 +9,7 @@ import {
 } from '@dongfan/shared';
 import { App } from '../src/App.js';
 import { BABY, TOKEN, api, server } from './server.js';
+import { breakStorage } from './setup.js';
 import { USER_CONTENT } from './fixtures/user-content.js';
 
 /**
@@ -113,6 +114,73 @@ describe('an account with no baby yet', () => {
 
     await waitForHome();
     expect(api.events).toHaveLength(1);
+  });
+
+  it('does not make a second one when the refresh afterwards fails', async () => {
+    api.startWithNoBaby();
+    const user = openSignedIn();
+
+    await user.type(await screen.findByLabelText(zhTW.baby.nickname), USER_CONTENT.nickname);
+
+    // The baby is created, and then reading the account back fails. The
+    // screen must not reopen as though nothing had happened: pressing
+    // create again would make a second baby, and nothing merges those.
+    server.use(http.get('/api/me', () => HttpResponse.error()));
+    await user.click(screen.getByTestId('submit'));
+
+    expect(await screen.findByTestId('created-pending-refresh')).toBeInTheDocument();
+    expect(screen.getByLabelText(zhTW.baby.nickname)).toBeDisabled();
+
+    server.resetHandlers();
+    await user.click(screen.getByTestId('submit'));
+    await waitForHome();
+
+    const creations = api.requests.filter(
+      (entry) => entry.method === 'POST' && entry.path === '/api/babies',
+    );
+    expect(creations).toHaveLength(1);
+  });
+
+  it('sends the same id if the creation itself has to be retried', async () => {
+    api.startWithNoBaby();
+    const user = openSignedIn();
+
+    await user.type(await screen.findByLabelText(zhTW.baby.nickname), USER_CONTENT.nickname);
+
+    api.nextFailure = { status: 500, code: 'INTERNAL' };
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('form-error');
+
+    await user.click(screen.getByTestId('submit'));
+    await waitForHome();
+
+    // The server deduplicates on it, so a lost response cannot turn into
+    // two babies (spec 5.8).
+    const creations = api.requests.filter(
+      (entry) => entry.method === 'POST' && entry.path === '/api/babies',
+    );
+    expect(creations).toHaveLength(2);
+    const ids = new Set(creations.map((entry) => (entry.body as Record<string, unknown>)['id']));
+    expect(ids.size).toBe(1);
+  });
+
+  it('works on a device that refuses to store anything', async () => {
+    api.startWithNoBaby();
+    breakStorage();
+
+    // No stored session, so this one signs in by hand and the token lives
+    // only in memory. Reading it back from storage would find nothing, and
+    // the refresh after creating would never happen (spec 9.6).
+    const user = open();
+    await user.type(await screen.findByLabelText(zhTW.auth.username), 'parent');
+    await user.type(screen.getByLabelText(zhTW.auth.password), 'a-long-enough-password');
+    await user.click(screen.getByRole('button', { name: zhTW.auth.submit }));
+
+    await user.type(await screen.findByLabelText(zhTW.baby.nickname), USER_CONTENT.nickname);
+    await user.click(screen.getByTestId('submit'));
+
+    await waitForHome();
+    expect(screen.getByText(USER_CONTENT.nickname)).toBeInTheDocument();
   });
 
   it('will not create one without a name', async () => {

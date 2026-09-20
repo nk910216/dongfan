@@ -91,12 +91,20 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
     };
   }, [token, expire, attempt]);
 
+  /**
+   * Reads the account again, after a baby has been created.
+   *
+   * The token comes from state, not from storage. Signing in works with
+   * nothing but memory -- every write to storage is allowed to fail -- and
+   * reading the token back from a store that refused to keep it would
+   * return nothing, leaving the caller waiting for a refresh that never
+   * happens (spec 9.6).
+   */
   const reload = useCallback(async (): Promise<void> => {
-    const current = readToken();
-    if (current === null) return;
-    setMe(await apiRequest<MeDto>('/me', { token: current }));
+    if (token === null) return;
+    setMe(await apiRequest<MeDto>('/me', { token }));
     setAttempt((n) => n + 1);
-  }, []);
+  }, [token]);
 
   const signIn = useCallback(async (username: string, password: string) => {
     const body = await apiRequest<LoginDto>('/auth/login', {

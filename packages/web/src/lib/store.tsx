@@ -61,23 +61,6 @@ export type Store = {
 
 const StoreContext = createContext<Store | null>(null);
 
-/**
- * Client-generated ids double as the idempotency key (spec 3.8).
- *
- * randomUUID needs a secure context, which a phone on a LAN address over
- * plain HTTP is not, so there is a fallback: without it, adding an event
- * from a phone during testing would throw rather than degrade.
- */
-export function newEventId(): string {
-  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
-
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
-  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
-  const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
 /** All-day events sit above the timed ones; the server sorted the rest. */
 function allDayFirst(events: EventDto[]): EventDto[] {
   const allDay = events.filter((e) => getEventType(e.typeId)?.allDay === true);

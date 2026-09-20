@@ -3,7 +3,8 @@ import type { EventDto } from '@dongfan/shared';
 import { ApiFailure, NetworkFailure } from './api.js';
 import { forgetPending, pendingFor, rememberPending } from './pending-create.js';
 import { useSession } from './session.js';
-import { newEventId, useStore } from './store.js';
+import { newClientId } from './ids.js';
+import { useStore } from './store.js';
 import type { NewEventInput } from './store.js';
 
 /**
@@ -88,7 +89,7 @@ export function useCreateEvent(typeId: string): CreateEvent {
   // this type. A nappy shortcut must not resend somebody's bottle.
   const [resumed] = useState(() => pendingFor(userId, baby.id, typeId));
 
-  const [eventId] = useState(() => resumed?.eventId ?? newEventId());
+  const [eventId] = useState(() => resumed?.eventId ?? newClientId());
   const [sent, setSent] = useState<NewEventInput | null>(resumed?.input ?? null);
   const [outcomeUnknown, setOutcomeUnknown] = useState(resumed !== null);
   const [failure, setFailure] = useState<unknown>(null);

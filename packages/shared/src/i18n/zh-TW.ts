@@ -29,6 +29,7 @@ export const zhTW = {
     birthDate: '出生日期',
     create: '建立',
     creating: '建立中…',
+    createdNeedsRefresh: '寶寶已經建立好了，只是還沒讀回來。請按重試，不要重新建立一次。',
   },
 
   auth: {

@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import {
   createBabyRequest, updateBabyRequest,
@@ -27,6 +27,30 @@ babyRoutes.post('/', async (c) => {
   const parsed = createBabyRequest.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return failValidation(c, zodToFieldErrors(parsed.error.issues));
 
+  const db = c.get('db');
+  const userId = c.get('user').id;
+
+  // Idempotency first, as for events (spec 5.8). A creation whose response
+  // was lost gets pressed again, and without this the second press makes a
+  // second baby -- which, unlike a duplicate event, nothing can merge.
+  //
+  // Scoped to membership, not to the id alone: answering with a baby the
+  // caller has no claim on would hand over another family's record.
+  if (parsed.data.id) {
+    const existing = await db.select().from(babies).where(eq(babies.id, parsed.data.id)).limit(1);
+    const baby = existing[0];
+    if (baby) {
+      const mine = await db
+        .select({ role: babyMembers.role })
+        .from(babyMembers)
+        .where(and(eq(babyMembers.babyId, baby.id), eq(babyMembers.userId, userId)))
+        .limit(1);
+
+      if (mine.length === 0) return fail(c, 'ID_CONFLICT');
+      return c.json({ ...baby, role: mine[0]?.role }, 200);
+    }
+  }
+
   const timezone = parsed.data.timezone ?? DEFAULT_TIMEZONE;
   if (!isSupportedTimezone(timezone)) {
     return failValidation(c, [
@@ -39,9 +63,8 @@ babyRoutes.post('/', async (c) => {
     return failValidation(c, [{ field: 'birthDate', code: 'INVALID_FORMAT', params: {} }]);
   }
 
-  const db = c.get('db');
   const now = Date.now();
-  const id = crypto.randomUUID();
+  const id = parsed.data.id ?? crypto.randomUUID();
 
   // The creator becomes the first owner. There is no created_by column: the
   // role carries that meaning, and one source of truth avoids the two
@@ -63,7 +86,17 @@ babyRoutes.post('/', async (c) => {
     }),
   ]);
 
-  return c.json({ id, nickname: parsed.data.nickname, gender: parsed.data.gender, birthDate: parsed.data.birthDate, timezone }, 201);
+  return c.json(
+    {
+      id,
+      nickname: parsed.data.nickname,
+      gender: parsed.data.gender,
+      birthDate: parsed.data.birthDate,
+      timezone,
+      role: 'owner',
+    },
+    201,
+  );
 });
 
 babyRoutes.get('/:babyId', requireBabyAccess(), async (c) => {

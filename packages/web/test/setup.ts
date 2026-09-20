@@ -13,7 +13,7 @@ import { api, server } from './server.js';
  * session could be tested at all. A browser has a real Storage, so the
  * tests get one too.
  */
-function installStorage(): void {
+export function installStorage(): void {
   const entries = new Map<string, string>();
   const storage: Storage = {
     get length() {
@@ -25,6 +25,33 @@ function installStorage(): void {
     removeItem: (key: string) => void entries.delete(key),
     clear: () => entries.clear(),
   };
+
+  for (const target of [globalThis, window]) {
+    Object.defineProperty(target, 'localStorage', { value: storage, configurable: true });
+  }
+}
+
+/**
+ * A Storage that refuses everything, as a private window or a device with
+ * site data blocked would.
+ *
+ * Signing in has to keep working without it: the token lives in memory too,
+ * and anything that reads it back from storage instead would find nothing.
+ */
+export function breakStorage(): void {
+  const refuse = (): never => {
+    throw new DOMException('storage is unavailable', 'SecurityError');
+  };
+  const storage = {
+    get length(): number {
+      return refuse();
+    },
+    key: refuse,
+    getItem: refuse,
+    setItem: refuse,
+    removeItem: refuse,
+    clear: refuse,
+  } as unknown as Storage;
 
   for (const target of [globalThis, window]) {
     Object.defineProperty(target, 'localStorage', { value: storage, configurable: true });
@@ -46,6 +73,8 @@ beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => {
   server.resetHandlers();
   api.reset();
+  // A test may have left a Storage that throws in place.
+  installStorage();
   localStorage.clear();
 });
 

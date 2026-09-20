@@ -226,3 +226,75 @@ describe('access control', () => {
     expect(body.members.map((m) => m.role).sort()).toEqual(['member', 'owner']);
   });
 });
+
+describe('creating the same baby twice', () => {
+  it('returns the one that is there rather than making another', async () => {
+    const { token } = await signedInUser();
+    const id = crypto.randomUUID();
+    const body = { id, nickname: 'First', gender: 'other', birthDate: '2026-03-08' };
+
+    const first = await request('/api/babies', { method: 'POST', body: JSON.stringify(body) }, token);
+    expect(first.status).toBe(201);
+
+    // The response to the first was lost and the parent pressed again. A
+    // duplicate baby is worse than a duplicate event: nothing can merge
+    // them, and every record afterwards goes to whichever one the app
+    // happens to pick.
+    const second = await request('/api/babies', { method: 'POST', body: JSON.stringify(body) }, token);
+    expect(second.status).toBe(200);
+    expect((await json<{ id: string }>(second)).id).toBe(id);
+
+    const me = await json<{ babies: unknown[] }>(await request('/api/me', {}, token));
+    expect(me.babies).toHaveLength(1);
+  });
+
+  it('does not let the second attempt rewrite the first', async () => {
+    const { token } = await signedInUser();
+    const id = crypto.randomUUID();
+
+    await request('/api/babies', {
+      method: 'POST',
+      body: JSON.stringify({ id, nickname: 'First', gender: 'other', birthDate: '2026-03-08' }),
+    }, token);
+
+    const again = await request('/api/babies', {
+      method: 'POST',
+      body: JSON.stringify({ id, nickname: 'Changed', gender: 'male', birthDate: '2026-01-01' }),
+    }, token);
+
+    expect((await json<{ nickname: string }>(again)).nickname).toBe('First');
+  });
+
+  it('refuses an id belonging to a family the caller is not in', async () => {
+    const owner = await signedInUser('owner', 'a-long-enough-password-here');
+    const id = crypto.randomUUID();
+    await request('/api/babies', {
+      method: 'POST',
+      body: JSON.stringify({ id, nickname: 'Theirs', gender: 'other', birthDate: '2026-03-08' }),
+    }, owner.token);
+
+    const stranger = await signedInUser('stranger', 'another-long-password-here');
+    const response = await request('/api/babies', {
+      method: 'POST',
+      body: JSON.stringify({ id, nickname: 'Mine', gender: 'other', birthDate: '2026-03-08' }),
+    }, stranger.token);
+
+    // Answering with the stored baby would hand over another family's
+    // record to anyone who guessed an id (spec 5.8).
+    expect(response.status).toBe(409);
+    const text = await response.text();
+    expect(JSON.parse(text).error.code).toBe('ID_CONFLICT');
+    expect(text).not.toContain('Theirs');
+  });
+
+  it('still works without an id, for a caller that does not need one', async () => {
+    const { token } = await signedInUser();
+    const response = await request('/api/babies', {
+      method: 'POST',
+      body: JSON.stringify({ nickname: 'First', gender: 'other', birthDate: '2026-03-08' }),
+    }, token);
+
+    expect(response.status).toBe(201);
+    expect((await json<{ id: string }>(response)).id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
