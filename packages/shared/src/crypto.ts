@@ -1,4 +1,4 @@
-import { PBKDF2_ITERATIONS } from './constants.js';
+import { MIN_PASSWORD_LENGTH, PBKDF2_ITERATIONS } from './constants.js';
 
 /**
  * Password hashing and token digests.
@@ -89,4 +89,20 @@ export function generateToken(): string {
 export async function hashToken(token: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * A hash to verify against when no account matched.
+ *
+ * Skipping the work, or using a cheaper cost, makes an unknown username
+ * answer far faster than a wrong password and turns response time into a way
+ * to enumerate accounts. The salt and digest are fixed zeroes: they can never
+ * match, and their content is irrelevant because only the cost matters here.
+ */
+export const DUMMY_PASSWORD_HASH =
+  `pbkdf2$sha256$${PBKDF2_ITERATIONS}$${toBase64(new Uint8Array(SALT_BYTES))}$${toBase64(new Uint8Array(KEY_BITS / 8))}`;
+
+/** Length and nothing else; see MIN_PASSWORD_LENGTH for why. */
+export function isPasswordLongEnough(password: string): boolean {
+  return [...password].length >= MIN_PASSWORD_LENGTH;
 }

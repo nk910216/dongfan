@@ -24,3 +24,23 @@ export const MAX_NOTE_LENGTH = 1000;
 export const MAX_FUTURE_DAYS = 1;
 
 export const DEFAULT_TIMEZONE = 'Asia/Taipei';
+
+/**
+ * Minimum password length.
+ *
+ * The platform caps hashing cost far below what OWASP asks for, so length is
+ * what actually protects the database if it ever leaks. Accounts are created
+ * by a CLI that generates passwords, which makes this easy to enforce
+ * (spec 9.3).
+ */
+export const MIN_PASSWORD_LENGTH = 20;
+
+/**
+ * Timezones the first version supports.
+ *
+ * Taipei has no daylight saving, which is what makes "at most 24 hours means
+ * at most one midnight crossing" true. Somewhere with DST breaks that
+ * premise, and the splitting logic and query bounds would both need
+ * revisiting (spec 5.3).
+ */
+export const SUPPORTED_TIMEZONES = ['Asia/Taipei'] as const;

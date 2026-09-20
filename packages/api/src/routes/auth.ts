@@ -1,6 +1,6 @@
 import { and, eq, lt, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { loginRequest } from '@dongfan/shared';
+import { DUMMY_PASSWORD_HASH, loginRequest } from '@dongfan/shared';
 import { verifyPassword } from '@dongfan/shared';
 import { generateToken, hashToken } from '@dongfan/shared';
 import { sessionExpiry } from '../auth/session.js';
@@ -33,8 +33,10 @@ authRoutes.post('/login', async (c) => {
 
   const user = rows[0];
   // Verify even when the user is missing, so a wrong username and a wrong
-  // password take the same time to answer.
-  const hash = user?.hash ?? 'pbkdf2$sha256$1$AAAA$AAAA';
+  // password take the same time to answer. The placeholder carries the real
+  // iteration count: a cheap one would return far sooner and make account
+  // existence measurable.
+  const hash = user?.hash ?? DUMMY_PASSWORD_HASH;
   const ok = await verifyPassword(parsed.data.password, hash);
   if (!user || !ok || user.disabledAt !== null) return fail(c, 'UNAUTHENTICATED');
 

@@ -28,7 +28,14 @@ export const createBabyRequest = z.object({
   timezone: z.string().min(1).max(64).optional(),
 });
 
-export const updateBabyRequest = createBabyRequest.partial();
+/**
+ * Timezone is absent on purpose.
+ *
+ * Changing it would invalidate the stored local_date of every existing
+ * event, which is a migration rather than an edit. Leaving the field out of
+ * the schema makes that impossible instead of merely discouraged (spec 3.4).
+ */
+export const updateBabyRequest = createBabyRequest.omit({ timezone: true }).partial();
 
 export const createEventRequest = z.object({
   id: UUID,

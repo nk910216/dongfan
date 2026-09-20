@@ -27,27 +27,93 @@ describe('creating a baby', () => {
     expect(baby.timezone).toBe(DEFAULT_TIMEZONE);
   });
 
-  it('rejects a timezone the runtime does not recognise', async () => {
+  it('rejects a timezone this version has not been reasoned about', async () => {
     const { token } = await signedInUser('parent', PASSWORD);
+
+    // Real zones too, not just nonsense: the date rules assume no daylight
+    // saving, so accepting an arbitrary one would break them quietly.
+    for (const timezone of ['Mars/Olympus', 'America/New_York', 'Europe/London']) {
+      const response = await request(
+        '/api/babies',
+        { method: 'POST', body: JSON.stringify({ nickname: 'X', gender: 'other', birthDate: '2026-03-08', timezone }) },
+        token,
+      );
+      expect(response.status, timezone).toBe(422);
+      const body = await json<{ error: { details: { fields: { field: string }[] } } }>(response);
+      expect(body.error.details.fields[0]?.field).toBe('timezone');
+    }
+  });
+
+  it('rejects a birth date that matches the pattern but is not a day', async () => {
+    const { token } = await signedInUser('parent', PASSWORD);
+
+    for (const birthDate of ['2026-02-31', '2026-13-01', '2026-00-10', String(Date.now())]) {
+      const response = await request(
+        '/api/babies',
+        { method: 'POST', body: JSON.stringify({ nickname: 'X', gender: 'other', birthDate }) },
+        token,
+      );
+      expect(response.status, birthDate).toBe(422);
+    }
+  });
+
+  it('rejects a birth date in the future or implausibly far past', async () => {
+    const { token } = await signedInUser('parent', PASSWORD);
+
+    for (const birthDate of ['2099-01-01', '1899-12-31']) {
+      const response = await request(
+        '/api/babies',
+        { method: 'POST', body: JSON.stringify({ nickname: 'X', gender: 'other', birthDate }) },
+        token,
+      );
+      expect(response.status, birthDate).toBe(422);
+    }
+  });
+});
+
+describe('timezone cannot be edited', () => {
+  it('ignores a timezone sent to the update endpoint', async () => {
+    const { token } = await signedInUser('owner', PASSWORD);
+    const babyId = await createBaby(token);
+
+    // Changing it would invalidate the stored local_date of every event, so
+    // the field is absent from the schema rather than merely discouraged.
     const response = await request(
-      '/api/babies',
-      {
-        method: 'POST',
-        body: JSON.stringify({ nickname: 'X', gender: 'other', birthDate: '2026-03-08', timezone: 'Mars/Olympus' }),
-      },
+      `/api/babies/${babyId}`,
+      { method: 'PATCH', body: JSON.stringify({ timezone: 'America/New_York' }) },
       token,
     );
 
+    // Nothing recognised in the body, so there is nothing to change.
     expect(response.status).toBe(422);
-    const body = await json<{ error: { details: { fields: { field: string }[] } } }>(response);
-    expect(body.error.details.fields[0]?.field).toBe('timezone');
+
+    const baby = await json<{ timezone: string }>(await request(`/api/babies/${babyId}`, {}, token));
+    expect(baby.timezone).toBe(DEFAULT_TIMEZONE);
   });
 
-  it('rejects a birth date that is not a calendar day', async () => {
-    const { token } = await signedInUser('parent', PASSWORD);
+  it('still allows editing the fields that are safe to change', async () => {
+    const { token } = await signedInUser('owner', PASSWORD);
+    const babyId = await createBaby(token);
+
     const response = await request(
-      '/api/babies',
-      { method: 'POST', body: JSON.stringify({ nickname: 'X', gender: 'other', birthDate: String(Date.now()) }) },
+      `/api/babies/${babyId}`,
+      { method: 'PATCH', body: JSON.stringify({ nickname: 'Renamed', timezone: 'America/New_York' }) },
+      token,
+    );
+    expect(response.status).toBe(200);
+
+    const baby = await json<{ nickname: string; timezone: string }>(response);
+    expect(baby.nickname).toBe('Renamed');
+    expect(baby.timezone).toBe(DEFAULT_TIMEZONE);
+  });
+
+  it('rejects an impossible birth date on update too', async () => {
+    const { token } = await signedInUser('owner', PASSWORD);
+    const babyId = await createBaby(token);
+
+    const response = await request(
+      `/api/babies/${babyId}`,
+      { method: 'PATCH', body: JSON.stringify({ birthDate: '2026-02-31' }) },
       token,
     );
     expect(response.status).toBe(422);

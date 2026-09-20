@@ -1,6 +1,9 @@
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { createBabyRequest, updateBabyRequest, DEFAULT_TIMEZONE } from '@dongfan/shared';
+import {
+  createBabyRequest, updateBabyRequest,
+  DEFAULT_TIMEZONE, SUPPORTED_TIMEZONES, isPlausibleBirthDate,
+} from '@dongfan/shared';
 import { babies, babyMembers } from '../db/schema.js';
 import { fail, failValidation, zodToFieldErrors } from '../lib/errors.js';
 import { requireBabyAccess, requireOwner } from '../middleware/permissions.js';
@@ -8,13 +11,16 @@ import type { Env } from '../lib/types.js';
 
 export const babyRoutes = new Hono<Env>();
 
-function isValidTimezone(timezone: string): boolean {
-  try {
-    new Intl.DateTimeFormat('en-CA', { timeZone: timezone });
-    return true;
-  } catch {
-    return false;
-  }
+const SUPPORTED: readonly string[] = SUPPORTED_TIMEZONES;
+
+/**
+ * Only the timezones this version has been reasoned about.
+ *
+ * Accepting an arbitrary IANA name would look generous and quietly break the
+ * date rules: the splitting logic assumes no daylight saving (spec 5.3).
+ */
+function isSupportedTimezone(timezone: string): boolean {
+  return SUPPORTED.includes(timezone);
 }
 
 babyRoutes.post('/', async (c) => {
@@ -22,8 +28,15 @@ babyRoutes.post('/', async (c) => {
   if (!parsed.success) return failValidation(c, zodToFieldErrors(parsed.error.issues));
 
   const timezone = parsed.data.timezone ?? DEFAULT_TIMEZONE;
-  if (!isValidTimezone(timezone)) {
-    return failValidation(c, [{ field: 'timezone', code: 'INVALID_FORMAT', params: {} }]);
+  if (!isSupportedTimezone(timezone)) {
+    return failValidation(c, [
+      { field: 'timezone', code: 'INVALID_ENUM', params: { allowed: SUPPORTED.join(',') } },
+    ]);
+  }
+
+  // The pattern alone accepts 2026-02-31, which is not a day.
+  if (!isPlausibleBirthDate(parsed.data.birthDate, Date.now(), timezone)) {
+    return failValidation(c, [{ field: 'birthDate', code: 'INVALID_FORMAT', params: {} }]);
   }
 
   const db = c.get('db');
@@ -71,10 +84,16 @@ babyRoutes.patch('/:babyId', requireBabyAccess(), requireOwner, async (c) => {
   if (!parsed.success) return failValidation(c, zodToFieldErrors(parsed.error.issues));
 
   const patch = parsed.data;
-  if (patch.timezone !== undefined && !isValidTimezone(patch.timezone)) {
-    return failValidation(c, [{ field: 'timezone', code: 'INVALID_FORMAT', params: {} }]);
-  }
   if (Object.keys(patch).length === 0) return fail(c, 'VALIDATION_FAILED', { fields: [] });
+
+  if (patch.birthDate !== undefined) {
+    const rows = await c.get('db').select({ timezone: babies.timezone }).from(babies)
+      .where(eq(babies.id, c.get('babyId'))).limit(1);
+    const timezone = rows[0]?.timezone ?? DEFAULT_TIMEZONE;
+    if (!isPlausibleBirthDate(patch.birthDate, Date.now(), timezone)) {
+      return failValidation(c, [{ field: 'birthDate', code: 'INVALID_FORMAT', params: {} }]);
+    }
+  }
 
   await c.get('db').update(babies).set(patch).where(eq(babies.id, c.get('babyId')));
 

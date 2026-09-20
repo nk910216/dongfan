@@ -206,3 +206,40 @@ export function ageAt(birthDate: LocalDate, instant: number, timeZone: string): 
     days: Math.max(0, Math.round(elapsedMs / 86_400_000)),
   };
 }
+
+/**
+ * Whether a string is a real calendar day.
+ *
+ * A pattern match is not enough: 2026-02-31 and 2026-13-45 both match the
+ * shape and neither exists. Constructing the date and checking the parts
+ * survive catches the rollover that Date performs silently.
+ */
+export function isRealLocalDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+
+  const [year, month, day] = value.split('-').map(Number);
+  if (year === undefined || month === undefined || day === undefined) return false;
+  if (month < 1 || month > 12 || day < 1) return false;
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
+/** The earliest birth date worth accepting; anything older is a typo. */
+export const EARLIEST_BIRTH_DATE = '1900-01-01';
+
+/**
+ * Whether a birth date is plausible.
+ *
+ * Tomorrow is allowed: a parent in another timezone entering a date at the
+ * boundary should not be told their child does not exist yet.
+ */
+export function isPlausibleBirthDate(value: string, now: number, timeZone: string): boolean {
+  if (!isRealLocalDate(value)) return false;
+  if (value < EARLIEST_BIRTH_DATE) return false;
+  return value <= addLocalDays(toLocalDate(now, timeZone), 1);
+}

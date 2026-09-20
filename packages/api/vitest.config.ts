@@ -18,7 +18,8 @@ export default defineWorkersConfig(async () => {
         workers: {
           singleWorker: true,
           miniflare: {
-            compatibilityDate: '2026-01-01',
+            // Must match wrangler.jsonc; see the note there about fallback.
+            compatibilityDate: '2025-09-06',
             compatibilityFlags: ['nodejs_compat'],
             d1Databases: ['DB'],
             bindings: { TEST_MIGRATIONS: migrations },

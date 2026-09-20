@@ -13,6 +13,8 @@ export const USER_CONTENT = {
   note: '喝完馬上吐了一點，下次少一點',
   noteWithEmoji: '第一次翻身 🎉',
   tagNames: ['夜奶', '感冒期間', '副食品嘗試'],
+  /** A single character that costs three bytes in UTF-8. */
+  multiByteCharacter: '\u4e00',
   /** Exactly ten characters, thirty bytes in UTF-8. */
   tenCharacters: '一二三四五六七八九十',
 } as const;

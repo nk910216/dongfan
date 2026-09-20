@@ -2,7 +2,11 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "dongfan",
   "main": "src/index.ts",
-  "compatibility_date": "2026-01-01",
+  // Pinned to what the installed runtime actually supports. A later date is
+  // accepted by the config but silently downgraded at runtime, which would
+  // mean tests and production running different semantics while the file
+  // claims otherwise. Move this forward deliberately, with the runtime.
+  "compatibility_date": "2025-09-06",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "../web/dist",

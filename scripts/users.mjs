@@ -14,7 +14,7 @@
 
 import { randomUUID, randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
-import { hashPassword } from '../packages/shared/dist/index.js';
+import { MIN_PASSWORD_LENGTH, hashPassword, isPasswordLongEnough } from '../packages/shared/dist/index.js';
 import { execute, literal } from './lib/d1.mjs';
 
 const GENERATED_PASSWORD_BYTES = 18; // 24 base64url characters, 144 bits.
@@ -30,6 +30,26 @@ async function promptPassword() {
   return answer.trim();
 }
 
+/**
+ * Resolves a password, generating one when none was typed.
+ *
+ * Shared by create and password so the same rule applies to both: a reset
+ * that accepted a weak password would undo the strength the account was
+ * created with, and that is exactly when nobody is watching.
+ */
+async function resolvePassword() {
+  const chosen = await promptPassword();
+  if (chosen === '') return { password: generatePassword(), generated: true };
+
+  if (!isPasswordLongEnough(chosen)) {
+    throw new Error(
+      `Password must be at least ${MIN_PASSWORD_LENGTH} characters. ` +
+        'Leave the prompt blank to generate one.',
+    );
+  }
+  return { password: chosen, generated: false };
+}
+
 function findUser(username) {
   const rows = execute(
     `SELECT id, username, disabled_at FROM users WHERE lower(username) = lower(${literal(username)})`,
@@ -41,12 +61,7 @@ const commands = {
   async create(username) {
     if (findUser(username)) throw new Error(`User already exists: ${username}`);
 
-    const chosen = await promptPassword();
-    const password = chosen === '' ? generatePassword() : chosen;
-    if (password.length < 20) {
-      console.warn('Warning: shorter than the 20 characters the specification asks for.');
-    }
-
+    const { password, generated } = await resolvePassword();
     const id = randomUUID();
     execute(
       `INSERT INTO users (id, username, password_hash, created_at)
@@ -54,15 +69,14 @@ const commands = {
     );
 
     console.log(`Created ${username}`);
-    if (chosen === '') console.log(`Password: ${password}`);
+    if (generated) console.log(`Password: ${password}`);
   },
 
   async password(username) {
     const user = findUser(username);
     if (!user) throw new Error(`No such user: ${username}`);
 
-    const chosen = await promptPassword();
-    const password = chosen === '' ? generatePassword() : chosen;
+    const { password, generated } = await resolvePassword();
 
     execute(
       `UPDATE users SET password_hash = ${literal(await hashPassword(password))} WHERE id = ${literal(user.id)}`,
@@ -72,7 +86,7 @@ const commands = {
     // independent credentials with their own lifetime. After a leak both
     // steps are needed (spec 9.1).
     console.log(`Password updated for ${username}`);
-    if (chosen === '') console.log(`Password: ${password}`);
+    if (generated) console.log(`Password: ${password}`);
     console.log('Existing sessions remain valid. Run `revoke` as well if this was a leak.');
   },
 
@@ -152,7 +166,10 @@ if (!command || !(command in commands)) {
   list                             List accounts
   babies                           List babies and their member counts
 
-Operates on the local development database only.`);
+Operates on the local development database only. Creating accounts against
+a deployed environment needs --remote support, which is deliberately absent
+until it can carry a confirmation step and show plainly which database it is
+about to change.`);
   process.exit(1);
 }
 
