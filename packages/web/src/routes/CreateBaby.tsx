@@ -56,20 +56,6 @@ export function CreateBaby(): React.JSX.Element {
     event.preventDefault();
     setFailure(null);
 
-    if (nickname.trim() === '') {
-      setFailure(zhTW.fieldError.REQUIRED);
-      return;
-    }
-    // Checked here as well as on the server: the date control will hand
-    // over a day that does not exist, and a round trip to be told so is a
-    // poor way to learn it.
-    if (!isPlausibleBirthDate(birthDate, Date.now(), 'Asia/Taipei')) {
-      setFailure(zhTW.fieldError.INVALID_FORMAT);
-      return;
-    }
-
-    setBusy(true);
-
     if (!created) {
       // While the outcome is in doubt the payload is not the caller's to
       // choose: only the original content can tell us what the server has.
@@ -77,6 +63,24 @@ export function CreateBaby(): React.JSX.Element {
         outcomeUnknown && sent
           ? sent
           : { id: babyId, nickname: nickname.trim(), gender, birthDate };
+
+      // Checked against what is about to be sent, not against what the
+      // boxes currently say. Those are the same thing on a first attempt
+      // and deliberately not on a resend, and holding a resend to the
+      // frozen boxes would be a dead end: no way forward, no way back.
+      if (payload.nickname === '') {
+        setFailure(zhTW.fieldError.REQUIRED);
+        return;
+      }
+      // Checked here as well as on the server: the date control will hand
+      // over a day that does not exist, and a round trip to be told so is a
+      // poor way to learn it.
+      if (!isPlausibleBirthDate(payload.birthDate, Date.now(), 'Asia/Taipei')) {
+        setFailure(zhTW.fieldError.INVALID_FORMAT);
+        return;
+      }
+
+      setBusy(true);
 
       try {
         await apiRequest<BabyDto>('/babies', {
@@ -109,6 +113,7 @@ export function CreateBaby(): React.JSX.Element {
       }
     }
 
+    setBusy(true);
     try {
       // The account's baby list comes from /me, so it has to be read again
       // before anything below can find one.
@@ -125,10 +130,11 @@ export function CreateBaby(): React.JSX.Element {
       <p className="mb-7 text-center text-sm leading-relaxed text-ink-faint">{zhTW.baby.createHint}</p>
 
       <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-4">
-        {/* Frozen once the record may exist, not only once it certainly
-            does. Editing while the outcome is unknown would send a
-            correction the server answers with the old content. */}
-        <fieldset disabled={created || outcomeUnknown} className="contents">
+        {/* Frozen from the moment the request leaves, not from the moment
+            it fails. A name changed while one was in flight would be frozen
+            in place when the reply was lost: not what was sent, not what
+            gets resent, and no longer editable. */}
+        <fieldset disabled={busy || created || outcomeUnknown} className="contents">
         <label className="flex flex-col gap-1.5">
           <span className="text-xs tracking-wide text-ink-faint">{zhTW.baby.nickname}</span>
           <input

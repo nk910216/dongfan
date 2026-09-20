@@ -47,11 +47,33 @@ class Api {
    */
   loseNextResponse = false;
   loginFails = false;
+  /** Holds the next write until a test lets it go (see `holdNextWrite`). */
+  private gate: Promise<void> | null = null;
   private rev = 0;
 
   /** Switches which account the token belongs to, for isolation tests. */
   signInAs(userId: string): void {
     ME.user = { id: userId, username: userId };
+  }
+
+  /**
+   * Makes the next write hang until the returned function is called.
+   *
+   * For the window between a request leaving and its answer arriving,
+   * which is long enough on a real phone for somebody to keep typing.
+   */
+  holdNextWrite(): () => void {
+    let release = (): void => undefined;
+    this.gate = new Promise<void>((resolve) => {
+      release = () => resolve();
+    });
+    return release;
+  }
+
+  async waitForRelease(): Promise<void> {
+    const gate = this.gate;
+    this.gate = null;
+    if (gate) await gate;
   }
 
   /** A freshly deployed database: an account, and nothing else. */
@@ -67,6 +89,7 @@ class Api {
     this.nextFailure = null;
     this.loseNextResponse = false;
     this.loginFails = false;
+    this.gate = null;
     this.rev = 0;
   }
 
@@ -203,6 +226,7 @@ export const server = setupServer(
 
   http.post('/api/babies', async ({ request }) => {
     const body = (await record(request)) as Record<string, unknown>;
+    await api.waitForRelease();
     const failure = pending();
     if (failure) return refuse(failure);
 
@@ -245,6 +269,7 @@ export const server = setupServer(
 
   http.post('/api/babies/:babyId/events', async ({ request }) => {
     const body = (await record(request)) as Record<string, unknown>;
+    await api.waitForRelease();
     const failure = pending();
     if (failure) return refuse(failure);
 

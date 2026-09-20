@@ -80,6 +80,15 @@ export function EventForm(): React.JSX.Element {
   const submit = async (): Promise<void> => {
     setLocalError(null);
 
+    // A resend carries what was sent before, so the draft is not what is
+    // being checked and must not be able to block it. Frozen fields plus a
+    // draft that no longer passes would leave no way forward and no way
+    // back (spec 6.1).
+    if (create.outcomeUnknown) {
+      if (await create.retry()) navigate('/');
+      return;
+    }
+
     const checked = checkDraft(type, draft, intent, {
       now: Date.now(),
       timeZone: baby.timezone,
@@ -138,7 +147,11 @@ export function EventForm(): React.JSX.Element {
           </>
         ) : null}
 
-        <fieldset disabled={create.outcomeUnknown} className="border-0 p-0">
+        {/* Frozen from the moment the request leaves, not from the moment
+            it fails: an amount changed while one was in flight would be
+            frozen in place when the reply was lost, showing neither what
+            was sent nor what gets resent. */}
+        <fieldset disabled={create.busy || create.outcomeUnknown} className="border-0 p-0">
           <EventFields
             type={type}
             draft={draft}

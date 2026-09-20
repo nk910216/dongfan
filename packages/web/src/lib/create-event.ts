@@ -40,6 +40,11 @@ export type CreateEvent = {
    * what was sent before, whatever is passed in.
    */
   submit: (input: NewEventInput) => Promise<EventDto | null>;
+  /**
+   * Resends the captured payload, for a caller that has a draft it must
+   * not consult. Falls back to `submit` when there is nothing captured.
+   */
+  retry: () => Promise<EventDto | null>;
 };
 
 export function useCreateEvent(typeId: string): CreateEvent {
@@ -103,5 +108,10 @@ export function useCreateEvent(typeId: string): CreateEvent {
     [addEvent, eventId, outcomeUnknown, sent, userId, baby.id],
   );
 
-  return { busy, outcomeUnknown, pending: sent, failure, submit };
+  const retry = useCallback(
+    (): Promise<EventDto | null> => (sent === null ? Promise.resolve(null) : submit(sent)),
+    [sent, submit],
+  );
+
+  return { busy, outcomeUnknown, pending: sent, failure, submit, retry };
 }

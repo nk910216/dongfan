@@ -171,6 +171,38 @@ describe('an account with no baby yet', () => {
     }
   });
 
+  it('cannot be edited while the request is still in the air', async () => {
+    api.startWithNoBaby();
+    api.loseNextResponse = true;
+    const release = api.holdNextWrite();
+    const user = openSignedIn();
+
+    const field = await screen.findByLabelText(zhTW.baby.nickname);
+    await user.type(field, USER_CONTENT.nickname);
+
+    const pressing = user.click(screen.getByTestId('submit'));
+
+    // On a slow connection this window is seconds long. Clearing the name
+    // here used to leave it frozen empty when the reply was lost: not what
+    // was sent, not what gets resent, and the required-field check then
+    // refused the retry -- no way forward and no way back.
+    await waitFor(() => expect(field).toBeDisabled());
+    release();
+    await pressing;
+
+    await screen.findByTestId('outcome-unknown');
+    await user.click(screen.getByTestId('submit'));
+    await waitForHome();
+
+    expect(screen.getByText(USER_CONTENT.nickname)).toBeInTheDocument();
+    const creations = api.requests.filter(
+      (entry) => entry.method === 'POST' && entry.path === '/api/babies',
+    );
+    for (const attempt of creations) {
+      expect((attempt.body as Record<string, unknown>)['nickname']).toBe(USER_CONTENT.nickname);
+    }
+  });
+
   it('keeps the doubt when the retry only says the account lost access', async () => {
     api.startWithNoBaby();
     api.loseNextResponse = true;
@@ -392,6 +424,29 @@ describe('the bottle form', () => {
 
     await waitFor(() => expect(api.events).toHaveLength(1));
     expect((api.lastRequest('/events')?.body as Record<string, unknown>)['value']).toBe(150);
+  });
+
+  it('cannot be edited while the request is still in the air', async () => {
+    api.loseNextResponse = true;
+    const release = api.holdNextWrite();
+    const user = openSignedIn('/add/bottle');
+
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    await user.type(amount, '150');
+
+    const pressing = user.click(screen.getByTestId('submit'));
+    await waitFor(() => expect(amount).toBeDisabled());
+    release();
+    await pressing;
+
+    // Frozen at an amount the range check would refuse, the retry would be
+    // blocked by a draft that is not what gets sent anyway.
+    await screen.findByTestId('outcome-unknown');
+    await user.click(screen.getByTestId('submit'));
+
+    await waitFor(() => expect(screen.queryByTestId('outcome-unknown')).not.toBeInTheDocument());
+    expect(api.events).toHaveLength(1);
+    expect(api.events[0]?.value).toBe(150);
   });
 
   it('refuses an amount outside the range before asking the server', async () => {
