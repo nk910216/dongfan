@@ -79,6 +79,7 @@ export function Home(): React.JSX.Element {
         <SummaryCell
           label={zhTW.home.todayDiaper}
           color="#E8B15C"
+          captionTestId="diaper-breakdown"
           caption={interpolate(zhTW.home.diaperBreakdown, {
             pee: summary.today.diaper.pee,
             poo: summary.today.diaper.poo,
@@ -93,7 +94,7 @@ export function Home(): React.JSX.Element {
 
       <div className="flex shrink-0 items-baseline justify-between px-4.5 pb-2">
         <span className="text-[13px] font-medium tracking-wide text-ink-muted">{zhTW.home.todayEvents}</span>
-        <span className="font-numeric text-xs text-ink-dim">
+        <span className="font-numeric text-xs text-ink-dim" data-testid="today-count">
           {interpolate(zhTW.home.eventCount, { count: events.length })}
         </span>
       </div>
@@ -122,9 +123,10 @@ function Divider(): React.JSX.Element {
 }
 
 function SummaryCell({
-  label, color, caption, children,
+  label, color, caption, captionTestId, children,
 }: {
-  label: string; color: string; caption?: string; children: React.ReactNode;
+  label: string; color: string; caption?: string; captionTestId?: string;
+  children: React.ReactNode;
 }): React.JSX.Element {
   return (
     <div className="flex flex-1 flex-col items-center gap-0.5">
@@ -132,7 +134,11 @@ function SummaryCell({
       <span className="font-numeric text-[19px] font-semibold" style={{ color }}>
         {children}
       </span>
-      {caption ? <span className="text-[10px] text-ink-dim">{caption}</span> : null}
+      {caption ? (
+        <span className="text-[10px] text-ink-dim" data-testid={captionTestId}>
+          {caption}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -163,7 +169,10 @@ function EventRow({ event, timezone }: { event: MockEvent; timezone: string }): 
   }
 
   return (
-    <div className="flex items-center gap-2.5 border-b border-line-soft px-1 py-2.5">
+    <div
+      className="flex items-center gap-2.5 border-b border-line-soft px-1 py-2.5"
+      data-testid={`event-row-${event.typeId}`}
+    >
       <EventIconBadge icon={type?.icon ?? 'circle-ellipsis'} color={color} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">

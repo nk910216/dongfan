@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { eventTypeName, metadataOptionLabel, valueLabel, zhTW } from '@dongfan/shared';
+import { eventTypeName, interpolate, metadataOptionLabel, valueLabel, zhTW } from '@dongfan/shared';
 import { App } from '../src/App.js';
 
 /**
@@ -39,19 +39,79 @@ describe('home screen', () => {
     open();
     expect(screen.getByRole('button', { name: zhTW.timer.stop })).toBeInTheDocument();
   });
+
+  it('actually stops the timer when the button is pressed', async () => {
+    const user = open();
+
+    // Running: the row carries the in-progress badge and the card offers a
+    // stop button rather than an add shortcut.
+    expect(screen.getByText(zhTW.event.inProgress)).toBeInTheDocument();
+    const sleepRunning = interpolate(zhTW.timer.running, { name: eventTypeName('sleep') });
+    expect(screen.getByText(sleepRunning)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+
+    expect(screen.queryByRole('button', { name: zhTW.timer.stop })).not.toBeInTheDocument();
+    expect(screen.queryByText(zhTW.event.inProgress)).not.toBeInTheDocument();
+    expect(screen.queryByText(sleepRunning)).not.toBeInTheDocument();
+
+    // The card reverts to a shortcut, so sleep can be started again.
+    expect(
+      screen.getByRole('link', { name: `${zhTW.a11y.addEvent} ${eventTypeName('sleep')}` }),
+    ).toBeInTheDocument();
+  });
 });
 
+function numbersIn(testId: string): number[] {
+  const text = screen.getByTestId(testId).textContent ?? '';
+  return text.match(/\d+/g)?.map(Number) ?? [];
+}
+
+/** The count beside today's list. */
+function todayCount(): number {
+  return numbersIn('today-count')[0] ?? 0;
+}
+
+/** Diaper totals from the summary strip, in the order the copy lists them. */
+function diaperBreakdown(): { pee: number; poo: number; unknown: number } {
+  const [pee = 0, poo = 0, unknown = 0] = numbersIn('diaper-breakdown');
+  return { pee, poo, unknown };
+}
+
+function newestRow(typeId: string): HTMLElement {
+  const rows = screen.getAllByTestId(`event-row-${typeId}`);
+  return rows[0] as HTMLElement;
+}
+
 describe('recording a nappy change', () => {
-  it('takes two taps and records the kind', async () => {
+  it('adds exactly one event of the kind that was tapped', async () => {
     const user = open();
+
+    const countBefore = todayCount();
+    const before = diaperBreakdown();
+    const rowsBefore = screen.getAllByTestId('event-row-diaper').length;
 
     await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
     await user.click(screen.getByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') }));
 
-    // Back on the home screen, the new entry is in today's list.
-    const list = screen.getByText(zhTW.home.todayEvents);
-    expect(list).toBeInTheDocument();
-    expect(screen.getAllByText(eventTypeName('diaper')).length).toBeGreaterThan(0);
+    expect(todayCount()).toBe(countBefore + 1);
+    expect(screen.getAllByTestId('event-row-diaper').length).toBe(rowsBefore + 1);
+
+    // Only the kind that was tapped moves, and nothing lands in unknown.
+    const after = diaperBreakdown();
+    expect(after.poo).toBe(before.poo + 1);
+    expect(after.pee).toBe(before.pee);
+    expect(after.unknown).toBe(before.unknown);
+  });
+
+  it('records the kind on the new row, not as unclassified', async () => {
+    const user = open();
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await user.click(screen.getByRole('button', { name: metadataOptionLabel('diaper_kind', 'both') }));
+
+    expect(
+      within(newestRow('diaper')).getByText(new RegExp(metadataOptionLabel('diaper_kind', 'both'))),
+    ).toBeInTheDocument();
   });
 });
 
@@ -84,9 +144,7 @@ describe('bottle form', () => {
     await user.type(input, '1');
     await user.click(screen.getByRole('button', { name: zhTW.addEvent.save }));
 
-    const rows = screen.getAllByText(eventTypeName('bottle'));
-    const row = rows[0]?.closest('div')?.parentElement?.parentElement;
-    expect(within(row as HTMLElement).getByText('1')).toBeInTheDocument();
+    expect(within(newestRow('bottle')).getByText('1')).toBeInTheDocument();
   });
 });
 

@@ -33,7 +33,9 @@ export function EventForm(): React.JSX.Element {
     // empty box. It still has to be confirmed rather than submitted silently.
     if (!type?.value) return '';
     const last = summary.types.get(type.id)?.lastValue ?? null;
-    return last === null || last === 1 ? '' : String(toDisplayed(last, type.value));
+    // No sentinel here: 1 is a legitimate amount, so only the absence of a
+    // previous reading means there is nothing to prefill.
+    return last === null ? '' : String(toDisplayed(last, type.value));
   });
   const [note, setNote] = useState('');
   const [metadata, setMetadata] = useState<Record<string, string>>({});
