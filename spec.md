@@ -103,7 +103,7 @@ babyapp/
 │   │   └── wrangler.toml
 │   └── web/             # React PWA
 ├── scripts/             # 使用者管理 CLI、備份
-├── AGENTS.md            # 開發規範（agent 必讀，見 13.1）
+├── AGENTS.md            # 開發規範（agent 必讀，見 13.2）
 ├── CLAUDE.md            # → symlink 到 AGENTS.md
 └── spec.md
 ```
@@ -1386,7 +1386,7 @@ Service Worker 要求 secure context，規範定義為「HTTPS **或 localhost**
 
 本機測試環境**不會**套用生產的限制，所以 §4.2 和 §9.3 這兩條最重要的規則，靠文件約束是抓不到的：
 
-1. **D1 查詢數**：本地 D1 不強制 50 queries/invocation 上限。**寫一個測試 helper 計數每次請求的 D1 呼叫數，超過 30 次即 fail**，把這條硬限制變成 CI 會擋下來的東西。這比寫在 `AGENTS.md` 裡有效得多（理由見 13.2）。
+1. **D1 查詢數**：本地 D1 不強制 50 queries/invocation 上限。**寫一個測試 helper 計數每次請求的 D1 呼叫數，超過 30 次即 fail**，把這條硬限制變成 CI 會擋下來的東西。這比寫在 `AGENTS.md` 裡有效得多（理由見 13.3）。
 2. **CPU 時間**：Miniflare 不套用 10 ms 限制，只能在真實部署上驗（見 9.3，列為 M1 驗收條件）。
 
 ### 必測的情境（比「每支 API 都測完整錯誤類型」更重要）
@@ -1501,7 +1501,46 @@ v1 用明確的人工復原步驟處理即可，不需要自動偵測機制。�
 - **型別檢查與 lint 必須零警告**：`tsc --noEmit` 與 `eslint` 通過才算完成。
 - 禁止使用 `any`。
 
-## 13.1 Agent 指示檔：單一 `AGENTS.md`
+## 13.1 語言：repo 內一律英文，UI 文案除外
+
+**除了使用者看得到的畫面文字之外，這個 repo 裡的一切都用英文。**
+
+| 一律英文 | 一律繁體中文 |
+|---|---|
+| 程式碼、識別字、型別名稱 | **使用者看得到的畫面文字** |
+| 程式註解、JSDoc | 事件類型 config 的 `name`（如 `'哺乳'`） |
+| commit message、PR 說明 | metadata 欄位的 `label` 與 enum 的 `label` |
+| `AGENTS.md`、README、程式內文件 | 錯誤訊息的 `message`（給使用者看的那句） |
+| 測試名稱、變數與函式命名 | 空狀態、按鈕、提示文案 |
+| 錯誤碼常數（如 `VERSION_CONFLICT`） | |
+
+**分界線是「誰會讀到」**：使用者讀到的是繁中（§1 的產品需求），開發者與 agent 讀到的是英文。
+
+具體例子——同一份 config 裡兩種語言並存是正確的：
+
+```ts
+// Sleep is timer-driven: users start it and stop it later, so it owns
+// the single active slot for this type (see spec 3.5).
+{
+  id: 'sleep',
+  name: '睡眠',          // user-facing, stays Traditional Chinese
+  category: 'activity',
+  timerEnabled: true,
+}
+```
+
+**理由**：這個 repo 由多種 coding agent 共同開發（§13.2），而英文是它們之間最沒有歧義的共同語言；識別字與註解混用中文也會讓 diff 與搜尋變得難用。至於 UI 文案，那是產品規格的一部分（§1 明訂只做繁體中文），不在此限。
+
+### 唯一的文件例外：`spec.md`
+
+**本規格書維持繁體中文**，這是明確的例外，不是尚未處理的遺留。理由：
+
+- 它是專案擁有者用來思考與迭代的文件，不是 agent 的執行指令。**agent 實際載入的是 `AGENTS.md`**（英文）。
+- 規格裡那些「做錯會靜默出錯」的條文（§3.4.1 的查詢邊界、§4.3 的交易守衛、§5.4 的配號規則）措辭都很精細，翻譯有流失風險，而流失的代價是實作寫錯。
+
+**但從 spec.md 衍生到 repo 裡的東西一律英文**：`AGENTS.md`、程式註解、commit message、測試名稱。翻譯發生在「規格 → 程式碼」這一步，不是把規格本身翻掉。
+
+## 13.2 Agent 指示檔：單一 `AGENTS.md`
 
 本專案會由**多種 coding agent**（Claude Code、OpenAI Codex 等）共同開發，因此指示檔必須只有一份。
 
@@ -1520,7 +1559,7 @@ ln -s AGENTS.md CLAUDE.md
 
 若日後各 package 需要不同規範，可在 `packages/*/` 下放置各自的 `AGENTS.md`（多數工具會自動讀取最接近的那一份）。v1 只需 root 一份。
 
-## 13.2 規則優先放進工具鏈，而不是文件
+## 13.3 規則優先放進工具鏈，而不是文件
 
 **這是多 agent 開發最重要的一條。** 不同模型對同一句散文規則的遵守程度不同，而且無法預測。**能被 `tsc` 或 `eslint` 擋下來的規則，對所有 agent 的效力才是一致的。**
 
@@ -1538,7 +1577,7 @@ ln -s AGENTS.md CLAUDE.md
 
 `AGENTS.md` 只保留**真的無法機器化**的部分。
 
-## 13.3 `AGENTS.md` 必須涵蓋的內容
+## 13.4 `AGENTS.md` 必須涵蓋的內容
 
 - 專案結構與各 package 職責
 - **新增一個事件類型的完整步驟**（改 config → 補 metadata 定義 → 補測試）
@@ -1549,7 +1588,7 @@ ln -s AGENTS.md CLAUDE.md
 - 禁止事項：手改線上 schema、在 handler 內重複寫權限檢查、用裝置時區算日期、soft delete 時忘記 bump `updated_at`、重送時重新產生事件 `id`、把密碼雜湊搬到前端
 - 免費方案的硬限制（10 ms CPU、50 次 D1 查詢／呼叫、每日 10 萬筆寫入）以及它們對寫法的約束
 
-## 13.4 沙箱環境的限制
+## 13.5 沙箱環境的限制
 
 部分 agent（如 Codex 的雲端模式）在**網路受限的容器**中執行。`AGENTS.md` 必須明確說明：
 
