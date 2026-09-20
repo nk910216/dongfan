@@ -1,0 +1,77 @@
+# Scheduled database backup.
+#
+# Time Travel on the free plan keeps seven days (spec 2.5), so corruption
+# noticed in week two is unrecoverable. Nobody remembers to run a backup by
+# hand, which is the whole reason this file exists.
+#
+# A run that fails means there is no backup for that week. GitHub emails the
+# owner when a scheduled workflow fails, and that notification is part of the
+# backup: without it the failure is silent and the backup is imaginary
+# (spec 12.2). Confirm it is switched on, under Settings -> Notifications ->
+# Actions.
+
+name: backup
+
+on:
+  schedule:
+    # Sundays at 03:00 UTC, which is 11:00 in Taipei and a quiet hour either
+    # way. Monthly copies come from the same job on the first of the month.
+    - cron: '0 3 * * 0'
+    - cron: '0 3 1 * *'
+  # Available by hand, so the first run does not have to wait a week and a
+  # restore drill has something recent to work from.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Decide what kind of copy this is
+        id: kind
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          # Monthly copies are kept for a year, weekly ones for eight weeks
+          # (spec 12.2). The first of the month counts as both; keeping the
+          # longer one costs nothing and losing it costs a year.
+          if [ "$(date -u +%d)" = "01" ]; then
+            echo "name=monthly" >> "$GITHUB_OUTPUT"
+            echo "retention=400" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=weekly" >> "$GITHUB_OUTPUT"
+            echo "retention=56" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Export the deployed database
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # --remote is inside the script and is never omitted: the flag's
+          # default is undocumented, and getting it wrong exports an empty
+          # local database with no error at all (spec 12.2). The script also
+          # refuses to hand over a file with no event rows in it, so a run
+          # that goes green really does have records behind it.
+          scripts/backup.sh --output "backup-${{ steps.kind.outputs.date }}.sql"
+
+      - name: Keep it
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.kind.outputs.name }}-${{ steps.kind.outputs.date }}
+          path: backup-${{ steps.kind.outputs.date }}.sql
+          retention-days: ${{ steps.kind.outputs.retention }}
+          if-no-files-found: error

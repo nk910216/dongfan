@@ -10,6 +10,13 @@
  *
  * A password is never taken from the command line, where it would be left
  * behind in shell history.
+ *
+ * The database is chosen by `--remote` and by nothing else: no environment
+ * variable, no default, no memory of last time. Every run prints which one
+ * it is about to change before it changes it, and a write to the deployed
+ * one has to be confirmed by typing its name. Locking the only two accounts
+ * out of a household app is quick and quiet, and there is no undo
+ * (spec 12.1).
  */
 
 import { randomUUID, randomBytes } from 'node:crypto';
@@ -17,7 +24,8 @@ import { createInterface } from 'node:readline/promises';
 import {
   MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, hashPassword, isPasswordLengthValid, passwordLength,
 } from '../packages/shared/dist/index.js';
-import { execute, literal } from './lib/d1.mjs';
+import { executeOn, literal } from './lib/d1.mjs';
+import { banner, needsConfirmation, parseArgs, targetFor } from './lib/cli-target.mjs';
 
 const GENERATED_PASSWORD_BYTES = 18; // 24 base64url characters, 144 bits.
 
@@ -53,11 +61,43 @@ async function resolvePassword() {
   return { password: chosen, generated: false };
 }
 
+/**
+ * The database this run works on.
+ *
+ * Module scope rather than threaded through every command: a parameter that
+ * one command forgot to pass would silently fall back to a default, and the
+ * whole point is that there is no default.
+ */
+let target = null;
+
+function execute(sql) {
+  if (target === null) throw new Error('No database chosen');
+  return executeOn(target, sql);
+}
+
 function findUser(username) {
   const rows = execute(
     `SELECT id, username, disabled_at FROM users WHERE lower(username) = lower(${literal(username)})`,
   );
   return rows[0] ?? null;
+}
+
+/**
+ * Makes the operator type the database name before a deployed change.
+ *
+ * Typing the name rather than pressing y: a prompt answered from muscle
+ * memory is not a confirmation, and this one exists for the run where the
+ * flag was left on the line from last time.
+ */
+async function confirm(description) {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  const answer = await rl.question(
+    `About to run "${description}" against ${target.database}, which holds real records.\n` +
+      `Type the database name to continue: `,
+  );
+  rl.close();
+
+  if (answer.trim() !== target.database) throw new Error('Cancelled.');
 }
 
 const commands = {
@@ -155,7 +195,7 @@ const commands = {
   },
 };
 
-const [command, ...args] = process.argv.slice(2);
+const { command, args, remote, assumeYes } = parseArgs(process.argv.slice(2));
 
 if (!command || !(command in commands)) {
   console.error(`Usage: node scripts/users.mjs <command> [args]
@@ -169,14 +209,31 @@ if (!command || !(command in commands)) {
   list                             List accounts
   babies                           List babies and their member counts
 
-Operates on the local development database only. Creating accounts against
-a deployed environment needs --remote support, which is deliberately absent
-until it can carry a confirmation step and show plainly which database it is
-about to change.`);
+Flags:
+  --remote    Work on the deployed database instead of the local one.
+              Writes ask you to type the database name first.
+  --local     The default, stated explicitly.
+
+Without --remote everything here works on dongfan-dev, a scratch database
+holding invented records only.`);
   process.exit(1);
 }
 
+if (assumeYes) {
+  // Refused rather than ignored. A flag that looks like it turns the
+  // prompt off, and does not, is worse than no flag: somebody will believe
+  // it worked.
+  console.error('Error: there is no --yes here. A deployed change is confirmed by hand.');
+  process.exit(1);
+}
+
+target = targetFor(remote);
+process.stderr.write(banner(target));
+
 try {
+  if (needsConfirmation({ command, remote })) {
+    await confirm([command, ...args].join(' '));
+  }
   await commands[command](...args);
 } catch (error) {
   console.error(`Error: ${error.message}`);

@@ -24,6 +24,17 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          // Maintenance scripts are plain Node modules, but a restore that
+          // splits a dump wrongly corrupts data without failing, so the
+          // parts that can be tested are.
+          name: 'scripts',
+          include: ['scripts/test/**/*.test.mjs'],
+          environment: 'node',
+        },
+      },
+      {
+        extends: true,
+        test: {
           name: 'web',
           // Not only .tsx: the storage rules are plain functions, and
           // making them a component test to be collected would hide them.

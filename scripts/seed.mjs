@@ -8,7 +8,7 @@
  */
 
 import { randomUUID, randomBytes } from 'node:crypto';
-import { hashPassword, toLocalDate } from '../packages/shared/dist/index.js';
+import { addLocalDays, hashPassword, startOfLocalDay, toLocalDate } from '../packages/shared/dist/index.js';
 import { execute, literal } from './lib/d1.mjs';
 
 const TIMEZONE = 'Asia/Taipei';
@@ -25,6 +25,8 @@ const SEED_BABY = {
   gender: 'other',
   birthDate: '2026-03-08',
 };
+
+const SEED_TAGS = ['night', 'clinic'];
 
 function row(sql) {
   return execute(sql)[0] ?? null;
@@ -60,35 +62,63 @@ async function main() {
     console.log(`${user.username} / ${password}`);
   }
 
-  // A day's worth of activity, including one sleep that crosses midnight so
-  // the date handling has something real to be wrong about.
+  // Tags, so the restore drill has an event whose associations have to
+  // survive the round trip. Invented, like everything else here.
+  const tagIds = {};
+  for (const name of SEED_TAGS) {
+    const tagId = randomUUID();
+    tagIds[name] = tagId;
+    execute(
+      `INSERT INTO tags (id, baby_id, name, created_by, created_at)
+       VALUES (${literal(tagId)}, ${literal(babyId)}, ${literal(name)},
+               (SELECT id FROM users WHERE username = ${literal(SEED_USERS[0].username)}), ${now})`,
+    );
+  }
+
+  // A day's worth of activity.
+  //
+  // The overnight sleep is anchored to the clock rather than to "nine hours
+  // ago", so it crosses midnight whatever time of day this is run. The
+  // drill checks that one specifically, and a sleep that only sometimes
+  // spans two dates would make the check pass or fail by the hour.
+  const today = toLocalDate(now, TIMEZONE);
+  const lastNight = startOfLocalDay(addLocalDays(today, -1), TIMEZONE) + 22 * 60 * MINUTE + 30 * MINUTE;
+
   const events = [
-    { typeId: 'sleep', minutesAgo: 9 * 60, durationMinutes: 7 * 60 + 55, value: 1 },
+    { typeId: 'sleep', startedAt: lastNight, durationMinutes: 7 * 60 + 55, value: 1, tags: ['night'] },
     { typeId: 'bottle', minutesAgo: 8 * 60, value: 120 },
     { typeId: 'diaper', minutesAgo: 7 * 60, value: 1, metadata: { diaper_kind: 'pee' } },
-    { typeId: 'nursing', minutesAgo: 5 * 60, durationMinutes: 19, value: 1, metadata: { side: 'both' } },
+    { typeId: 'nursing', minutesAgo: 5 * 60, durationMinutes: 19, value: 1, metadata: { side: 'both' }, tags: ['night'] },
     { typeId: 'diaper', minutesAgo: 4 * 60, value: 1, metadata: { diaper_kind: 'poo' } },
     { typeId: 'bottle', minutesAgo: 3 * 60, value: 140 },
-    { typeId: 'weight', minutesAgo: 2 * 60, value: 7420 },
+    { typeId: 'weight', minutesAgo: 2 * 60, value: 7420, tags: ['clinic'] },
     { typeId: 'diaper', minutesAgo: 90, value: 1 },
   ];
 
   let rev = 0;
   for (const event of events) {
-    const startedAt = now - event.minutesAgo * MINUTE;
+    const startedAt = event.startedAt ?? now - event.minutesAgo * MINUTE;
     const endedAt = event.durationMinutes ? startedAt + event.durationMinutes * MINUTE : null;
+    const eventId = randomUUID();
     rev += 1;
 
     execute(
       `INSERT INTO events
          (id, baby_id, type_id, created_by, created_at, updated_at, started_at, ended_at,
           local_date, value, note, metadata, version, rev, active, deleted_at)
-       VALUES (${literal(randomUUID())}, ${literal(babyId)}, ${literal(event.typeId)},
+       VALUES (${literal(eventId)}, ${literal(babyId)}, ${literal(event.typeId)},
                (SELECT id FROM users WHERE username = ${literal(SEED_USERS[0].username)}),
                ${now}, ${now}, ${startedAt}, ${endedAt === null ? 'NULL' : endedAt},
                ${literal(toLocalDate(startedAt, TIMEZONE))}, ${event.value},
                '', ${literal(JSON.stringify(event.metadata ?? {}))}, 1, ${rev}, NULL, NULL)`,
     );
+
+    for (const tag of event.tags ?? []) {
+      execute(
+        `INSERT INTO event_tags (event_id, tag_id)
+         VALUES (${literal(eventId)}, ${literal(tagIds[tag])})`,
+      );
+    }
   }
 
   console.log(`\nSeeded baby ${babyId} with ${events.length} events.`);

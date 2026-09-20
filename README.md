@@ -54,6 +54,31 @@ port 5180 is the one with hot reload.
 `npm run users -- assign <name> <babyId> owner` is how a second parent gets
 access before the invite screen exists.
 
+## Backups
+
+```sh
+npm run backup                              # the deployed database
+npm run backup -- --local                   # dongfan-dev, for a drill
+npm run restore:drill -- backup-2026-09-20.sql
+```
+
+The backup script always spells out `--remote` or `--local`, because the
+default is undocumented and getting it wrong exports an empty database
+without saying so. It rejects a file with no event rows in it.
+
+The drill restores into a scratch database of its own and checks the records
+came back, including an event that crosses midnight and one carrying tags. A
+file that contains `INSERT INTO events` proves there is a file; only the
+drill proves anything can be recovered.
+
+`.github/workflows/backup.yml` runs the export weekly.
+
+## Deploying
+
+See [`docs/deployment.md`](docs/deployment.md). It covers the one-time
+setup, making accounts against the deployed database, and the checks that
+can only be done with a real deployment and a real phone.
+
 ## Checks
 
 ```sh

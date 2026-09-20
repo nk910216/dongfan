@@ -20,7 +20,10 @@
     "db:seed": "npm run build -w @dongfan/shared && node scripts/seed.mjs",
     "users": "npm run build -w @dongfan/shared && node scripts/users.mjs",
     "test:web": "vitest run",
-    "test:api": "npm run test -w @dongfan/api"
+    "test:api": "npm run test -w @dongfan/api",
+    "backup": "scripts/backup.sh",
+    "restore:drill": "npm run build -w @dongfan/shared && node scripts/restore-drill.mjs",
+    "deploy": "npm run build -w @dongfan/web && npm run deploy -w @dongfan/api"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",

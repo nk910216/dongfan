@@ -209,12 +209,55 @@ that are invisible to the eye:
 - Move password hashing to the client. The hash then *is* the password.
 - Store a float where the spec says integer.
 
+## Backup and restore
+
+`scripts/backup.sh` exports the deployed database and refuses to hand over a
+file with no event rows in it. `--local` points it at `dongfan-dev`, which is
+what a drill uses.
+
+`npm run restore:drill -- <file>` restores a backup into its own local
+scratch database and checks it came back whole: row counts against the file,
+an event that crosses midnight, an event carrying tags, the unique index on
+`(baby_id, rev)`, and every stored `local_date` still agreeing with its
+timestamp. It never touches anything deployed.
+
+**`wrangler d1 execute --file` will not ingest wrangler's own export as it
+stands.** The dump is ordered alphabetically, so `baby_members` and its
+foreign key arrive before `users` exists, and the restore stops partway with
+`no such table: main.users` — leaving some tables filled and some empty. Apply
+every `CREATE` first and every `INSERT` second, with
+`PRAGMA defer_foreign_keys=TRUE` on the second pass. That is what the drill
+does, and a restore by hand has to do the same.
+
+### After a restore, every client cursor must be reset
+
+Restoring moves `rev` backwards while a phone still holds the larger cursor
+it had before. `rev > since` then matches nothing, for ever: the app looks
+perfectly healthy and silently never syncs again (spec 12.2).
+
+1. Keep whatever is waiting to be sent. It is not on the server.
+2. Clear the synced local cache and the sync cursor.
+3. Sync again from `since=0`.
+4. Send the kept items.
+
+Today the web client keeps no sync cursor — only the unresolved adds under
+`dongfan.pending-creates`, which are step 1. Steps 2 and 3 become real with
+the offline layer in M2, and this list has to be revisited then.
+
 ## Environment and secrets
 
 - Never read, write or commit `.dev.vars` or any secret.
 - Never run a command against the production database, and never pass
-  `--remote` to a `wrangler d1` command.
+  `--remote` to a `wrangler d1` command, to `scripts/backup.sh`, or to
+  `scripts/users.mjs`.
 - Never open a database that holds the owner's real records.
+- Never run `wrangler deploy`.
+
+`scripts/users.mjs --remote` and `scripts/backup.sh` (which defaults to
+remote) exist for the repository owner, not for an agent. They print which
+database they are about to change and make a deployed write be confirmed by
+typing its name; neither of those is an invitation. The restore drill is
+different: it is local-only by construction and safe to run.
 
 You **may** create and use a local development database, provided it is:
 

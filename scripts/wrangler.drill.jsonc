@@ -1,0 +1,22 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  // A configuration file of its own, holding nothing but a scratch database
+  // for the restore drill.
+  //
+  // It is separate from packages/api/wrangler.jsonc on purpose. Adding this
+  // binding there would make `wrangler deploy` look for a deployed database
+  // called dongfan-drill, which does not and must not exist. Keeping it here
+  // means the drill can never reach anything real, and deployment can never
+  // trip over the drill.
+  //
+  // Local only. Nothing in this repository passes --remote with it.
+  "name": "dongfan-restore-drill",
+  "compatibility_date": "2025-09-06",
+  "d1_databases": [
+    {
+      "binding": "DRILL",
+      "database_name": "dongfan-drill",
+      "database_id": "local-drill-placeholder"
+    }
+  ]
+}
