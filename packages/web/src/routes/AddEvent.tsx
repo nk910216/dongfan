@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
 import {
@@ -18,8 +17,7 @@ import { useCreateEvent } from '../lib/create-event.js';
  */
 export function AddEvent(): React.JSX.Element {
   const navigate = useNavigate();
-  const create = useCreateEvent();
-  const [pressedAt] = useState(() => Date.now());
+  const create = useCreateEvent('diaper');
 
   const diaper = getEventType('diaper');
 
@@ -32,7 +30,11 @@ export function AddEvent(): React.JSX.Element {
     const created = await create.submit({
       typeId: diaper.id,
       intent: 'record',
-      startedAt: pressedAt,
+      // Read here, at the press. Taken when the screen opened, a picker
+      // left sitting for five minutes would file the change five minutes
+      // early -- and across midnight, on the wrong day. A retry ignores
+      // this and resends the original anyway.
+      startedAt: Date.now(),
       endedAt: null,
       note: '',
       metadata: { diaper_kind: kind },

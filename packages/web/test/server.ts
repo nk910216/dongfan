@@ -30,7 +30,7 @@ export const BABY: BabyDto = {
   role: 'owner',
 };
 
-const ME: MeDto = { user: { id: 'user-1', username: 'parent' }, babies: [BABY] };
+const ME: { user: MeDto['user']; babies: MeDto['babies'] } = { user: { id: 'user-1', username: 'parent' }, babies: [BABY] };
 
 type Failure = { status: number; code: string; fields?: { field: string; code: string; params: Record<string, unknown> }[] };
 
@@ -49,7 +49,13 @@ class Api {
   loginFails = false;
   private rev = 0;
 
+  /** Switches which account the token belongs to, for isolation tests. */
+  signInAs(userId: string): void {
+    ME.user = { id: userId, username: userId };
+  }
+
   reset(): void {
+    ME.user = { id: 'user-1', username: 'parent' };
     this.events = [];
     this.requests = [];
     this.nextFailure = null;

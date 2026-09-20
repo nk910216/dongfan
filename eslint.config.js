@@ -9,7 +9,9 @@ import tseslint from 'typescript-eslint';
  * carry what genuinely cannot be automated.
  */
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/dist-types/**', '**/node_modules/**', '.wrangler/**'] },
+  // Anchored patterns only match the root, and wrangler leaves its temp
+  // bundles under packages/api/.wrangler when it is run from there.
+  { ignores: ['**/dist/**', '**/dist-types/**', '**/node_modules/**', '**/.wrangler/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

@@ -1,6 +1,8 @@
 import { useCallback, useState } from 'react';
 import type { EventDto } from '@dongfan/shared';
 import { ApiFailure, NetworkFailure } from './api.js';
+import { clearPending, pendingFor, writePending } from './pending-create.js';
+import { useSession } from './session.js';
 import { newEventId, useStore } from './store.js';
 import type { NewEventInput } from './store.js';
 
@@ -16,9 +18,9 @@ import type { NewEventInput } from './store.js';
  * for opposite handling: if the event is already stored, sending corrected
  * content under the same id gets the *stored* version back, and the
  * correction disappears without a trace (spec 6.1). So an attempt that ends
- * in silence sets a sticky flag, and while it is set the only thing the
- * caller may do is resend what was sent before, unchanged, until the server
- * says something definite.
+ * in silence is written to storage and marked unresolved, and until the
+ * server says something definite the only thing the caller may do is resend
+ * what was sent before, unchanged.
  *
  * This is not the offline queue. That belongs to M2, with its own storage
  * and its own backoff. This is only the rule that a retry in front of the
@@ -26,10 +28,11 @@ import type { NewEventInput } from './store.js';
  */
 
 export type CreateEvent = {
-  /** True while a request is in flight. */
   busy: boolean;
   /** True when an attempt ended without the server saying anything. */
   outcomeUnknown: boolean;
+  /** What that attempt sent. The screen shows this rather than a new draft. */
+  pending: NewEventInput | null;
   failure: unknown;
   /**
    * Sends the draft, or -- once the outcome is unknown -- resends exactly
@@ -39,35 +42,58 @@ export type CreateEvent = {
 };
 
 /**
- * Whether an attempt tells us nothing about what the server did.
+ * The refusals that prove the server does not have the event.
+ *
+ * A whitelist, not a list of exceptions, and a short one: these are the
+ * only answers the create handler produces *after* its idempotency read
+ * back. Reaching one of them means the server looked for this id, did not
+ * find it, and went on to refuse the content (spec 5.8).
+ *
+ * Everything else leaves the doubt where it was. A session that expired, a
+ * rate limit, an account removed from the baby between the first attempt
+ * and the retry -- none of them say anything about whether the first
+ * attempt landed, and a 404 from losing access is not evidence that the
+ * record is absent. Nor is a code this build has never seen (spec 6.1).
+ */
+const PROVES_NOT_STORED = new Set([
+  'VALIDATION_FAILED',
+  'DAILY_LIMIT_EXCEEDED',
+  'ACTIVE_TIMER_EXISTS',
+  'ID_CONFLICT',
+]);
+
+function provesNotStored(error: unknown): boolean {
+  return error instanceof ApiFailure && PROVES_NOT_STORED.has(error.code);
+}
+
+/**
+ * Whether a first attempt tells us nothing about what the server did.
  *
  * A request that never arrived and a server that fell over midway are the
- * same thing from here: the event may or may not be stored.
+ * same thing from here: the event may or may not be stored. Only asked
+ * when there is no doubt yet -- a 404 on a first attempt really is a
+ * refusal before any write, and freezing the form over it would be a lie.
  */
 function outcomeIsUnknown(error: unknown): boolean {
   if (error instanceof NetworkFailure) return true;
   return error instanceof ApiFailure && error.status >= 500;
 }
 
-/**
- * Whether an answer proves the server does not have the event.
- *
- * A later 4xx does not clear an existing doubt on its own: a session that
- * expired between the first attempt and the retry says nothing about
- * whether the first attempt landed, and neither does being asked to slow
- * down (spec 6.1).
- */
-function provesNotStored(error: unknown): boolean {
-  if (!(error instanceof ApiFailure)) return false;
-  if (error.status === 401 || error.status === 429) return false;
-  return error.status >= 400 && error.status < 500;
-}
+export function useCreateEvent(typeId: string): CreateEvent {
+  const { addEvent, baby } = useStore();
+  const { me } = useSession();
+  const userId = me?.user.id ?? '';
 
-export function useCreateEvent(): CreateEvent {
-  const { addEvent } = useStore();
-  const [eventId] = useState(newEventId);
-  const [sent, setSent] = useState<NewEventInput | null>(null);
-  const [outcomeUnknown, setOutcomeUnknown] = useState(false);
+  // Picked up from storage when it belongs to this user, this baby and
+  // this type. A nappy shortcut must not resend somebody's bottle.
+  const [resumed] = useState(() => {
+    const found = pendingFor(userId, baby.id);
+    return found && found.input.typeId === typeId ? found : null;
+  });
+
+  const [eventId] = useState(() => resumed?.eventId ?? newEventId());
+  const [sent, setSent] = useState<NewEventInput | null>(resumed?.input ?? null);
+  const [outcomeUnknown, setOutcomeUnknown] = useState(resumed !== null);
   const [failure, setFailure] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
@@ -82,22 +108,38 @@ export function useCreateEvent(): CreateEvent {
       try {
         const created = await addEvent(eventId, payload);
         setOutcomeUnknown(false);
+        setSent(null);
+        clearPending();
         setBusy(false);
         return created;
       } catch (error) {
         setFailure(error);
         setBusy(false);
+
+        // Once in doubt, only a refusal the server could not have given
+        // for a stored event settles it. Every other answer -- including
+        // the ones that look definite -- leaves it exactly where it was.
+        if (outcomeUnknown) {
+          if (provesNotStored(error)) {
+            setOutcomeUnknown(false);
+            setSent(null);
+            clearPending();
+          }
+          return null;
+        }
+
         if (outcomeIsUnknown(error)) {
           setSent(payload);
           setOutcomeUnknown(true);
-        } else if (provesNotStored(error)) {
-          setOutcomeUnknown(false);
+          // Written down before the screen has a chance to disappear,
+          // which a 401 makes it do immediately.
+          writePending({ userId, babyId: baby.id, eventId, input: payload });
         }
         return null;
       }
     },
-    [addEvent, eventId, outcomeUnknown, sent],
+    [addEvent, eventId, outcomeUnknown, sent, userId, baby.id],
   );
 
-  return { busy, outcomeUnknown, failure, submit };
+  return { busy, outcomeUnknown, pending: sent, failure, submit };
 }

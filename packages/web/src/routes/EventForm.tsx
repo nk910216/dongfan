@@ -22,26 +22,48 @@ export function EventForm(): React.JSX.Element {
   const { typeId = '' } = useParams();
   const navigate = useNavigate();
   const { baby, summary } = useStore();
-  const create = useCreateEvent();
+  const create = useCreateEvent(typeId);
   const type = getEventType(typeId);
 
-  const [intent, setIntent] = useState<EventIntent>(type?.timerEnabled ? 'start_timer' : 'record');
-  const [draft, setDraft] = useState<EventDraft>(() => ({
-    // Captured once, then both shown and submitted. Reading the clock again
-    // at submit time would store a different instant from the one displayed.
-    //
-    // Through the shared helper, so an all-day event starts at local
-    // midnight here as well as in the database. Sending the raw clock and
-    // letting the server pin it works, but then the form is showing one
-    // day's date while holding another day's instant (spec 3.9).
-    startedAt: type ? deriveEventTimes(type, Date.now(), 'record', baby.timezone).startedAt : Date.now(),
-    endedAt: null,
-    // Feed amounts repeat, so the last one is a better starting point than
-    // an empty box. It still has to be confirmed rather than sent silently.
-    displayValue: draftForValue(type?.value ?? null, typeSummary(summary, typeId)?.lastValue ?? null),
-    note: '',
-    metadata: {},
-  }));
+  const [intent, setIntent] = useState<EventIntent>(
+    // A resumed add keeps the intent it was sent with, or a timer would
+    // come back as a back-filled record and vice versa.
+    create.pending?.intent ?? (type?.timerEnabled ? 'start_timer' : 'record'),
+  );
+  const [draft, setDraft] = useState<EventDraft>(() => {
+    // An add whose result is unknown comes back as it was sent, not as an
+    // empty form: the screen has to show what is actually in doubt, and
+    // nothing new can be started until it is settled (spec 6.1).
+    const resumed = create.pending;
+    if (resumed) {
+      return {
+        startedAt: resumed.startedAt,
+        endedAt: resumed.endedAt,
+        displayValue: draftForValue(type?.value ?? null, resumed.value ?? null),
+        note: resumed.note,
+        metadata: { ...resumed.metadata },
+      };
+    }
+
+    return {
+      // Captured once, then both shown and submitted. Reading the clock
+      // again at submit time would store a different instant from the one
+      // displayed.
+      //
+      // Through the shared helper, so an all-day event starts at local
+      // midnight here as well as in the database. Sending the raw clock and
+      // letting the server pin it works, but then the form is showing one
+      // day's date while holding another day's instant (spec 3.9).
+      startedAt: type ? deriveEventTimes(type, Date.now(), 'record', baby.timezone).startedAt : Date.now(),
+      endedAt: null,
+      // Feed amounts repeat, so the last one is a better starting point
+      // than an empty box. It still has to be confirmed rather than sent
+      // silently.
+      displayValue: draftForValue(type?.value ?? null, typeSummary(summary, typeId)?.lastValue ?? null),
+      note: '',
+      metadata: {},
+    };
+  });
   const [localError, setLocalError] = useState<string | null>(null);
 
   if (!type) {

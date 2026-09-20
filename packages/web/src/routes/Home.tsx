@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Menu, Plus, Settings } from 'lucide-react';
 import {
@@ -9,11 +10,20 @@ import { EventIconBadge, FALLBACK_COLOR } from '../components/EventIcon.js';
 import { QuickActions } from '../components/QuickActions.js';
 import { formatClock, formatDuration, relativeTime } from '../lib/format.js';
 import { typeSummary, useStore } from '../lib/store.js';
+import { pendingFor } from '../lib/pending-create.js';
 import { useSession } from '../lib/session.js';
 
 export function Home(): React.JSX.Element {
   const { baby, summary, events, now, stale } = useStore();
-  const { signOut } = useSession();
+  const { me, signOut } = useSession();
+
+  // An add left unresolved has to be findable again. Signing out and back
+  // in unmounts the form it started on, and without a way back the parent
+  // would simply record it a second time (spec 6.1).
+  const pending = useMemo(
+    () => pendingFor(me?.user.id ?? '', baby.id),
+    [me, baby.id, events],
+  );
 
   const age = ageAt(baby.birthDate, now, baby.timezone);
   const height = typeSummary(summary, 'height')?.lastValue ?? null;
@@ -97,6 +107,16 @@ export function Home(): React.JSX.Element {
           {summary.today.diaper.total}
         </SummaryCell>
       </section>
+
+      {pending ? (
+        <Link
+          to={`/add/${pending.input.typeId}`}
+          data-testid="pending-create"
+          className="mx-3.5 mb-3 flex shrink-0 items-center gap-2 rounded-xl border border-warn/50 bg-warn/10 px-3.5 py-2.5 text-[13px] text-warn-soft"
+        >
+          {interpolate(zhTW.home.pendingUnknown, { name: eventTypeName(pending.input.typeId) })}
+        </Link>
+      ) : null}
 
       <QuickActions />
 

@@ -874,8 +874,13 @@ UPDATE events SET rev = (SELECT MAX(rev) + 1 FROM events WHERE baby_id = ?) WHER
 `POST /api/babies/:id/events` 收到**已存在的 `id`** 時：
 
 - 回 **200**，並回傳 DB 中既有的那一筆（不是 201，也不是 409）。
-- 實作為 `INSERT ... ON CONFLICT(id) DO NOTHING` 後回讀。
-- **理由**：離線佇列重送時若拿到 UNIQUE constraint 錯誤，佇列會永遠卡在重試迴圈。
+- **重送不可修改既有事件或其標籤**，包含 `value`、`note`、`metadata` 與標籤關聯，`version` 與 `rev` 也一律不動。
+- **事件本體與標籤的寫入必須原子完成**（§4.3）。
+- **UNIQUE constraint 錯誤不可傳到 client**：離線佇列拿到錯誤會永遠卡在重試迴圈。
+
+**本專案的作法**：`INSERT` 不加 `ON CONFLICT DO NOTHING`，讓重複 `id` 直接使整個 batch 回滾，handler catch 後回讀並回 200。
+
+`ON CONFLICT DO NOTHING` 本身沒有錯，但它只保護那一條語句。事件的 INSERT 與標籤的 INSERT 同在一個 batch 裡，而 batch 只在語句**失敗**時回滾——若事件插入被靜默跳過，同批次的標籤寫入仍會執行，把這次請求的標籤掛到既有事件上，而且 `version` 與 `rev` 都不增加，其他裝置永遠同步不到這個變更。回滾的作法同時滿足上面三條，因此採用它。
 
 **⚠️ 回讀必須同時比對 `baby_id`：**
 
@@ -884,6 +889,8 @@ SELECT * FROM events WHERE id = :id AND baby_id = :baby_id;
 ```
 
 只依 `id` 回讀會**繞過路徑上的寶寶權限檢查**——該 id 可能屬於另一個寶寶，於是攻擊者能用 POST 讀出不屬於自己的事件。若既有紀錄的 `baby_id` 與請求不符，一律回 **409**，不可回傳該筆內容。
+
+**這條適用於 handler 裡的每一次回讀，不只第一次。** 寫入後與 catch 區塊裡的回讀同樣要帶 `baby_id`：兩個請求帶同一個 id 打到不同寶寶時，先做的檢查都會查無資料，於是兩者都會走到寫入後的回讀。
 
 **檢查順序（重要）**：
 

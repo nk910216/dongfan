@@ -116,6 +116,7 @@ export const zhTW = {
     emptyHint: '點右下角的 ＋ 開始',
     syncing: '同步中…',
     syncFailed: '同步失敗',
+    pendingUnknown: '有一筆{name}紀錄不確定是否已送出，請開啟確認',
   },
 
   timer: {

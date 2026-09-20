@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { HttpResponse, http } from 'msw';
@@ -132,6 +132,23 @@ describe('the home screen', () => {
 });
 
 describe('the quick nappy buttons', () => {
+  it('record the moment of the tap, not the moment the page opened', async () => {
+    const user = openSignedIn();
+    await waitForHome();
+
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'pee') });
+
+    // A picker left sitting would otherwise file the change early, and
+    // across midnight it would land on the wrong day entirely.
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const beforeTap = Date.now();
+    await user.click(screen.getByRole('button', { name: metadataOptionLabel('diaper_kind', 'pee') }));
+
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    expect(api.events[0]?.startedAt).toBeGreaterThanOrEqual(beforeTap);
+  });
+
   it('send one event with the kind that was tapped', async () => {
     const user = openSignedIn();
     await waitForHome();
@@ -470,7 +487,12 @@ describe('saving again after a save that said nothing', () => {
     expect(amount).not.toBeDisabled();
   });
 
-  it('keeps the doubt when a later attempt only says the session expired', async () => {
+  it.each([
+    ['being asked to slow down', { status: 429, code: 'RATE_LIMITED' }],
+    ['losing access to the baby', { status: 404, code: 'NOT_FOUND' }],
+    ['being refused outright', { status: 403, code: 'FORBIDDEN' }],
+    ['the server falling over', { status: 500, code: 'INTERNAL' }],
+  ])('keeps the doubt after %s', async (_name, failure) => {
     api.loseNextResponse = true;
     const user = openSignedIn('/add/bottle');
 
@@ -478,12 +500,120 @@ describe('saving again after a save that said nothing', () => {
     await user.click(screen.getByTestId('submit'));
     await screen.findByTestId('outcome-unknown');
 
-    // A 401 says nothing about whether the first attempt landed, so it must
-    // not be read as proof that the server has nothing (spec 6.1).
-    api.nextFailure = { status: 429, code: 'RATE_LIMITED' };
+    // None of these say anything about whether the first attempt landed.
+    // Being removed from the baby afterwards does not make the record it
+    // may already hold disappear (spec 6.1).
+    api.nextFailure = failure;
     await user.click(screen.getByTestId('submit'));
 
     expect(await screen.findByTestId('outcome-unknown')).toBeInTheDocument();
+  });
+
+  it('settles only on a refusal the server could not give for a stored event', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    // The create handler reads the id back before it validates anything,
+    // so reaching a validation failure means it looked and found nothing
+    // (spec 5.8).
+    api.nextFailure = { status: 422, code: 'VALIDATION_FAILED', fields: [{ field: 'value', code: 'OUT_OF_RANGE', params: { min: 0, max: 500 } }] };
+    await user.click(screen.getByTestId('submit'));
+
+    await waitFor(() => expect(screen.queryByTestId('outcome-unknown')).not.toBeInTheDocument());
+    expect(await screen.findByLabelText(valueLabel('bottle'))).not.toBeDisabled();
+  });
+
+  it('survives being signed out and back in', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    // Signing out takes the form, the store and every piece of state the
+    // retry depended on with it -- including the id (spec 6.1).
+    api.nextFailure = { status: 401, code: 'UNAUTHENTICATED' };
+    await user.click(screen.getByTestId('submit'));
+
+    await user.type(await screen.findByLabelText(zhTW.auth.username), 'parent');
+    await user.type(screen.getByLabelText(zhTW.auth.password), 'a-long-enough-password');
+    await user.click(screen.getByRole('button', { name: zhTW.auth.submit }));
+
+    // Back with the content it was sent with, still frozen.
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    expect(amount).toHaveValue('150');
+    expect(amount).toBeDisabled();
+    expect(screen.getByTestId('outcome-unknown')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('submit'));
+    await waitFor(() => expect(screen.queryByTestId('outcome-unknown')).not.toBeInTheDocument());
+
+    // One bottle, not two, and always under the same id.
+    expect(api.events).toHaveLength(1);
+    const posts = api.requests.filter((entry) => entry.method === 'POST' && entry.path.endsWith('/events'));
+    const ids = new Set(posts.map((entry) => (entry.body as Record<string, unknown>)['id']));
+    expect(ids.size).toBe(1);
+  });
+
+  it('is findable again from the home screen', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    // A fresh start, as a reload after signing back in would be: without a
+    // way back to it, the parent would simply record the bottle again.
+    cleanup();
+    const next = openSignedIn('/');
+    await waitForHome();
+
+    await next.click(await screen.findByTestId('pending-create'));
+    expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('150');
+  });
+
+  it('leaves the home screen alone when there is nothing pending', async () => {
+    openSignedIn();
+    await waitForHome();
+    expect(screen.queryByTestId('pending-create')).not.toBeInTheDocument();
+  });
+
+  it('is not picked up by a different type', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    cleanup();
+    openSignedIn('/add/temperature');
+
+    // Resending somebody's bottle because they opened a different form
+    // would be worse than the duplicate this is all meant to prevent.
+    expect(await screen.findByLabelText(valueLabel('temperature'))).not.toBeDisabled();
+    expect(screen.queryByTestId('outcome-unknown')).not.toBeInTheDocument();
+  });
+
+  it('is not picked up by a different account', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    cleanup();
+    api.signInAs('someone-else');
+    openSignedIn('/add/bottle');
+
+    expect(await screen.findByLabelText(valueLabel('bottle'))).not.toBeDisabled();
   });
 
   it('applies to the nappy shortcut too', async () => {
