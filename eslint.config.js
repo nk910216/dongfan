@@ -45,6 +45,21 @@ export default tseslint.config(
     rules: { '@typescript-eslint/naming-convention': 'off' },
   },
   {
+    // The shared package needs the DOM library for the web platform globals
+    // that both the Worker and the browser implement (crypto, TextEncoder,
+    // console). That also makes browser-only globals look available, so they
+    // are banned here rather than relied on not being used.
+    files: ['packages/shared/**/*.ts'],
+    rules: {
+      'no-restricted-globals': ['error',
+        { name: 'document', message: 'Shared code also runs in the Worker.' },
+        { name: 'window', message: 'Shared code also runs in the Worker.' },
+        { name: 'localStorage', message: 'Shared code also runs in the Worker.' },
+        { name: 'navigator', message: 'Shared code also runs in the Worker.' },
+      ],
+    },
+  },
+  {
     // Build and maintenance scripts run under Node, not in a Worker.
     files: ['scripts/**/*.mjs', '*.config.{js,ts}'],
     languageOptions: { globals: { console: 'readonly', process: 'readonly' } },

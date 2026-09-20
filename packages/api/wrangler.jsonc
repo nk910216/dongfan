@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dongfan",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    // The API must be matched before the asset layer answers. Assets are
+    // served first by default, so without this a request to /api could come
+    // back as the SPA's HTML and the handler would never run.
+    "run_worker_first": ["/api/*"],
+    "not_found_handling": "single-page-application"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      // A development database, seeded with invented records only. The
+      // family's real data never lives here (spec 13.5).
+      "database_name": "dongfan-dev",
+      "database_id": "local-dev-placeholder",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

@@ -25,6 +25,20 @@ end up serving a different application at the same address.
 mock data, not to an API. A banner at the top of the app says so. Replacing it
 with a real local D1 is part of finishing M1.
 
+## Backend
+
+The worker and its database are local only. Nothing here reaches production.
+
+```sh
+npm run db:migrate    # apply migrations to the local dongfan-dev database
+npm run db:seed       # fill it with invented records
+npm run users -- list # accounts; see `users -- ` with no command for the rest
+```
+
+`npm run users -- create <name>` generates a password and prints it once.
+`npm run users -- assign <name> <babyId> owner` is how a second parent gets
+access before the invite screen exists.
+
 ## Checks
 
 ```sh
@@ -39,5 +53,6 @@ npm run check:lang   # no Chinese outside the whitelist
 | Path | Contents |
 |---|---|
 | `packages/shared` | Types, event type config, date utilities, interface copy |
+| `packages/api` | Cloudflare Worker (Hono) and the D1 schema |
 | `packages/web` | React PWA |
 | `scripts` | Maintenance scripts |

@@ -1,0 +1,25 @@
+{
+  "name": "@dongfan/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "wrangler d1 migrations apply dongfan-dev --local",
+    "db:seed": "node ../../scripts/seed.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@dongfan/shared": "*",
+    "drizzle-orm": "^0.38.3",
+    "hono": "^4.6.16"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.71",
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "drizzle-kit": "^0.30.1",
+    "wrangler": "^4.135.0"
+  }
+}

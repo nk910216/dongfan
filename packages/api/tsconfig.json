@@ -1,0 +1,25 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": [
+      "ES2022"
+    ],
+    "outDir": "./dist-types",
+    "rootDir": ".",
+    "types": [
+      "@cloudflare/workers-types",
+      "@cloudflare/vitest-pool-workers"
+    ],
+    "noEmit": false
+  },
+  "include": [
+    "src/**/*",
+    "test/**/*",
+    "drizzle.config.ts"
+  ],
+  "references": [
+    {
+      "path": "../shared"
+    }
+  ]
+}

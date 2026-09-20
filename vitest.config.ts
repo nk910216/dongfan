@@ -10,6 +10,8 @@ export default defineConfig({
   // never pass against a stale build.
   resolve: { alias: { '@dongfan/shared': sharedSrc } },
   test: {
+    // The API suite is not listed here: it runs inside the Workers runtime
+    // with its own pool and config, and is chained from the root test script.
     projects: [
       {
         extends: true,
