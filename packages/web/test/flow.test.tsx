@@ -360,8 +360,15 @@ describe('the home screen', () => {
   });
 });
 
-describe('with no network at all', () => {
-  /** Every request fails to arrive, as it does on a train. */
+describe('when the API cannot be reached', () => {
+  /**
+   * Every request fails to arrive.
+   *
+   * The app itself is already loaded, which is what this covers: the page
+   * is open, or is being re-rendered, and the server is unreachable.
+   * Whether the HTML and the scripts can be fetched at all with no network
+   * is a service worker's job and belongs to the PWA stage.
+   */
   function goOffline(): void {
     server.use(
       http.get('*', () => HttpResponse.error()),
@@ -371,7 +378,7 @@ describe('with no network at all', () => {
     );
   }
 
-  it('opens and shows what was pulled before', async () => {
+  it('renders what was pulled before, without asking again', async () => {
     api.add({ typeId: 'bottle', value: 140, startedAt: Date.now() - 2 * HOUR });
     api.add({ typeId: 'diaper', metadata: { diaper_kind: 'pee' } });
 
@@ -412,6 +419,22 @@ describe('with no network at all', () => {
     );
   });
 
+  it('does not wait on a request that never answers', async () => {
+    api.add({ typeId: 'bottle', value: 140 });
+    openSignedIn();
+    await waitForHome();
+
+    // Not a failure: a request that hangs. A phone with one bar does this
+    // rather than erroring, and waiting for it held the whole app on a
+    // loading screen with the records sitting on the device.
+    cleanup();
+    server.use(http.get('/api/me', () => new Promise<never>(() => undefined)));
+    openSignedIn();
+
+    await waitForHome();
+    expect(screen.getAllByTestId('event-row-bottle')).toHaveLength(1);
+  });
+
   it('still signs out when the server says the session is over', async () => {
     openSignedIn();
     await waitForHome();
@@ -444,6 +467,124 @@ describe('with no network at all', () => {
     open();
 
     expect(await screen.findByLabelText(zhTW.auth.username)).toBeInTheDocument();
+  });
+});
+
+describe('a write that lands while the pull afterwards does not', () => {
+  it('keeps the new event on screen', async () => {
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    // The POST will land; the sync that follows will not.
+    server.use(http.get('/api/babies/:babyId/events', () => HttpResponse.error()));
+    await user.click(screen.getByTestId('submit'));
+
+    await waitForHome();
+
+    // The screen said it was saved. A record that then disappears from the
+    // list because a *different* request failed is the app losing it, as
+    // far as anyone using it can tell.
+    expect(api.events).toHaveLength(1);
+    await waitFor(() => expect(screen.getAllByTestId('event-row-bottle')).toHaveLength(1));
+  });
+
+  it('keeps an edit on screen', async () => {
+    const event = api.add({ typeId: 'bottle', value: 140 });
+    const user = openSignedIn();
+    await waitForHome();
+
+    await user.click(screen.getByRole('link', {
+      name: interpolate(zhTW.event.open, { name: eventTypeName('bottle') }),
+    }));
+
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    await user.clear(amount);
+    await user.type(amount, '160');
+
+    server.use(http.get('/api/babies/:babyId/events', () => HttpResponse.error()));
+    await user.click(screen.getByTestId('submit'));
+
+    await waitForHome();
+    await waitFor(() =>
+      expect(screen.getAllByTestId('event-row-bottle')[0]).toHaveTextContent('160'),
+    );
+    expect(api.find(event.id)?.value).toBe(160);
+  });
+
+  it('hides a deleted event', async () => {
+    const event = api.add({ typeId: 'bottle', value: 140 });
+    const user = openSignedIn(`/event/${event.id}`);
+
+    await user.click(await screen.findByRole('button', { name: zhTW.addEvent.delete }));
+    server.use(http.get('/api/babies/:babyId/events', () => HttpResponse.error()));
+    await user.click(screen.getByRole('button', { name: zhTW.event.deleteConfirmYes }));
+
+    await waitForHome();
+    await waitFor(() => expect(screen.queryByTestId('event-row-bottle')).not.toBeInTheDocument());
+  });
+});
+
+describe('keeping up with the other parent', () => {
+  it('pulls again when the app is brought back to the front', async () => {
+    openSignedIn();
+    await waitForHome();
+    const before = api.requests.filter((entry) => entry.path.endsWith('/events')).length;
+
+    // The other parent records a feed while this phone is in a pocket.
+    api.add({ typeId: 'bottle', value: 140 });
+    fireEvent(document, new Event('visibilitychange'));
+
+    // Without this the only thing that ever syncs is this device's own
+    // writing, and the screen sits unchanged with nothing to say so.
+    await waitFor(() => {
+      const after = api.requests.filter((entry) => entry.path.endsWith('/events')).length;
+      expect(after).toBeGreaterThan(before);
+    });
+    await waitFor(() => expect(screen.getAllByTestId('event-row-bottle')).toHaveLength(1));
+  });
+
+  it('pulls again when the connection comes back', async () => {
+    openSignedIn();
+    await waitForHome();
+    const before = api.requests.filter((entry) => entry.path.endsWith('/events')).length;
+
+    fireEvent(window, new Event('online'));
+
+    await waitFor(() => {
+      const after = api.requests.filter((entry) => entry.path.endsWith('/events')).length;
+      expect(after).toBeGreaterThan(before);
+    });
+  });
+
+  it('can be told to pull by hand', async () => {
+    const user = openSignedIn();
+    await waitForHome();
+
+    api.add({ typeId: 'bottle', value: 140 });
+    await user.click(screen.getByRole('button', { name: zhTW.a11y.sync }));
+
+    // The automatic pulls cover coming back to the app and coming back
+    // online. Neither covers standing there wondering whether the feed has
+    // been recorded yet.
+    await waitFor(() => expect(screen.getAllByTestId('event-row-bottle')).toHaveLength(1));
+  });
+
+  it('says when it last succeeded rather than always saying just now', async () => {
+    openSignedIn();
+    await waitForHome();
+
+    // "Just synced", permanently, is an assurance that is wrong at exactly
+    // the moment it matters.
+    expect(screen.getByTestId('sync-state')).toHaveTextContent(zhTW.home.syncedJustNow);
+
+    cleanup();
+    server.use(http.get('/api/babies/:babyId/events', () => HttpResponse.error()));
+    openSignedIn();
+    await waitForHome();
+
+    await waitFor(() =>
+      expect(screen.getByTestId('sync-state')).toHaveTextContent(zhTW.home.syncFailed),
+    );
   });
 });
 
@@ -700,6 +841,34 @@ describe('editing an event', () => {
     expect(await screen.findByRole('dialog')).toHaveTextContent(zhTW.error.VERSION_CONFLICT);
     // Still on the form, and the stored value is untouched.
     expect(api.find(event.id)?.value).toBe(140);
+  });
+
+  it('reloads from the server after a conflict, not from the device', async () => {
+    const event = api.add({ typeId: 'bottle', value: 140 });
+    const user = openSignedIn(`/event/${event.id}`);
+
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    await user.clear(amount);
+    await user.type(amount, '200');
+
+    // Somebody else got there first, so the version this screen holds is
+    // now the old one.
+    api.nextFailure = { status: 409, code: 'VERSION_CONFLICT' };
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByRole('dialog');
+
+    Object.assign(event, { value: 160, version: 2, rev: api.nextRev() });
+    await user.click(screen.getByRole('button', { name: zhTW.conflict.reload }));
+
+    // Reading the local copy here would hand back the stale version, send
+    // it again, and collect the same 409 for ever (spec 6.3).
+    await waitFor(() => expect(screen.getByLabelText(valueLabel('bottle'))).toHaveValue('160'));
+
+    await user.click(screen.getByTestId('submit'));
+    await waitFor(() => expect(api.find(event.id)?.version).toBe(3));
+
+    const sent = api.lastRequest(`/events/${event.id}`)?.body as Record<string, unknown>;
+    expect(sent['version']).toBe(2);
   });
 
   it('asks before deleting, then sends the version', async () => {

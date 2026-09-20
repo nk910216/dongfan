@@ -46,21 +46,34 @@ function writeToken(token: string | null): void {
  * Only ever a fallback. A reachable server always wins, and an answer of
  * "not signed in" clears it.
  */
-function readMe(): MeDto | null {
+type CachedMe = { token: string; me: MeDto };
+
+/**
+ * Stored with the token it was fetched for.
+ *
+ * Without that pairing, a cache left by one session could be shown to the
+ * next -- a different account, or the same account after being removed from
+ * a baby -- for as long as the server takes to answer.
+ */
+function readMe(token: string | null): MeDto | null {
+  if (token === null) return null;
   try {
     const raw = localStorage.getItem(ME_KEY);
-    return raw === null ? null : (JSON.parse(raw) as MeDto);
+    if (raw === null) return null;
+    const cached = JSON.parse(raw) as CachedMe;
+    return cached.token === token ? cached.me : null;
   } catch {
     return null;
   }
 }
 
-function writeMe(me: MeDto | null): void {
+function writeMe(token: string | null, me: MeDto | null): void {
   try {
-    if (me === null) localStorage.removeItem(ME_KEY);
-    else localStorage.setItem(ME_KEY, JSON.stringify(me));
+    if (me === null || token === null) localStorage.removeItem(ME_KEY);
+    else localStorage.setItem(ME_KEY, JSON.stringify({ token, me } satisfies CachedMe));
   } catch {
-    // The app still works for this visit; it just will not open offline.
+    // The app still works for this visit; it just will not open without
+    // waiting for the server next time.
   }
 }
 
@@ -90,7 +103,7 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
 
   const expire = useCallback(() => {
     writeToken(null);
-    writeMe(null);
+    writeMe(null, null);
     setToken(null);
     setMe(null);
     setOffline(false);
@@ -107,12 +120,26 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
     }
 
     let cancelled = false;
-    setLoading(true);
+
+    // Shown straight away when we have it, and checked in the background.
+    //
+    // Waiting for /me before rendering anything meant a slow connection --
+    // not a failed one, a slow one -- held the whole app on a loading
+    // screen with the records sitting on the device. A request that never
+    // answers holds it there for ever.
+    const remembered = readMe(token);
+    if (remembered) {
+      setMe(remembered);
+      setOffline(true);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
 
     apiRequest<MeDto>('/me', { token })
       .then((body) => {
         if (cancelled) return;
-        writeMe(body);
+        writeMe(token, body);
         setMe(body);
         setOffline(false);
         setLoading(false);
@@ -120,18 +147,14 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
       .catch((error: unknown) => {
         if (cancelled) return;
 
-        // Only the server saying so ends a session. Anything else is the
+        // Only the server saying so ends a session, and it ends it even if
+        // the cached account is already on screen. Anything else is the
         // network, and being signed out by a tunnel would be absurd.
         if (error instanceof ApiFailure && error.status === 401) {
           expire();
           return;
         }
 
-        const remembered = readMe();
-        if (remembered) {
-          setMe(remembered);
-          setOffline(true);
-        }
         setLoading(false);
       });
 
@@ -152,7 +175,7 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
   const reload = useCallback(async (): Promise<void> => {
     if (token === null) return;
     const body = await apiRequest<MeDto>('/me', { token });
-    writeMe(body);
+    writeMe(token, body);
     setMe(body);
     setOffline(false);
     setAttempt((n) => n + 1);
@@ -165,7 +188,7 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
     });
     // A different person signing in must not inherit the last one's
     // account description while their own is being fetched.
-    writeMe(null);
+    writeMe(null, null);
     setMe(null);
     writeToken(body.token);
     setToken(body.token);

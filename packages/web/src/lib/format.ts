@@ -29,6 +29,24 @@ export function formatDuration(ms: number): string {
     : interpolate(zhTW.event.duration, { hours, minutes });
 }
 
+/**
+ * How long ago the last successful pull finished.
+ *
+ * Written from the stored timestamp rather than assumed. A header that
+ * always says "just synced" is worse than one that says nothing: it is an
+ * assurance, and it is wrong exactly when the other parent's records are
+ * the thing being waited for (spec 6.1).
+ */
+export function syncedAgo(syncedAt: number | null, now: number): string {
+  if (syncedAt === null) return zhTW.home.neverSynced;
+
+  const elapsed = now - syncedAt;
+  if (elapsed < MINUTE) return zhTW.home.syncedJustNow;
+  if (elapsed < HOUR) return interpolate(zhTW.home.syncedAt, { minutes: Math.floor(elapsed / MINUTE) });
+  if (elapsed < DAY) return interpolate(zhTW.home.syncedHoursAgo, { hours: Math.floor(elapsed / HOUR) });
+  return interpolate(zhTW.home.syncedDaysAgo, { days: Math.floor(elapsed / DAY) });
+}
+
 /** Running timers read as a clock rather than prose: 1:23:41. */
 export function formatStopwatch(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));

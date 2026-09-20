@@ -8,13 +8,13 @@ import {
 import type { EventDto } from '@dongfan/shared';
 import { EventIconBadge, FALLBACK_COLOR } from '../components/EventIcon.js';
 import { QuickActions } from '../components/QuickActions.js';
-import { formatClock, formatDuration, relativeTime } from '../lib/format.js';
+import { formatClock, formatDuration, relativeTime, syncedAgo } from '../lib/format.js';
 import { typeSummary, useStore } from '../lib/store.js';
 import { pendingList } from '../lib/pending-create.js';
 import { useSession } from '../lib/session.js';
 
 export function Home(): React.JSX.Element {
-  const { baby, summary, events, now, stale } = useStore();
+  const { baby, summary, events, now, stale, syncing, syncedAt, refresh } = useStore();
   const { me, signOut } = useSession();
 
   // An add left unresolved has to be findable again. Signing out and back
@@ -38,9 +38,20 @@ export function Home(): React.JSX.Element {
         <button type="button" aria-label={zhTW.a11y.openMenu} className="flex size-11 items-center justify-center text-ink-muted">
           <Menu size={22} />
         </button>
-        <span className="text-[13px] text-ink-faint" data-testid="sync-state">
-          {stale ? zhTW.home.syncFailed : zhTW.home.syncedJustNow}
-        </span>
+        {/* Tappable, because the automatic pulls cover coming back to the
+            app and coming back online, and neither covers standing in the
+            kitchen wondering whether the other parent has recorded the
+            feed yet (spec 6.1). */}
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          disabled={syncing}
+          aria-label={zhTW.a11y.sync}
+          className="text-[13px] text-ink-faint disabled:opacity-60"
+          data-testid="sync-state"
+        >
+          {syncing ? zhTW.home.syncing : stale ? zhTW.home.syncFailed : syncedAgo(syncedAt, now)}
+        </button>
         <button
           type="button"
           onClick={signOut}

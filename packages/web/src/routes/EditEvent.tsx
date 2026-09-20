@@ -39,7 +39,10 @@ export function EditEvent(): React.JSX.Element {
     let cancelled = false;
     setLoadError(null);
 
-    findEvent(eventId)
+    // After a conflict the local copy is by definition the stale one, so
+    // the reload has to come from the server. Handing back what we hold
+    // would send the same version again and collect the same 409 (spec 6.3).
+    findEvent(eventId, { fresh: reloads > 0 })
       .then((found) => {
         if (cancelled) return;
         setEvent(found);

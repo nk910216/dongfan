@@ -132,6 +132,37 @@ Open `http://<ip>:5180` on the phone, sign in, add one event, and confirm it
 appears. Doing this over HTTPS proves nothing about the fallback, because
 there the fallback never runs.
 
+### Reading without the API
+
+The app holds events on the device and reads them from there, so it keeps
+working when the server does not answer (spec 6.2).
+
+**Turning off Wi-Fi on the phone is not the way to check this yet.** There
+is no service worker, so with no network the browser cannot fetch the page
+or its scripts at all — it fails before any of this code runs, and what you
+would be looking at is a browser error, not the app. Testing a cold start
+with no network becomes possible in the PWA stage, and belongs there.
+
+What can be checked now is the app running with the API unreachable. Run
+the two halves in separate terminals rather than together:
+
+```sh
+npm run dev:api     # terminal one
+npm run dev         # terminal two
+```
+
+Load the app on the phone, then stop the worker with Ctrl-C in terminal
+one. The web server keeps serving the page; every `/api` request now fails.
+
+- Today's events and the summary are still on screen.
+- The indicator at the top says the sync failed rather than claiming it
+  just succeeded.
+- Reloading the page still works, and still shows the records.
+- Adding an event fails — the queue that lets it wait is the next stage.
+
+Start the worker again and the indicator goes back to saying when it last
+succeeded.
+
 ### A restore drill
 
 ```sh

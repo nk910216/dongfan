@@ -46,6 +46,7 @@ export const zhTW = {
   a11y: {
     openMenu: '切換頁面',
     openSettings: '設定',
+    sync: '立即同步',
     addEvent: '新增事件',
     back: '返回',
   },
@@ -131,6 +132,9 @@ export const zhTW = {
     emptyHint: '點右下角的 ＋ 開始',
     syncing: '同步中…',
     syncFailed: '同步失敗',
+    neverSynced: '尚未同步',
+    syncedHoursAgo: '{hours} 小時前同步',
+    syncedDaysAgo: '{days} 天前同步',
     pendingUnknown: '有一筆{name}紀錄不確定是否已送出，請開啟確認',
     pendingUnknownMany: '有 {count} 筆紀錄不確定是否已送出，請逐筆確認',
   },

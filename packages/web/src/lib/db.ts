@@ -179,6 +179,26 @@ export async function applyPage(
   return applied;
 }
 
+/**
+ * Stores one event that came back from a write, and nothing else.
+ *
+ * Deliberately not `applyPage`: a single write must never move the sync
+ * cursor. The event it returns carries the rev the server just allocated,
+ * which is higher than anything we have pulled -- setting the cursor to it
+ * would declare everything in between already seen, and the rest of that
+ * gap would never be asked for again (spec 5.4).
+ *
+ * The same forwards-only rule applies, so a slow reply cannot overwrite a
+ * later one.
+ */
+export async function applyOne(scope: Scope, event: EventDto): Promise<void> {
+  const database = await db();
+  const tx = database.transaction('events', 'readwrite');
+  const existing = await tx.store.get([scope, event.id]);
+  if (!existing || existing.rev < event.rev) await tx.store.put(toRow(scope, event));
+  await tx.done;
+}
+
 export async function findEvent(scope: Scope, id: string): Promise<EventDto | null> {
   const found = await (await db()).get('events', [scope, id]);
   if (!found || found.event.deletedAt !== null) return null;

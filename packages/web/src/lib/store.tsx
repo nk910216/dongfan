@@ -54,10 +54,19 @@ export type Store = {
   loading: boolean;
   /** Set when the last refresh did not reach the server. */
   stale: boolean;
+  /** True while a pull is in progress. */
+  syncing: boolean;
   /** When the last successful pull finished, or null if there never was one. */
   syncedAt: number | null;
   refresh: () => Promise<void>;
-  findEvent: (eventId: string) => Promise<EventDto>;
+  /**
+   * One event. Local when we have it, unless `fresh` is asked for.
+   *
+   * `fresh` exists for the reload after a version conflict: the local copy
+   * is by definition the stale one, and handing it back would send the same
+   * version again and collect the same 409 (spec 6.3).
+   */
+  findEvent: (eventId: string, options?: { fresh?: boolean }) => Promise<EventDto>;
   /**
    * The id is the caller's, not this function's. Generating one here would
    * mean a second press after a failure created a second event, which is
@@ -87,6 +96,7 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
   const [summary, setSummary] = useState<SummaryDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [stale, setStale] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [syncedAt, setSyncedAt] = useState<number | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [now, setNow] = useState(() => Date.now());
@@ -177,19 +187,47 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
   }, [refresh, attempt]);
 
   /**
-   * Refetches after a write.
+   * Refetches after a write, and whenever something says to.
    *
    * Everything for this baby, not a computed subset: the cost of refetching
    * two small responses is far below the cost of getting the subset wrong.
    */
   const settle = useCallback(async (): Promise<void> => {
+    setSyncing(true);
     try {
       await refreshRef.current();
       setStale(false);
     } catch {
       setStale(true);
+    } finally {
+      setSyncing(false);
     }
   }, []);
+
+  /**
+   * Pulls again when the app comes back.
+   *
+   * Without this the only thing that syncs is this device's own writing.
+   * The other parent records a feed, this phone is picked up an hour later,
+   * and it shows the same screen it had -- with nothing to say it is out of
+   * date, because as far as it knows nothing has happened (spec 6.1).
+   *
+   * `online` covers coming out of a tunnel; `visibilitychange` covers the
+   * far more common case of a phone that was simply in a pocket.
+   */
+  useEffect(() => {
+    const again = (): void => {
+      if (document.visibilityState === 'hidden') return;
+      void settle();
+    };
+
+    window.addEventListener('online', again);
+    document.addEventListener('visibilitychange', again);
+    return () => {
+      window.removeEventListener('online', again);
+      document.removeEventListener('visibilitychange', again);
+    };
+  }, [settle]);
 
   const addEvent = useCallback(
     async (eventId: string, input: NewEventInput): Promise<EventDto> => {
@@ -197,10 +235,14 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
         method: 'POST',
         body: { id: eventId, ...input },
       });
+      // Kept before the sync is attempted. The write succeeded; if the pull
+      // that follows does not, the record must still be here rather than
+      // vanishing from a screen that just said it was saved.
+      await local.applyOne(scope, created);
       await settle();
       return created;
     },
-    [call, baby.id, settle],
+    [call, baby.id, scope, settle],
   );
 
   const updateEvent = useCallback(
@@ -209,10 +251,11 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
         method: 'PATCH',
         body: { version, ...patch },
       });
+      await local.applyOne(scope, updated);
       await settle();
       return updated;
     },
-    [call, settle],
+    [call, scope, settle],
   );
 
   const stopTimer = useCallback(
@@ -223,30 +266,45 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
 
   const removeEvent = useCallback(
     async (eventId: string, version: number): Promise<void> => {
-      await call(`/events/${eventId}`, { method: 'DELETE', body: { version } });
+      // The tombstone comes back, and storing it is what hides the event
+      // even if the sync afterwards fails.
+      const tombstone = await call<EventDto>(`/events/${eventId}`, {
+        method: 'DELETE',
+        body: { version },
+      });
+      await local.applyOne(scope, tombstone);
       await settle();
     },
-    [call, settle],
+    [call, scope, settle],
   );
 
   /**
    * One event, from here if we have it.
    *
    * Falling back to the network covers the event that has not been pulled
-   * yet -- a link opened before the first sync finished, for instance.
+   * yet -- a link opened before the first sync finished, for instance. What
+   * comes back is stored, so the next read does not have to ask again.
    */
   const findEvent = useCallback(
-    async (eventId: string): Promise<EventDto> =>
-      (await local.findEvent(scope, eventId)) ?? call<EventDto>(`/events/${eventId}`),
+    async (eventId: string, options: { fresh?: boolean } = {}): Promise<EventDto> => {
+      if (!options.fresh) {
+        const held = await local.findEvent(scope, eventId);
+        if (held) return held;
+      }
+
+      const fetched = await call<EventDto>(`/events/${eventId}`);
+      await local.applyOne(scope, fetched);
+      return fetched;
+    },
     [call, scope],
   );
 
   const value = useMemo<Store>(
     () => ({
-      baby, events, summary: summary as SummaryDto, now, loading, stale, syncedAt,
+      baby, events, summary: summary as SummaryDto, now, loading, stale, syncing, syncedAt,
       refresh: settle, findEvent, addEvent, updateEvent, stopTimer, removeEvent,
     }),
-    [baby, events, summary, now, loading, stale, syncedAt, settle, findEvent, addEvent, updateEvent, stopTimer, removeEvent],
+    [baby, events, summary, now, loading, stale, syncing, syncedAt, settle, findEvent, addEvent, updateEvent, stopTimer, removeEvent],
   );
 
   // Nothing below this point has to cope with an absent summary. Gating here
