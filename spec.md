@@ -94,7 +94,7 @@
 ## 2.4 專案結構（Monorepo）
 
 ```
-babyapp/
+dongfan/
 ├── packages/
 │   ├── shared/          # 前後端共用：事件 type config、Zod schema、型別、日期工具
 │   ├── api/             # Cloudflare Worker (Hono)
@@ -163,11 +163,10 @@ type Aggregation =
   | 'duration_sum'; // 每日總時長（睡眠）
 
 type ValueSpec = {
-  unit: string;      // 顯示單位，如 'ml' | 'g' | 'mm' | '°C'
+  unit: string;      // 單位符號，如 'ml' | 'g' | 'mm' | '°C'（非中文，可直接顯示）
   scale: number;     // 儲存值 = 顯示值 × scale（見 3.2）
   min: number;       // 顯示值的合理下限
   max: number;       // 顯示值的合理上限
-  label: string;     // 輸入欄位標籤
 };
 
 type CategoryId =
@@ -181,7 +180,6 @@ type CategoryId =
 
 type EventTypeConfig = {
   id: string;                    // 'nursing' | 'diaper' | 'sleep' ...（永不變更）
-  name: string;                  // 繁中顯示名稱
   category: CategoryId;          // 大分類，見 3.3
   icon: string;                  // lucide-react 的圖示名稱，見下方規定
   color: string;                 // 主題色（CSS 色碼）
@@ -196,6 +194,8 @@ type EventTypeConfig = {
   metadataFields?: MetadataField[]; // 額外欄位，見 3.6
 };
 ```
+
+**顯示名稱不在 config 裡。** config 只描述結構，所有繁中文案集中在 `packages/shared/src/i18n/zh-TW.ts`（見 13.1），以 `id` 對應。理由：config 同時被後端載入做驗證，把文案放進去等於讓中文散進共用的業務邏輯。
 
 **圖示庫**：一律使用 **`lucide-react`**，`icon` 欄位存該圖示的名稱字串（如 `'moon'`、`'baby'`）。不可混用多套圖示庫。
 
@@ -334,13 +334,13 @@ type EventTypeConfig = {
 
 ```ts
 type MetadataField =
-  | { kind: 'enum'; id: string; label: string; required: boolean;
-      options: { value: string; label: string }[] }
-  | { kind: 'text'; id: string; label: string; required: boolean;
-      maxLength: number }
-  | { kind: 'number'; id: string; label: string; required: boolean;
+  | { kind: 'enum'; id: string; required: boolean; options: string[] }
+  | { kind: 'text'; id: string; required: boolean; maxLength: number }
+  | { kind: 'number'; id: string; required: boolean;
       min: number; max: number; unit?: string };
 ```
+
+**欄位標籤與 enum 選項的中文同樣不在這裡**，一律放 `i18n/zh-TW.ts`，以 `<欄位 id>` 與 `<欄位 id>.<選項值>` 對應（見 13.1）。`options` 只列值（如 `['left','right','both']`）。
 
 **v1 用到的 metadata 欄位**：
 
@@ -626,9 +626,10 @@ GET    /api/version                                  # 前端版本比對（見 
 ## 5.2 錯誤契約
 
 ```json
-{ "error": { "code": "VERSION_CONFLICT", "message": "這筆資料已被其他人修改",
-             "details": null } }
+{ "error": { "code": "VERSION_CONFLICT", "details": null } }
 ```
+
+**API 不回傳給使用者看的文字。** 只回 `code`（與機器可讀的 `details`），由前端以 `code` 查 `i18n/zh-TW.ts` 取得繁中訊息。這樣所有中文文案集中在 web 端一處（見 13.1），後端完全不碰顯示層。`details` 的內容是結構化資料（欄位名、id、時間戳），不是句子。
 
 | code | HTTP | 前端行為 |
 |---|---|---|
@@ -1505,31 +1506,40 @@ v1 用明確的人工復原步驟處理即可，不需要自動偵測機制。�
 
 **除了使用者看得到的畫面文字之外，這個 repo 裡的一切都用英文。**
 
-| 一律英文 | 一律繁體中文 |
+| 一律英文 | 唯一可用繁體中文之處 |
 |---|---|
-| 程式碼、識別字、型別名稱 | **使用者看得到的畫面文字** |
-| 程式註解、JSDoc | 事件類型 config 的 `name`（如 `'哺乳'`） |
-| commit message、PR 說明 | metadata 欄位的 `label` 與 enum 的 `label` |
-| `AGENTS.md`、README、程式內文件 | 錯誤訊息的 `message`（給使用者看的那句） |
-| 測試名稱、變數與函式命名 | 空狀態、按鈕、提示文案 |
+| 程式碼、識別字、型別名稱 | **UI 文案檔**（見下方） |
+| 程式註解、JSDoc | 以及 `spec.md`（例外，見下方） |
+| commit message、PR 說明、review comment | |
+| `AGENTS.md`、README、程式內文件 | |
+| 測試名稱、測試資料、變數與函式命名 | |
 | 錯誤碼常數（如 `VERSION_CONFLICT`） | |
+| 事件類型 config、Zod schema、API 回應 | |
 
-**分界線是「誰會讀到」**：使用者讀到的是繁中（§1 的產品需求），開發者與 agent 讀到的是英文。
+### UI 文案集中在單一檔案
 
-具體例子——同一份 config 裡兩種語言並存是正確的：
+**所有使用者看得到的繁中文字都只住在 `packages/shared/src/i18n/zh-TW.ts`**，以 key 對應。其他任何檔案都不得出現中文字面值——包含事件 config、業務邏輯、API 回應與測試。
+
+```ts
+// packages/shared/src/i18n/zh-TW.ts — the only file with Chinese literals
+export const zhTW = {
+  eventType: { sleep: '睡眠', nursing: '哺乳', diaper: '尿布' /* … */ },
+  category:  { activity: '活動', food: '食物' /* … */ },
+  metadata:  { side: '哺乳邊', 'side.both': '兩邊' /* … */ },
+  error:     { VERSION_CONFLICT: '這筆資料已被其他人修改' /* … */ },
+} as const;
+```
 
 ```ts
 // Sleep is timer-driven: users start it and stop it later, so it owns
 // the single active slot for this type (see spec 3.5).
-{
-  id: 'sleep',
-  name: '睡眠',          // user-facing, stays Traditional Chinese
-  category: 'activity',
-  timerEnabled: true,
-}
+// Display name lives in i18n/zh-TW.ts under eventType.sleep.
+{ id: 'sleep', category: 'activity', timerEnabled: true }
 ```
 
-**理由**：這個 repo 由多種 coding agent 共同開發（§13.2），而英文是它們之間最沒有歧義的共同語言；識別字與註解混用中文也會讓 diff 與搜尋變得難用。至於 UI 文案，那是產品規格的一部分（§1 明訂只做繁體中文），不在此限。
+**為什麼不讓 config 直接帶 `name`**：那份 config 同時被後端載入做驗證，文案混進去等於讓中文散進共用的業務邏輯，CI 的 CJK 掃描也就失去單一白名單。集中之後白名單只有兩個檔案：`spec.md` 與 `zh-TW.ts`。
+
+**理由**：這個 repo 由多種 coding agent 共同開發（§13.2），而英文是它們之間最沒有歧義的共同語言；識別字與註解混用中文也會讓 diff 與搜尋變得難用。至於 UI 文案，那是產品規格的一部分（§1 明訂只做繁體中文），因此保留但集中。
 
 ### 唯一的文件例外：`spec.md`
 
@@ -1574,7 +1584,7 @@ ln -s AGENTS.md CLAUDE.md
 | 禁止 N+1 查詢（§4.2） | D1 查詢計數 helper，超過 30 次即 fail（§11.2） |
 | 各欄位長度上限（§5.7） | Zod schema 的 `maxLength` |
 | PBKDF2 迭代數 | `packages/shared` 的具名常數，不得在 handler 內寫死 |
-| repo 內不得出現中文（§13.1） | CI 檢查：掃描追蹤中的檔案是否含 CJK 字元，`spec.md` 與 UI 文案檔為白名單。**這條特別需要機器檢查**——它是人最容易在趕時間時破例的規則，而破例後不會有任何症狀 |
+| repo 內不得出現中文（§13.1） | CI 檢查：掃描追蹤中的檔案是否含 CJK 字元，白名單僅 `spec.md` 與 `packages/shared/src/i18n/zh-TW.ts` 兩個檔案。**這條特別需要機器檢查**——它是人最容易在趕時間時破例的規則，而破例後不會有任何症狀 |
 
 `AGENTS.md` 只保留**真的無法機器化**的部分。
 
