@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { EventDto, EventPageDto } from '@dongfan/shared';
 import type { SummaryDto } from '@dongfan/shared';
 import {
-  allEvents, applyPage, eventsOnDate, findEvent, readMeta, scopeOf, writeSummary,
+  allEvents, applyPage, db, eventsOnDate, findEvent, readMeta, scopeOf, writeSummary,
 } from '../src/lib/db.js';
 import { syncEvents } from '../src/lib/sync.js';
 
@@ -197,6 +197,65 @@ describe('a reply that set out earlier and arrived later', () => {
   it('takes the first summary there has ever been', async () => {
     await writeSummary(MINE, summary(120), 0);
     expect((await readMeta(MINE)).summary?.today.totalBottleMl).toBe(120);
+  });
+});
+
+describe('a record written by an older build', () => {
+  function summary(totalBottleMl: number): SummaryDto {
+    return {
+      date: '2026-09-20',
+      types: [],
+      today: { totalBottleMl, diaper: { pee: 0, poo: 0, both: 0, unknown: 0, total: 0 } },
+      lastFeedAt: null,
+    };
+  }
+
+  /** The shape before summaries carried the cursor they were fetched at. */
+  async function writeLegacyMeta(): Promise<void> {
+    const database = await db();
+    await database.put('meta', {
+      scope: MINE,
+      cursor: 5,
+      syncedAt: 1_789_000_000_000,
+      summary: summary(120),
+      summaryAt: 1_789_000_000_000,
+    } as never);
+  }
+
+  it('can still store a new summary', async () => {
+    await writeLegacyMeta();
+
+    // Comparing a number against a field that is not there is false, not
+    // an error, so without a default the summary on a phone that had
+    // already used the app could never be replaced again.
+    await writeSummary(MINE, summary(240), 10);
+
+    expect((await readMeta(MINE)).summary?.today.totalBottleMl).toBe(240);
+  });
+
+  it('hands back the summary it stored, not the one it was given', async () => {
+    await writeSummary(MINE, summary(240), 10);
+
+    // A refused reply must not be returned either: the caller would put it
+    // on screen and the database would quietly disagree.
+    const stored = await writeSummary(MINE, summary(120), 5);
+    expect(stored.today.totalBottleMl).toBe(240);
+  });
+
+  it('keeps the cursor and the events it already had', async () => {
+    await writeLegacyMeta();
+    await applyPage(MINE, [event('a', 8)], 8);
+
+    // Filling in a missing field must not cost anything that was there.
+    expect((await readMeta(MINE)).cursor).toBe(8);
+    expect((await allEvents(MINE)).map((e) => e.id)).toEqual(['a']);
+  });
+
+  it('does not let the missing field drag the cursor back', async () => {
+    await writeLegacyMeta();
+    await applyPage(MINE, [event('a', 2)], 2);
+
+    expect((await readMeta(MINE)).cursor).toBe(5);
   });
 });
 

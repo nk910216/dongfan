@@ -153,14 +153,19 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     const { cursor } = await syncEvents(scope, baby.id, call);
     // Tagged with the cursor it was fetched at, which is the only thing
     // that orders two summaries.
-    const next = await syncSummary(scope, baby.id, call, cursor);
+    await syncSummary(scope, baby.id, call, cursor);
 
+    // Everything on screen comes back out of the database rather than from
+    // the replies that were just received. A reply can be refused for being
+    // older than what is stored, and showing it anyway would leave the
+    // screen and the device disagreeing until the next reload.
+    const meta = await local.readMeta(scope);
     setEvents(allDayFirst(await local.eventsOnDate(scope, today)));
-    setSummary(next);
-    setSyncedAt((await local.readMeta(scope)).syncedAt);
+    if (meta.summary) setSummary(meta.summary);
+    setSyncedAt(meta.syncedAt);
   }, [call, readLocal, scope, baby.id, today]);
 
-  // Kept in a ref so a mutation can refresh without depending on a callback
+  // Kept in a ref so a trigger can refresh without depending on a callback
   // that changes identity every time the date string does.
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
@@ -169,25 +174,32 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     let cancelled = false;
     setLoading(true);
 
-    refresh()
-      .then(() => {
+    // Through the same lane as every other trigger. Calling refresh
+    // directly here was the one entrance that bypassed it, so a first sync
+    // slow enough to still be running when the app came to the front, or
+    // when something was written, overlapped with the sync that caused --
+    // which is exactly the situation the lane exists for.
+    runExclusive(scope, async () => {
+      setSyncing(true);
+      try {
+        await refreshRef.current();
         if (!cancelled) setStale(false);
-      })
-      .catch(async () => {
+      } catch {
         if (cancelled) return;
         // The network is gone, which is not the same as having nothing to
         // show. Whatever was pulled before is still here.
         setStale(true);
         await readLocal().catch(() => undefined);
-      })
-      .finally(() => {
+      } finally {
+        setSyncing(false);
         if (!cancelled) setLoading(false);
-      });
+      }
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [refresh, attempt]);
+  }, [refresh, readLocal, scope, attempt]);
 
   /**
    * Refetches after a write, and whenever something says to.

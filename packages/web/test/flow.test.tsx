@@ -22,6 +22,20 @@ import { USER_CONTENT } from './fixtures/user-content.js';
 
 const HOUR = 3_600_000;
 
+/**
+ * An instant earlier today, in the baby's timezone, never yesterday.
+ *
+ * "Two hours ago" is a different local day for a few minutes every night,
+ * and a test written that way passes all day and fails just after
+ * midnight -- which is precisely when this app is being used. Anything
+ * that has to land on today's date goes through here.
+ */
+function earlierToday(msAgo: number): number {
+  const now = Date.now();
+  const dayStart = startOfLocalDay(toLocalDate(now, BABY.timezone), BABY.timezone);
+  return Math.max(now - msAgo, dayStart + 60_000);
+}
+
 function open(path = '/'): ReturnType<typeof userEvent.setup> {
   const user = userEvent.setup();
   render(
@@ -308,14 +322,16 @@ describe('an account with no baby yet', () => {
 
 describe('the home screen', () => {
   it('shows the figures the server sent, not ones worked out locally', async () => {
-    api.add({ typeId: 'bottle', value: 140, startedAt: Date.now() - 2 * HOUR });
-    api.add({ typeId: 'bottle', value: 120, startedAt: Date.now() - HOUR });
+    api.add({ typeId: 'bottle', value: 140, startedAt: earlierToday(2 * HOUR) });
+    api.add({ typeId: 'bottle', value: 120, startedAt: earlierToday(HOUR) });
     api.add({ typeId: 'diaper', metadata: { diaper_kind: 'both' } });
 
     openSignedIn();
     await waitForHome();
 
-    expect(screen.getByText('260')).toBeInTheDocument();
+    // Waited for: the screen appears as soon as there is anything to show,
+    // and the figures arrive when the pull finishes.
+    await waitFor(() => expect(screen.getByText('260')).toBeInTheDocument());
     const breakdown = screen.getByTestId('diaper-breakdown').textContent ?? '';
     expect(breakdown).toMatch(/1/);
   });
@@ -379,12 +395,12 @@ describe('when the API cannot be reached', () => {
   }
 
   it('renders what was pulled before, without asking again', async () => {
-    api.add({ typeId: 'bottle', value: 140, startedAt: Date.now() - 2 * HOUR });
+    api.add({ typeId: 'bottle', value: 140, startedAt: earlierToday(2 * HOUR) });
     api.add({ typeId: 'diaper', metadata: { diaper_kind: 'pee' } });
 
     openSignedIn();
     await waitForHome();
-    expect(screen.getAllByTestId('event-row-bottle')).toHaveLength(1);
+    await waitFor(() => expect(screen.getAllByTestId('event-row-bottle')).toHaveLength(1));
 
     // A fresh start with the network gone: a reload in a tunnel, or the
     // app reopened from the home screen.
@@ -395,9 +411,8 @@ describe('when the API cannot be reached', () => {
     // Not the sign-in screen. Only the server saying "not signed in" ends
     // a session; a tunnel does not (spec 9.2).
     await waitForHome();
-    const rows = screen.getAllByTestId('event-row-bottle');
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toHaveTextContent('140');
+    await waitFor(() => expect(screen.getAllByTestId('event-row-bottle')).toHaveLength(1));
+    expect(screen.getAllByTestId('event-row-bottle')[0]).toHaveTextContent('140');
     expect(screen.getAllByTestId('event-row-diaper')).toHaveLength(1);
   });
 
@@ -567,6 +582,75 @@ describe('keeping up with the other parent', () => {
     // online. Neither covers standing there wondering whether the feed has
     // been recorded yet.
     await waitFor(() => expect(screen.getAllByTestId('event-row-bottle')).toHaveLength(1));
+  });
+
+  /** Resolves once the app has actually asked the server for changes. */
+  async function pullStarted(): Promise<void> {
+    await waitFor(() =>
+      expect(
+        api.requests.some((entry) => entry.method === 'GET' && entry.path.endsWith('/events')),
+      ).toBe(true),
+    );
+  }
+
+  /** How many times the app has asked the server for changes. */
+  function pulls(): number {
+    return api.requests.filter((entry) => entry.method === 'GET' && entry.path.endsWith('/events'))
+      .length;
+  }
+
+  it('does not let the first pull overlap with another entrance', async () => {
+    const release = api.holdNextSync();
+    openSignedIn();
+
+    // Waited for on purpose: the listeners are registered when the store
+    // mounts, which is after the account has been fetched. Firing before
+    // that lands on nothing and the test proves nothing.
+    await pullStarted();
+
+    // The first sync is still in the air. Every other way in asks for one
+    // while it is: coming to the front, and coming back online.
+    fireEvent(document, new Event('visibilitychange'));
+    fireEvent(window, new Event('online'));
+
+    // Long enough for a second request to be issued if anything were going
+    // to issue one. Asserting that something did *not* happen needs time
+    // for it to have happened; releasing immediately proves nothing,
+    // because the first reply comes back before the second request is even
+    // assembled.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    // Still just the one that is being held. Counted at the server,
+    // because the one thing a unit test of the queue cannot see is whether
+    // every entrance is wired to it -- and calling refresh directly on
+    // mount was the entrance that was not.
+    expect(pulls()).toBe(1);
+    expect(api.maxConcurrentSyncs).toBe(1);
+
+    release();
+    await waitForHome();
+
+    // And the ones that were asked for did happen, once released.
+    await waitFor(() => expect(pulls()).toBeGreaterThan(1));
+    expect(api.maxConcurrentSyncs).toBe(1);
+  });
+
+  it('does not drop a request that arrived during the first pull', async () => {
+    const release = api.holdNextSync();
+    openSignedIn();
+    await pullStarted();
+
+    // Recorded by the other parent while this phone was still starting up.
+    api.add({ typeId: 'bottle', value: 140 });
+    fireEvent(document, new Event('visibilitychange'));
+
+    release();
+    await waitForHome();
+
+    // Queued behind the first, not discarded: the pull that was already in
+    // the air had asked the server before this existed.
+    await waitFor(() => expect(screen.getAllByTestId('event-row-bottle')).toHaveLength(1));
+    expect(api.maxConcurrentSyncs).toBe(1);
   });
 
   it('says when it last succeeded rather than always saying just now', async () => {
@@ -759,7 +843,7 @@ describe('timers', () => {
   });
 
   it('are stopped from the home screen with the version the summary gave', async () => {
-    const running = api.add({ typeId: 'sleep', active: true, startedAt: Date.now() - HOUR });
+    const running = api.add({ typeId: 'sleep', active: true, startedAt: earlierToday(HOUR) });
     const versionWhenRead = running.version;
 
     const user = openSignedIn();
@@ -776,7 +860,7 @@ describe('timers', () => {
   it('can be stopped even when the type is not a shortcut', async () => {
     // Walk is timer-enabled but not in the strip, so without this it could
     // be started with no way to end it.
-    api.add({ typeId: 'walk', active: true, startedAt: Date.now() - HOUR });
+    api.add({ typeId: 'walk', active: true, startedAt: earlierToday(HOUR) });
 
     openSignedIn();
     await waitForHome();
@@ -894,7 +978,7 @@ describe('editing an event', () => {
   });
 
   it('stops a running timer by supplying an end time', async () => {
-    const running = api.add({ typeId: 'sleep', active: true, startedAt: Date.now() - 2 * HOUR });
+    const running = api.add({ typeId: 'sleep', active: true, startedAt: earlierToday(2 * HOUR) });
     const user = openSignedIn(`/event/${running.id}`);
 
     const endField = await screen.findByTestId('ended-at');
@@ -908,7 +992,7 @@ describe('editing an event', () => {
 
 describe('touch targets', () => {
   it('keeps every control tappable at arm’s length in the dark', async () => {
-    api.add({ typeId: 'sleep', active: true, startedAt: Date.now() - HOUR });
+    api.add({ typeId: 'sleep', active: true, startedAt: earlierToday(HOUR) });
     openSignedIn();
     await waitForHome();
 
@@ -1311,7 +1395,7 @@ describe('a timer that has run past a day', () => {
 
 describe('when stopping a timer fails', () => {
   it('says so instead of leaving the button to spring back', async () => {
-    api.add({ typeId: 'sleep', active: true, startedAt: Date.now() - HOUR });
+    api.add({ typeId: 'sleep', active: true, startedAt: earlierToday(HOUR) });
     const user = openSignedIn();
     await waitForHome();
 
@@ -1324,7 +1408,7 @@ describe('when stopping a timer fails', () => {
   });
 
   it('fetches the version the other phone left behind', async () => {
-    api.add({ typeId: 'sleep', active: true, startedAt: Date.now() - HOUR });
+    api.add({ typeId: 'sleep', active: true, startedAt: earlierToday(HOUR) });
     const user = openSignedIn();
     await waitForHome();
 
@@ -1345,7 +1429,7 @@ describe('when stopping a timer fails', () => {
   });
 
   it('reports a request that never arrived as being offline', async () => {
-    api.add({ typeId: 'sleep', active: true, startedAt: Date.now() - HOUR });
+    api.add({ typeId: 'sleep', active: true, startedAt: earlierToday(HOUR) });
     const user = openSignedIn();
     await waitForHome();
 

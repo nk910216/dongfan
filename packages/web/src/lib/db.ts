@@ -134,11 +134,42 @@ const EMPTY_META = (scope: Scope): SyncMeta => ({
   syncedAt: null,
   summary: null,
   summaryAt: null,
+  // Below any real cursor, so the first summary of any kind wins.
   summaryCursor: -1,
 });
 
+/**
+ * Fills in whatever a stored record does not have.
+ *
+ * A row written by an older build is missing the fields added since, and
+ * comparing a number against `undefined` is false rather than an error:
+ * `summaryCursor` arrived in this shape, and without this the summary on a
+ * phone that had already used the app could never be replaced again. The
+ * screen would look right until a reload, then show figures from whenever
+ * the upgrade happened.
+ *
+ * Done on every read rather than as a one-off upgrade. A migration that
+ * has to succeed exactly once, on a device that may be in a tunnel with a
+ * browser that may kill it halfway, is a worse bet than a default applied
+ * every time -- and this also covers a record written by a build newer
+ * than this one, after a downgrade.
+ */
+function withDefaults(stored: Partial<SyncMeta> | undefined, scope: Scope): SyncMeta {
+  const empty = EMPTY_META(scope);
+  if (!stored) return empty;
+
+  return {
+    scope,
+    cursor: stored.cursor ?? empty.cursor,
+    syncedAt: stored.syncedAt ?? empty.syncedAt,
+    summary: stored.summary ?? empty.summary,
+    summaryAt: stored.summaryAt ?? empty.summaryAt,
+    summaryCursor: stored.summaryCursor ?? empty.summaryCursor,
+  };
+}
+
 export async function readMeta(scope: Scope): Promise<SyncMeta> {
-  return (await (await db()).get('meta', scope)) ?? EMPTY_META(scope);
+  return withDefaults(await (await db()).get('meta', scope), scope);
 }
 
 /**
@@ -153,16 +184,21 @@ export async function writeSummary(
   scope: Scope,
   summary: SummaryDto,
   atCursor: number,
-): Promise<void> {
+): Promise<SummaryDto> {
   const database = await db();
   const tx = database.transaction('meta', 'readwrite');
-  const meta = (await tx.store.get(scope)) ?? EMPTY_META(scope);
+  const meta = withDefaults(await tx.store.get(scope), scope);
 
-  if (atCursor >= meta.summaryCursor) {
+  const winner = atCursor >= meta.summaryCursor ? summary : meta.summary;
+  if (winner === summary) {
     await tx.store.put({ ...meta, summary, summaryAt: Date.now(), summaryCursor: atCursor });
   }
 
   await tx.done;
+  // What is stored, not what was fetched. A caller that showed the one it
+  // asked for would put the refused summary on screen, and the database
+  // being right would not help anybody looking at it.
+  return winner ?? summary;
 }
 
 /**
@@ -198,7 +234,7 @@ export async function applyPage(
   }
 
   const metaStore = tx.objectStore('meta');
-  const meta = (await metaStore.get(scope)) ?? EMPTY_META(scope);
+  const meta = withDefaults(await metaStore.get(scope), scope);
   // Never backwards. A page from a request that set out earlier and
   // answered later ends at a lower rev, and moving the cursor back to it
   // would re-ask for everything in between on every sync from then on.

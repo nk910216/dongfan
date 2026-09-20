@@ -49,6 +49,11 @@ class Api {
   loginFails = false;
   /** Holds the next write until a test lets it go (see `holdNextWrite`). */
   private gate: Promise<void> | null = null;
+  /** Holds the next pull of the sync feed (see `holdNextSync`). */
+  private syncGate: Promise<void> | null = null;
+  /** Pulls of the sync feed in flight right now, and the most there ever were. */
+  private syncing = 0;
+  maxConcurrentSyncs = 0;
   private rev = 0;
 
   /** The next rev, allocated the way the server does (spec 5.4). */
@@ -82,6 +87,34 @@ class Api {
     if (gate) await gate;
   }
 
+  /** Makes the next pull of the sync feed hang until it is let go. */
+  holdNextSync(): () => void {
+    let release = (): void => undefined;
+    this.syncGate = new Promise<void>((resolve) => {
+      release = () => resolve();
+    });
+    return release;
+  }
+
+  /**
+   * Counts how many pulls overlap.
+   *
+   * The one thing a unit test of the queue cannot see is whether every
+   * entrance is actually wired to it, so it is counted here instead.
+   */
+  async duringSync<T>(work: () => Promise<T> | T): Promise<T> {
+    this.syncing += 1;
+    this.maxConcurrentSyncs = Math.max(this.maxConcurrentSyncs, this.syncing);
+    try {
+      const gate = this.syncGate;
+      this.syncGate = null;
+      if (gate) await gate;
+      return await work();
+    } finally {
+      this.syncing -= 1;
+    }
+  }
+
   /** A freshly deployed database: an account, and nothing else. */
   startWithNoBaby(): void {
     ME.babies = [];
@@ -96,6 +129,9 @@ class Api {
     this.loseNextResponse = false;
     this.loginFails = false;
     this.gate = null;
+    this.syncGate = null;
+    this.syncing = 0;
+    this.maxConcurrentSyncs = 0;
     this.rev = 0;
   }
 
@@ -265,18 +301,20 @@ export const server = setupServer(
     const since = Number(url.searchParams.get('since') ?? 0);
     const limit = Number(url.searchParams.get('limit') ?? 200);
 
-    // Tombstones travel too, or the other phone never learns about a
-    // deletion (spec 5.4).
-    const ordered = [...api.events].sort((a, b) => a.rev - b.rev).filter((e) => e.rev > since);
-    const page = ordered.slice(0, limit);
-    const last = page[page.length - 1];
+    return api.duringSync(() => {
+      // Tombstones travel too, or the other phone never learns about a
+      // deletion (spec 5.4).
+      const ordered = [...api.events].sort((a, b) => a.rev - b.rev).filter((e) => e.rev > since);
+      const page = ordered.slice(0, limit);
+      const last = page[page.length - 1];
 
-    return HttpResponse.json({
-      events: page,
-      // The last rev of the page, never the highest in the table, and the
-      // cursor it was given when the page is empty (spec 5.4).
-      nextRev: last ? last.rev : since,
-      hasMore: ordered.length > page.length,
+      return HttpResponse.json({
+        events: page,
+        // The last rev of the page, never the highest in the table, and the
+        // cursor it was given when the page is empty (spec 5.4).
+        nextRev: last ? last.rev : since,
+        hasMore: ordered.length > page.length,
+      });
     });
   }),
 
