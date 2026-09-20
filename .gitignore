@@ -35,3 +35,9 @@ coverage/
 .vscode/*
 !.vscode/extensions.json
 .claude/settings.local.json
+
+# 參考截圖（他人著作物，本機保留即可，不進公開 repo，見 spec.md §15）
+*.jpeg
+*.jpg
+*.png
+!docs/**/*.png
