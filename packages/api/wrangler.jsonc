@@ -22,9 +22,43 @@
       "binding": "DB",
       // A development database, seeded with invented records only. The
       // family's real data never lives here (spec 13.5).
+      //
+      // This is the default on purpose: `wrangler dev`, the local
+      // migrations and the seed script all land here without anyone having
+      // to remember a flag. Reaching the real one takes `--env production`,
+      // which is a thing you have to have meant.
       "database_name": "dongfan-dev",
       "database_id": "local-dev-placeholder",
       "migrations_dir": "migrations"
     }
-  ]
+  ],
+
+  "env": {
+    // The deployed worker and its database.
+    //
+    // Every command that touches production names this environment, so the
+    // database it means is written down once: deploy, remote migrations,
+    // the backup script and the account CLI all resolve to the same place.
+    // `scripts/test/wrangler-config.test.mjs` fails if they drift apart.
+    "production": {
+      "name": "dongfan",
+      "assets": {
+        "directory": "../web/dist",
+        "binding": "ASSETS",
+        "run_worker_first": ["/api/*"],
+        "not_found_handling": "single-page-application"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "dongfan",
+          // Replaced by the id `wrangler d1 create dongfan` prints. Left as
+          // a placeholder so a deploy from a fresh clone fails loudly
+          // rather than reaching for something that happens to exist.
+          "database_id": "replace-with-the-real-database-id",
+          "migrations_dir": "migrations"
+        }
+      ]
+    }
+  }
 }

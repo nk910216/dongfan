@@ -249,9 +249,17 @@ the offline layer in M2, and this list has to be revisited then.
 - Never read, write or commit `.dev.vars` or any secret.
 - Never run a command against the production database, and never pass
   `--remote` to a `wrangler d1` command, to `scripts/backup.sh`, or to
-  `scripts/users.mjs`.
+  `scripts/users.mjs`. `npm run db:migrate:remote` is the same rule.
+- Never pass `--env production` to anything.
 - Never open a database that holds the owner's real records.
 - Never run `wrangler deploy`.
+
+`packages/api/wrangler.jsonc` holds both environments. The default is the
+local `dongfan-dev`, so `wrangler dev`, `npm run db:migrate`, the seed and
+the tests all reach it without a flag; `--env production` is what reaches
+the real one. Commands name the binding `DB` rather than a database, so the
+config decides what that means and a script cannot drift away from what gets
+deployed — `scripts/test/wrangler-config.test.mjs` fails if it does.
 
 `scripts/users.mjs --remote` and `scripts/backup.sh` (which defaults to
 remote) exist for the repository owner, not for an agent. They print which

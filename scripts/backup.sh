@@ -41,23 +41,37 @@ if [[ $REMOTE -eq 1 ]]; then
   # --remote, and its default when neither is given is not documented.
   # Guessing wrong writes an empty local database to the file and says
   # nothing at all; you find out on the day you need to restore (spec 12.2).
-  SCOPE="--remote"
+  #
+  # The binding is named rather than the database, so which one this means
+  # is decided by the worker's own configuration and cannot drift away from
+  # what gets deployed.
+  SCOPE=(--env production --remote)
   LABEL="REMOTE $DATABASE (deployed)"
 else
   DATABASE="$DEV_DATABASE"
-  SCOPE="--local"
+  SCOPE=(--local)
   LABEL="local $DATABASE"
 fi
 
 : "${OUTPUT:=$REPO_ROOT/backup-$(date +%Y-%m-%d).sql}"
 
+COUNTS="${OUTPUT%.sql}.counts.json"
+
 echo "Exporting $LABEL"
 echo "        -> $OUTPUT"
 
+# Taken before the export, and kept beside it. Without them a drill can only
+# check a backup against itself, which says nothing about whether the export
+# was complete to begin with (spec 12.2).
+node "$REPO_ROOT/scripts/source-counts.mjs" \
+  "$([[ $REMOTE -eq 1 ]] && echo --remote || echo --local)" "$COUNTS" \
+  || { echo "Could not read the source row counts." >&2; exit 1; }
+
 # Named by config file rather than by changing directory, so the command
 # reads the same wherever it is run from -- including a scheduled job.
-npx wrangler d1 export "$DATABASE" "$SCOPE" \
+npx wrangler d1 export DB \
   --config "$API_DIR/wrangler.jsonc" \
+  "${SCOPE[@]}" \
   --output "$OUTPUT" \
   || { echo "Export failed." >&2; exit 1; }
 
@@ -80,6 +94,11 @@ EVENT_ROWS=$(grep -c 'INSERT INTO.*events' "$OUTPUT" || true)
 BYTES=$(wc -c < "$OUTPUT" | tr -d ' ')
 
 echo "OK: $EVENT_ROWS event insert statements, $BYTES bytes."
+echo "    source counts in $COUNTS"
 echo
 echo "This proves the file has records in it. It does not prove they can be"
-echo "restored -- only a drill does that: npm run restore:drill -- $OUTPUT"
+echo "restored -- only a drill does that:"
+echo "    npm run restore:drill -- $OUTPUT"
+echo
+echo "Keep the .counts.json with the .sql. The drill needs it to tell a"
+echo "complete backup from one that exported cleanly but exported less."

@@ -54,8 +54,14 @@ class Api {
     ME.user = { id: userId, username: userId };
   }
 
+  /** A freshly deployed database: an account, and nothing else. */
+  startWithNoBaby(): void {
+    ME.babies = [];
+  }
+
   reset(): void {
     ME.user = { id: 'user-1', username: 'parent' };
+    ME.babies = [BABY];
     this.events = [];
     this.requests = [];
     this.nextFailure = null;
@@ -193,6 +199,23 @@ export const server = setupServer(
     const header = request.headers.get('Authorization');
     if (header !== `Bearer ${TOKEN}`) return refuse({ status: 401, code: 'UNAUTHENTICATED' });
     return HttpResponse.json(ME);
+  }),
+
+  http.post('/api/babies', async ({ request }) => {
+    const body = (await record(request)) as Record<string, unknown>;
+    const failure = pending();
+    if (failure) return refuse(failure);
+
+    const created: BabyDto = {
+      id: BABY.id,
+      nickname: String(body['nickname']),
+      gender: String(body['gender']),
+      birthDate: String(body['birthDate']),
+      timezone: TZ,
+      role: 'owner',
+    };
+    ME.babies = [created];
+    return HttpResponse.json(created, { status: 201 });
   }),
 
   http.get('/api/babies/:babyId/events/summary', async ({ request }) => {

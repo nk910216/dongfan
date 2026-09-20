@@ -79,6 +79,67 @@ describe('signing in', () => {
   });
 });
 
+describe('an account with no baby yet', () => {
+  it('offers the form to make one rather than a dead end', async () => {
+    api.startWithNoBaby();
+    openSignedIn();
+
+    // On a freshly deployed database the owner is the only person there is,
+    // so "ask someone to create one" would leave them stuck.
+    expect(await screen.findByText(zhTW.baby.createTitle)).toBeInTheDocument();
+    expect(screen.getByLabelText(zhTW.baby.nickname)).toBeInTheDocument();
+  });
+
+  it('gets all the way from an empty database to a recorded event', async () => {
+    api.startWithNoBaby();
+    const user = openSignedIn();
+
+    await user.type(await screen.findByLabelText(zhTW.baby.nickname), USER_CONTENT.nickname);
+    await user.click(screen.getByRole('button', { name: zhTW.baby.female }));
+    fireEvent.change(screen.getByLabelText(zhTW.baby.birthDate), { target: { value: '2026-03-08' } });
+    await user.click(screen.getByTestId('submit'));
+
+    // Straight into the app, with the baby it just made.
+    await waitForHome();
+    expect(screen.getByText(USER_CONTENT.nickname)).toBeInTheDocument();
+
+    const sent = api.lastRequest('/api/babies')?.body as Record<string, unknown>;
+    expect(sent['nickname']).toBe(USER_CONTENT.nickname);
+    expect(sent['gender']).toBe('female');
+    expect(sent['birthDate']).toBe('2026-03-08');
+
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'pee') }));
+
+    await waitForHome();
+    expect(api.events).toHaveLength(1);
+  });
+
+  it('will not create one without a name', async () => {
+    api.startWithNoBaby();
+    const user = openSignedIn();
+
+    await user.click(await screen.findByTestId('submit'));
+
+    expect(await screen.findByTestId('form-error')).toHaveTextContent(zhTW.fieldError.REQUIRED);
+    expect(api.lastRequest('/api/babies')).toBeUndefined();
+  });
+
+  it('will not create one born on a day that does not exist', async () => {
+    api.startWithNoBaby();
+    const user = openSignedIn();
+
+    await user.type(await screen.findByLabelText(zhTW.baby.nickname), USER_CONTENT.nickname);
+    fireEvent.change(screen.getByLabelText(zhTW.baby.birthDate), { target: { value: '2026-02-31' } });
+    await user.click(screen.getByTestId('submit'));
+
+    // The date control hands over days that do not exist, and a round trip
+    // is a poor way to be told so.
+    expect(await screen.findByTestId('form-error')).toBeInTheDocument();
+    expect(api.lastRequest('/api/babies')).toBeUndefined();
+  });
+});
+
 describe('the home screen', () => {
   it('shows the figures the server sent, not ones worked out locally', async () => {
     api.add({ typeId: 'bottle', value: 140, startedAt: Date.now() - 2 * HOUR });

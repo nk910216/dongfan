@@ -22,7 +22,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -185,14 +185,43 @@ function main() {
   }
   if (missing.length > 0) fail(`the restore did not bring everything back\n  ${missing.join('\n  ')}`);
 
+  // Against what the source database held when the backup was taken. This
+  // is the comparison spec 12.2 actually asks for: the two above can only
+  // say the file restored completely, and an export that ran against an
+  // empty database restores completely too.
+  const sidecar = `${path.replace(/\.sql$/, '')}.counts.json`;
+  if (existsSync(sidecar)) {
+    const source = JSON.parse(readFileSync(sidecar, 'utf8'));
+    console.log(`\nAgainst ${source.database} as it was at ${source.takenAt}`);
+
+    const lost = [];
+    for (const table of TABLES) {
+      const held = Number(source.counts?.[table] ?? 0);
+      const back = restored[table];
+      // Counts are read just before the export, so they are a floor: a row
+      // written while the export ran leaves the restore with one more, and
+      // that is not a loss. One fewer is.
+      const verdict = back === held ? 'same' : back > held ? 'more (written during the export)' : 'FEWER';
+      console.log(`  ${table.padEnd(14)} ${String(held).padStart(6)}  ${verdict}`);
+      if (back < held) lost.push(`${table}: ${held} in the source, ${back} restored`);
+    }
+    if (lost.length > 0) fail(`records did not survive the round trip\n  ${lost.join('\n  ')}`);
+  } else {
+    console.log(`\nNo source counts beside this backup (${sidecar}).`);
+    console.log('  The checks above prove the file restored completely. They cannot');
+    console.log('  prove the export was complete: one taken against an empty database');
+    console.log('  would pass all of them. Compare against the source by hand, or take');
+    console.log('  the next backup with scripts/backup.sh, which records the counts.');
+  }
+
   if (compareLocal) {
-    console.log('\nAgainst the local development database');
+    console.log('\nAgainst the local development database as it is now');
     const mismatches = [];
     for (const table of TABLES) {
       const source = countIn((sql) => executeOn(DEV_TARGET, sql), table);
       const same = source === restored[table];
       console.log(`  ${table.padEnd(14)} ${String(source).padStart(6)}  ${same ? 'same' : 'DIFFERENT'}`);
-      if (!same) mismatches.push(`${table}: ${source} before, ${restored[table]} after`);
+      if (!same) mismatches.push(`${table}: ${source} now, ${restored[table]} restored`);
     }
     if (mismatches.length > 0) fail(`counts do not match\n  ${mismatches.join('\n  ')}`);
   }

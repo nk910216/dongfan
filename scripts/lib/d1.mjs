@@ -13,7 +13,25 @@ import { dirname, resolve } from 'node:path';
  * like a command that worked (spec 13.5).
  */
 
-const API_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../packages/api');
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const API_DIR = resolve(REPO_ROOT, 'packages/api');
+
+/** The one configuration file that decides what any of these names mean. */
+export const API_CONFIG = resolve(API_DIR, 'wrangler.jsonc');
+
+/** The environment in that file holding the deployed worker and database. */
+export const PRODUCTION_ENV = 'production';
+
+/**
+ * Commands name the *binding*, not the database.
+ *
+ * Which database `DB` resolves to is decided in one place, by the
+ * configuration file and the environment. Passing a literal name would let
+ * a script and the deployed worker disagree about what they are talking to,
+ * which is how the backup script came to mean `dongfan` while the worker
+ * was bound to `dongfan-dev`.
+ */
+const BINDING = 'DB';
 
 /** The only database these scripts may create, seed or destroy. */
 export const DEV_DATABASE = 'dongfan-dev';
@@ -41,7 +59,7 @@ export function literal(value) {
 
 function run(args) {
   const output = execFileSync('npx', ['wrangler', ...args], {
-    cwd: API_DIR,
+    cwd: REPO_ROOT,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -68,17 +86,17 @@ export function executeOn(target, sql) {
   }
 
   return run([
-    'd1', 'execute', database,
-    remote ? '--remote' : '--local',
+    'd1', 'execute', BINDING,
+    '--config', API_CONFIG,
+    ...(remote ? ['--env', PRODUCTION_ENV, '--remote'] : ['--local']),
     '--json', '--command', sql,
   ]);
 }
 
 /** Applies a file of statements, for the restore drill. */
 export function executeFileOn(target, file) {
-  const { database, remote } = target;
-  if (remote) throw new Error('Refusing to apply a file to a deployed database');
-  return run(['d1', 'execute', database, '--local', '--json', '--file', file]);
+  if (target.remote) throw new Error('Refusing to apply a file to a deployed database');
+  return run(['d1', 'execute', BINDING, '--config', API_CONFIG, '--local', '--json', '--file', file]);
 }
 
 /** The local development database, which is where the dev scripts work. */

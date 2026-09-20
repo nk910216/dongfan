@@ -52,7 +52,12 @@ port 5180 is the one with hot reload.
 
 `npm run users -- create <name>` generates a password and prints it once.
 `npm run users -- assign <name> <babyId> owner` is how a second parent gets
-access before the invite screen exists.
+access before the invite screen exists. Add `--remote` to work on the
+deployed database instead; every run prints which one it is about to change,
+and a deployed write has to be confirmed by typing that database's name.
+
+Signing in on an account with no baby shows the form to create one, so a
+freshly deployed database is not a dead end.
 
 ## Backups
 
@@ -64,7 +69,10 @@ npm run restore:drill -- backup-2026-09-20.sql
 
 The backup script always spells out `--remote` or `--local`, because the
 default is undocumented and getting it wrong exports an empty database
-without saying so. It rejects a file with no event rows in it.
+without saying so. It rejects a file with no event rows in it, and writes a
+`.counts.json` beside the dump recording what the source held. Keep the two
+together: without the counts a drill can only check a backup against itself,
+and one taken against an empty database passes that.
 
 The drill restores into a scratch database of its own and checks the records
 came back, including an event that crosses midnight and one carrying tags. A

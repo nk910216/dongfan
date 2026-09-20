@@ -40,6 +40,8 @@ export type SessionState = {
   loading: boolean;
   signIn: (username: string, password: string) => Promise<void>;
   signOut: () => void;
+  /** Refetches the account and its babies, after one has been created. */
+  reload: () => Promise<void>;
   /** Called when any request comes back unauthenticated. */
   expire: () => void;
 };
@@ -50,6 +52,7 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
   const [token, setToken] = useState<string | null>(() => readToken());
   const [me, setMe] = useState<MeDto | null>(null);
   const [loading, setLoading] = useState(token !== null);
+  const [attempt, setAttempt] = useState(0);
 
   const expire = useCallback(() => {
     writeToken(null);
@@ -86,7 +89,14 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
     return () => {
       cancelled = true;
     };
-  }, [token, expire]);
+  }, [token, expire, attempt]);
+
+  const reload = useCallback(async (): Promise<void> => {
+    const current = readToken();
+    if (current === null) return;
+    setMe(await apiRequest<MeDto>('/me', { token: current }));
+    setAttempt((n) => n + 1);
+  }, []);
 
   const signIn = useCallback(async (username: string, password: string) => {
     const body = await apiRequest<LoginDto>('/auth/login', {
@@ -106,8 +116,8 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
   }, [expire]);
 
   const value = useMemo<SessionState>(
-    () => ({ token, me, loading, signIn, signOut, expire }),
-    [token, me, loading, signIn, signOut, expire],
+    () => ({ token, me, loading, signIn, signOut, expire, reload }),
+    [token, me, loading, signIn, signOut, expire, reload],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

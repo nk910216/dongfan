@@ -15,7 +15,20 @@ export const zhTW = {
     name: '東凡',
     noValue: '--',
     loading: '載入中…',
-    noBaby: '這個帳號還沒有寶寶，請先用管理工具建立一個。',
+  },
+
+  baby: {
+    createTitle: '建立寶寶',
+    createHint: '這個帳號還沒有寶寶，先建立一個才能開始記錄。',
+    nickname: '暱稱',
+    nicknamePlaceholder: '你們平常怎麼叫他',
+    gender: '性別',
+    male: '男生',
+    female: '女生',
+    other: '不指定',
+    birthDate: '出生日期',
+    create: '建立',
+    creating: '建立中…',
   },
 
   auth: {

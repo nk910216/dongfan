@@ -24,6 +24,8 @@ on:
 
 permissions:
   contents: read
+  # To read back the artifact and check how long it is actually being kept.
+  actions: read
 
 jobs:
   export:
@@ -69,9 +71,38 @@ jobs:
           scripts/backup.sh --output "backup-${{ steps.kind.outputs.date }}.sql"
 
       - name: Keep it
+        id: upload
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.kind.outputs.name }}-${{ steps.kind.outputs.date }}
-          path: backup-${{ steps.kind.outputs.date }}.sql
+          path: |
+            backup-${{ steps.kind.outputs.date }}.sql
+            backup-${{ steps.kind.outputs.date }}.counts.json
           retention-days: ${{ steps.kind.outputs.retention }}
           if-no-files-found: error
+
+      - name: Check it is really being kept that long
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANTED: ${{ steps.kind.outputs.retention }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          # `retention-days` is a request, not a setting. A repository has a
+          # maximum of its own, and upload-artifact quietly shortens anything
+          # above it to fit -- with a warning nobody reads and a green tick.
+          # A monthly copy silently kept for ninety days is not a monthly
+          # copy (spec 12.2). The cap is 90 days on a public repository and
+          # 400 on a private one, and it is also settable per repository
+          # under Settings -> Actions -> General.
+          EXPIRES=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" --jq '.expires_at')
+          KEPT=$(( ( $(date -u -d "$EXPIRES" +%s) - $(date -u +%s) ) / 86400 ))
+
+          echo "Asked for $WANTED days, actually kept for about $KEPT (until $EXPIRES)."
+
+          # A day of slack: the expiry is a timestamp and this is whole days.
+          if [ "$KEPT" -lt "$(( WANTED - 1 ))" ]; then
+            echo "::error::This copy will be deleted after about $KEPT days, not $WANTED." \
+                 "Raise the retention limit under Settings -> Actions -> General," \
+                 "and note that a public repository cannot go beyond 90 days."
+            exit 1
+          fi

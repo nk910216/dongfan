@@ -1,6 +1,7 @@
 import { Route, Routes } from 'react-router-dom';
 import { zhTW } from '@dongfan/shared';
 import { Message } from './components/Message.js';
+import { CreateBaby } from './routes/CreateBaby.js';
 import { SessionProvider, useSession } from './lib/session.js';
 import { StoreProvider } from './lib/store.js';
 import { AddEvent } from './routes/AddEvent.js';
@@ -22,11 +23,12 @@ export function App(): React.JSX.Element {
 }
 
 /**
- * Chooses between signing in and the app itself.
+ * Chooses between signing in, making the first baby, and the app itself.
  *
  * The baby is picked here rather than inside the store, so everything below
- * can take one for granted. Creating a baby is a CLI job in this milestone,
- * so an account with none gets told so rather than shown an empty app.
+ * can take one for granted. An account with none gets the form to make one:
+ * on a freshly deployed database the owner is the only person there is, and
+ * a message telling them to ask someone else would be a dead end.
  */
 function Shell(): React.JSX.Element {
   const { me, loading } = useSession();
@@ -35,7 +37,7 @@ function Shell(): React.JSX.Element {
   if (!me) return <Login />;
 
   const baby = me.babies[0];
-  if (!baby) return <Message text={zhTW.app.noBaby} />;
+  if (!baby) return <CreateBaby />;
 
   return (
     <StoreProvider baby={baby}>

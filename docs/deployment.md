@@ -7,6 +7,26 @@ can be settled by the test suite.
 `spec.md` section 12.1 lists the acceptance criteria; this is how to work
 through them.
 
+## Two configurations, one file
+
+`packages/api/wrangler.jsonc` describes both environments:
+
+| | Worker | Database bound to `DB` |
+|---|---|---|
+| default | — | `dongfan-dev`, local, invented records |
+| `--env production` | `dongfan` | `dongfan`, deployed, real records |
+
+The local one is the default so that `wrangler dev`, the local migrations,
+the seed and the tests all land there without anyone having to remember a
+flag. Reaching the real one takes `--env production`, which is something you
+have to have meant.
+
+Every command below names the **binding** `DB` rather than a database. Which
+database that is comes from this file and nowhere else, so a maintenance
+script and the deployed worker cannot come to mean different things — they
+did once, and `scripts/test/wrangler-config.test.mjs` now fails if they
+drift apart again.
+
 ## One-time setup
 
 ```sh
@@ -14,14 +34,18 @@ npx wrangler login
 npx wrangler d1 create dongfan
 ```
 
-Put the returned `database_id` into `packages/api/wrangler.jsonc`, replacing
-`local-dev-placeholder`. Then apply the migrations to the deployed database:
+Put the returned `database_id` into `packages/api/wrangler.jsonc`, under
+`env.production.d1_databases`, replacing
+`replace-with-the-real-database-id`. Leave the default block alone: that is
+the local development database and it stays a placeholder.
+
+Then apply the migrations to the deployed database:
 
 ```sh
-npx wrangler d1 migrations apply dongfan --remote
+npm run db:migrate:remote
 ```
 
-`--remote` is spelled out here and everywhere else in this file. Several
+`--remote` is spelled out there and everywhere else in this file. Several
 `wrangler d1` subcommands accept both `--local` and `--remote` and do not
 document which they pick when neither is given. The failure is silent: the
 command succeeds, against the wrong database.
@@ -32,9 +56,20 @@ command succeeds, against the wrong database.
 npm run deploy
 ```
 
-That builds the web assets first. Deploying without building ships whatever
-`packages/web/dist` happened to contain, which is usually the previous
-version and occasionally nothing at all.
+That builds the web assets and then runs `wrangler deploy --env production`.
+Deploying without building ships whatever `packages/web/dist` happened to
+contain, which is usually the previous version and occasionally nothing at
+all. Deploying without `--env production` would bind the live worker to
+`dongfan-dev`, which does not exist remotely.
+
+Check the bindings before the first real deploy:
+
+```sh
+npx wrangler deploy --config packages/api/wrangler.jsonc --env production --dry-run
+```
+
+It must print `env.DB (dongfan)`. If it says `dongfan-dev`, the environment
+flag is missing.
 
 ## Accounts
 
@@ -51,9 +86,11 @@ Every run prints which database it is about to change, and a write against
 the deployed one asks you to type its name first. Passwords are generated
 and printed once; there is no way to read one back.
 
-The first baby has to be created through the app, by signing in as the owner
-and adding one. `assign` is how the second parent gets access before the
-invite screen exists (spec 12).
+Signing in on a fresh account shows the form to create the first baby;
+there is nothing else it could show, and nothing else can be recorded until
+one exists. `npm run users -- babies --remote` then prints its id, which is
+what `assign` needs to give the second parent access before the invite
+screen exists (spec 12).
 
 ## Acceptance checks
 
@@ -80,9 +117,25 @@ read the CPU time on a login request.
 - Comfortably under 10 ms: done.
 - Near or over it: lower `PBKDF2_ITERATIONS` in
   `packages/shared/src/constants.ts` and raise `MIN_PASSWORD_LENGTH` to
-  compensate. Existing password hashes carry their own iteration count in
-  the stored string, so they keep working; they are rehashed at the next
-  password change.
+  compensate.
+
+**Lowering the constant does not make an existing account any faster.** A
+stored hash carries the iteration count it was made with — that is what
+lets old hashes keep verifying — so an account created at 50,000 rounds
+still costs 50,000 rounds to log in, whatever the constant now says. The
+full sequence is:
+
+```sh
+# 1. edit PBKDF2_ITERATIONS and MIN_PASSWORD_LENGTH
+npm test                                   # the constants are asserted
+npm run deploy
+npm run users -- password <name> --remote  # rehashes at the new cost
+# 2. measure again
+```
+
+Every existing account needs that reset, not just the one being measured,
+or the others keep failing exactly as before. `npm run users -- list
+--remote` is the list to work through.
 
 Record the measured figure somewhere. It is the only evidence this was
 checked.
@@ -132,9 +185,23 @@ npm run backup                          # writes backup-YYYY-MM-DD.sql
 npm run restore:drill -- backup-YYYY-MM-DD.sql
 ```
 
-The drill restores into a local scratch database, compares the row counts
-against the file, and reads back an event that crosses midnight and one
-carrying tags. It fails loudly rather than printing a warning.
+The drill restores into a local scratch database, compares the row counts,
+and reads back an event that crosses midnight and one carrying tags. It
+fails loudly rather than printing a warning.
+
+It makes three comparisons, and only one of them answers the question
+spec 12.2 asks:
+
+| Against | Catches |
+|---|---|
+| the rows in the file | a restore that stopped partway |
+| the source counts in `backup-YYYY-MM-DD.counts.json` | **an export that was already short** |
+| the local development database, with `--compare-local` | only useful for a drill on a local backup |
+
+The counts file is written by `scripts/backup.sh` at export time, from the
+database being exported. **Keep it with the `.sql`.** Without it, the drill
+says so and cannot make the middle comparison — a backup taken against an
+empty database restores completely and passes everything else.
 
 Note what the drill does with the dump, because a restore by hand has to do
 the same: `wrangler d1 execute --file` will not ingest wrangler's own export
@@ -153,21 +220,37 @@ the second pass.
 | `CLOUDFLARE_API_TOKEN` | A token with D1 read access |
 | `CLOUDFLARE_ACCOUNT_ID` | The account id in the dashboard URL |
 
-Then run it once by hand from the Actions tab, and check the artifact has
-something in it.
+**Check the retention limit first**, under Settings → Actions → General →
+Artifact and log retention. Monthly copies ask to be kept for 400 days, and
+`retention-days` is a request rather than a setting: a repository maximum
+below it shortens the artifact to fit, with a warning nobody reads and a
+green tick. A public repository cannot exceed 90 days at all, so keeping a
+year of monthly backups means a private repository.
+
+The workflow reads the artifact back after uploading and fails if it is not
+actually being kept for as long as it asked, so a shortened copy is loud
+rather than silent.
+
+Then run it once by hand from the Actions tab, and check the artifact
+contains both the `.sql` and the `.counts.json`.
 
 **Check that failure notifications are on**, under Settings → Notifications →
 Actions. A scheduled backup whose failures are silent is not a backup; it is
 a belief about a backup (spec 12.2).
 
-### 6. Installing to the home screen
+### 6. Signing in on a phone
 
-Open the deployed URL on a phone and add it to the home screen. It should
-open without browser chrome and keep the session across a restart.
+Open the deployed URL on a phone, sign in, and add an event.
+
+Adding it to the home screen is **not** a check for this milestone. There is
+no web app manifest yet and no service worker, so it would be installed as a
+plain bookmark: it may or may not lose the browser chrome depending on the
+platform, and that says nothing about anything. Installation and the update
+flow belong to the PWA work in M2 (spec 12), and the check goes there.
 
 iOS clears storage for sites not used in seven days (spec 9.6), which means
-a sign-in can vanish on its own. That is expected in this milestone; the
-offline queue in M2 is what makes it consequential, and is handled there.
+a sign-in can vanish on its own. That is expected here; it becomes
+consequential once the offline queue exists, and is handled in M2.
 
 ## After restoring a backup
 

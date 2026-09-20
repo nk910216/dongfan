@@ -7,10 +7,10 @@
   "scripts": {
     "dev": "wrangler dev",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "wrangler d1 migrations apply dongfan-dev --local",
+    "db:migrate": "wrangler d1 migrations apply DB --local",
     "db:seed": "node ../../scripts/seed.mjs",
     "test": "vitest run",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy --env production"
   },
   "dependencies": {
     "@dongfan/shared": "*",
