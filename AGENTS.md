@@ -38,20 +38,30 @@ Everything a developer or an agent reads is **English**: identifiers, comments,
 JSDoc, README and docs, test names, test data, commit messages, PR descriptions,
 review comments, error code constants.
 
-Everything a user reads is **Traditional Chinese**, and it all lives in exactly
-one file:
+**Interface copy** — text a developer writes for a user to read — is Traditional
+Chinese and lives in exactly one file:
 
 ```
 packages/shared/src/i18n/zh-TW.ts
 ```
 
-No other file may contain a Chinese string literal. Not the event type config,
-not business logic, not API responses, not tests. The API returns error `code`
-values; the web layer maps a code to its message through that file.
+No other file may contain a Chinese string literal: not the event type config,
+not business logic, not API responses. The API returns error `code` values; the
+web layer resolves a code to text through that file.
 
-Two files are whitelisted for Chinese: `spec.md` and `zh-TW.ts`. A CI check
-enforces this (spec 13.3) — it exists because breaking this rule produces no
-symptom at all.
+**This rule does not apply to data a user types.** Baby nicknames, event notes
+and tag names may be in any language. They must be stored, queried and returned
+by the API byte-for-byte unchanged. Stripping non-ASCII, transliterating or
+escaping user content is a bug, and length limits count characters, not bytes.
+There must be tests proving Chinese user content round-trips intact.
+
+Three paths are whitelisted for CJK characters, enforced by a CI scan
+(spec 13.3) — the scan exists because breaking this rule produces no symptom:
+
+1. `spec.md`
+2. `packages/shared/src/i18n/zh-TW.ts` — interface copy
+3. `packages/*/test/fixtures/user-content.ts` — sample user input for the
+   round-trip tests; fixtures only, never logic
 
 When talking to the repository owner, use Traditional Chinese. When writing
 anything that lands in the repository, use English.
@@ -59,10 +69,13 @@ anything that lands in the repository, use English.
 ## Before you call something done
 
 ```sh
-pnpm typecheck     # tsc --noEmit, zero errors
-pnpm lint          # eslint, zero warnings
-pnpm test          # vitest
+npm run typecheck     # tsc --noEmit, zero errors
+npm run lint          # eslint, zero warnings
+npm test              # vitest
 ```
+
+This repository uses **npm workspaces**. Run a script in one package with
+`npm run <script> -w packages/<name>`.
 
 Zero warnings is the bar, not "no errors". `any` is banned; if you reach for it,
 the types are telling you something.
@@ -113,6 +126,30 @@ says nothing about whether a request survives in production.
 5. Add a test covering its aggregation behaviour.
 
 Never reuse or rename an existing `id`. Ids are stored in the database.
+
+## Errors
+
+The API never returns text for a user to read. It returns a `code`, plus
+machine-readable `details` where relevant, and the web layer resolves both
+through `zh-TW.ts`.
+
+`VALIDATION_FAILED` carries structured field errors (spec 5.2.1):
+
+```json
+{ "error": { "code": "VALIDATION_FAILED", "details": { "fields": [
+    { "field": "value", "code": "OUT_OF_RANGE", "params": { "min": 0, "max": 500 } }
+] } } }
+```
+
+`field` is the request body path, `code` is an uppercase constant, and `params`
+holds the values the copy interpolates. `params` is always an object, `{}` when
+empty.
+
+The web layer **must** fall back to a generic message when it meets a code it
+does not know — `error.UNKNOWN` for a top-level code, `fieldError.UNKNOWN` for a
+field code — and log the raw code to the console. A published PWA updates later
+than its backend, so an unknown code is a matter of when, not if. Never render a
+raw code to the user.
 
 ## Adding an API endpoint
 
@@ -166,10 +203,20 @@ that are invisible to the eye:
 
 ## Environment and secrets
 
-- Never read, write or commit `.dev.vars`, secrets, or anything under
-  `.wrangler/`. The local database contains real child records.
-- Never run commands against the production database.
-- Local development uses local D1 only (`wrangler dev`, vitest-pool-workers).
+- Never read, write or commit `.dev.vars` or any secret.
+- Never run a command against the production database, and never pass
+  `--remote` to a `wrangler d1` command.
+- Never open a database that holds the owner's real records.
+
+You **may** create and use a local development database, provided it is:
+
+1. **separately named** (`dongfan-dev`), distinct from the one the owner uses;
+2. **seeded with synthetic data only**, via `scripts/seed.ts` — invented
+   nicknames, notes and tags, never real family data;
+3. **never committed** — `.wrangler/` and `*.sqlite*` are already ignored.
+
+This is what makes the integration tests real: they run against actual D1
+rather than a mocked SQL layer, while the owner's records stay out of reach.
 
 Some environments run without network access. In those, `wrangler deploy`,
 `wrangler d1 --remote` and anything touching remote infrastructure will not

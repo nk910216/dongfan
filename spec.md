@@ -637,13 +637,56 @@ GET    /api/version                                  # 前端版本比對（見 
 | `FORBIDDEN` | 403 | 彈窗 |
 | `NOT_FOUND` | 404 | 彈窗 |
 | `VERSION_CONFLICT` | 409 | 專用對話框「已被其他人修改，重新載入？」（見 6.3） |
-| `VALIDATION_FAILED` | 422 | **不彈窗**，`details` 為 `{ field: message }`，顯示在對應表單欄位旁 |
+| `VALIDATION_FAILED` | 422 | **不彈窗**，`details` 為結構化欄位錯誤（見 5.2.1），顯示在對應表單欄位旁 |
 | `RATE_LIMITED` | 429 | 彈窗並提示稍後再試 |
 | `DAILY_LIMIT_EXCEEDED` | 429 | 彈窗。**離線佇列收到此碼必須永久放棄該筆，不可重試**（見 5.7） |
 | `ACTIVE_TIMER_EXISTS` | 409 | 專用對話框「對方已經開始記錄睡眠」。`details` 帶既有事件的 `{ id, started_at, created_by }`。**佇列處置**：永久停止重試該筆，標記 `failed` 並保留內容，讓使用者選擇改成補登紀錄或放棄 |
 | `INTERNAL` | 500 | 彈窗並提供重試 |
 
 **只有標示「彈窗」的才走 §7.11 的全域錯誤彈窗。** `UNAUTHENTICATED` 與 `VALIDATION_FAILED` 若也彈窗，使用體驗會很糟。
+
+### 5.2.1 欄位錯誤的結構化格式
+
+`VALIDATION_FAILED` 的 `details` **不含任何句子**，只有機器可讀的三段資訊：
+
+```json
+{ "error": { "code": "VALIDATION_FAILED", "details": { "fields": [
+    { "field": "value",      "code": "OUT_OF_RANGE", "params": { "min": 0, "max": 500 } },
+    { "field": "started_at", "code": "REQUIRED",     "params": {} },
+    { "field": "note",       "code": "TOO_LONG",     "params": { "maxLength": 1000 } }
+] } } }
+```
+
+- `field` —— request body 的欄位路徑（巢狀用點號，如 `metadata.side`）
+- `code` —— 下表的欄位錯誤碼，全大寫英文常數
+- `params` —— 供前端內插進文案的數值，恆為物件（無參數時為 `{}`）
+
+**v1 的欄位錯誤碼**：
+
+| code | params | 用於 |
+|---|---|---|
+| `REQUIRED` | — | 必填欄位未提供 |
+| `OUT_OF_RANGE` | `min`, `max` | 數值超出 config 的範圍 |
+| `TOO_LONG` | `maxLength` | 文字超過長度上限 |
+| `NOT_INTEGER` | — | 數值非整數（§3.2） |
+| `INVALID_ENUM` | `allowed` | enum 值不在允許清單內 |
+| `UNKNOWN_FIELD` | — | config 未定義的 metadata key（§3.6） |
+| `INVALID_FORMAT` | — | 格式錯誤（如 id 非 UUID） |
+| `END_BEFORE_START` | — | `ended_at` 早於 `started_at`（§5.3） |
+| `DURATION_TOO_LONG` | `maxHours` | 超過 24 小時（§3.4.1） |
+| `TOO_FAR_IN_FUTURE` | `maxDays` | 時間超出允許範圍（§5.7） |
+
+**前端文案以 `fieldError.<CODE>` 查表並內插 `params`**，例如 `OUT_OF_RANGE` → `請輸入 {min} 到 {max} 之間的數值`。
+
+### 未知錯誤碼的處理
+
+前端**必須**為「查不到文案」準備退路，不可顯示原始英文碼給使用者：
+
+- 未知的頂層 `code` → `error.UNKNOWN`（「發生未預期的錯誤，請稍後再試」）
+- 未知的欄位 `code` → `fieldError.UNKNOWN`（「輸入有誤」）
+- 兩者都必須把原始 code 寫進 console，方便除錯
+
+這條讓後端可以新增錯誤碼而不會讓舊版前端顯示亂碼——PWA 的前端更新是延後的（§2.1），這種情況一定會發生。
 
 ## 5.3 數值與日期的契約（不照做會產生髒資料）
 
@@ -1066,11 +1109,11 @@ idempotency（§5.8）規定「id 已存在就回傳既有紀錄」，這跟「�
 - **奶瓶**：數值欄位**預填上一次的奶量**，但仍須使用者確認後送出（不可自動沿用），避免每次重新輸入。
 
 - 選擇後進入該類型的新增表單，欄位依 config 決定：
-  - **數值欄位**：僅 `value !== null` 的類型顯示，標籤與單位取自 config，並做 min/max 驗證。無數值類型後端寫入 1。
+  - **數值欄位**：僅 `value !== null` 的類型顯示。單位符號與 min/max 取自 config，**欄位標籤取自 `i18n/zh-TW.ts`**（見 13.1）。無數值類型後端寫入 1。
   - **開始時間**：必填。預設為現在，**但從行事曆頁新增時，預設為該頁正在檢視的日期**（時間仍為現在的時刻）。儲存後回到原本檢視的日期，不跳回今天。
     - 沒有這條的話，「補登昨天的紀錄」會變成：選到昨天 → 按新增 → 表單卻預設今天 → 存完還跳回今天。這是補登流程最容易讓人記錯日期的地方。
   - **結束時間**：`hasRange: true` 的類型才顯示，可留空（代表進行中或待補）。
-  - **Metadata 欄位**：依 config 的 `metadataFields` 產生對應 UI。
+  - **Metadata 欄位**：依 config 的 `metadataFields` 決定欄位種類與約束，**標籤與 enum 選項文字取自 `i18n/zh-TW.ts`**（見 13.1）。
   - **註解**：純文字，選填。
   - **標籤**：點擊顯示既有標籤供選擇，也可當場新增。
 - 儲存後回到**進入新增頁之前的畫面**：從主頁進來就回主頁，從行事曆進來就回該頁並維持原本檢視的日期。
@@ -1504,23 +1547,35 @@ v1 用明確的人工復原步驟處理即可，不需要自動偵測機制。�
 - **型別檢查與 lint 必須零警告**：`tsc --noEmit` 與 `eslint` 通過才算完成。
 - 禁止使用 `any`。
 
-## 13.1 語言：repo 內一律英文，UI 文案除外
+## 13.1 語言：開發者寫的一律英文
 
-**除了使用者看得到的畫面文字之外，這個 repo 裡的一切都用英文。**
+**這條規則約束的是「開發者寫進 repo 的內容」，不是「使用者輸入的資料」。**
 
-| 一律英文 | 唯一可用繁體中文之處 |
+| 開發者撰寫 → 一律英文 | 不受此規則約束 |
 |---|---|
-| 程式碼、識別字、型別名稱 | **UI 文案檔**（見下方） |
-| 程式註解、JSDoc | 以及 `spec.md`（例外，見下方） |
+| 程式碼、識別字、型別名稱 | **使用者輸入的資料**（見 13.1.1） |
+| 程式註解、JSDoc | |
 | commit message、PR 說明、review comment | |
 | `AGENTS.md`、README、程式內文件 | |
-| 測試名稱、測試資料、變數與函式命名 | |
+| 測試名稱、變數與函式命名 | |
 | 錯誤碼常數（如 `VERSION_CONFLICT`） | |
 | 事件類型 config、Zod schema、API 回應 | |
 
+繁體中文只允許出現在三處，見下方白名單。
+
+### 13.1.1 使用者輸入的資料不受限制
+
+使用者在 app 裡打的字——**寶寶暱稱、事件註解、標籤名稱**——可以是任何語言，必須能正常儲存、查詢，並經 API **原樣回傳**。那是資料，不是程式碼。
+
+任何「過濾非 ASCII」「正規化成拼音」「轉義後存入」之類的處理都是 bug。欄位長度上限（§5.7）以**字元數**計算，不是位元組數。
+
+**必須有測試驗證中文使用者內容的往返**：建立含中文暱稱的寶寶、含中文註解與中文標籤的事件，讀回來與寫入完全相同。這類測試需要中文字面值，因此白名單有第三項。
+
 ### UI 文案集中在單一檔案
 
-**所有使用者看得到的繁中文字都只住在 `packages/shared/src/i18n/zh-TW.ts`**，以 key 對應。其他任何檔案都不得出現中文字面值——包含事件 config、業務邏輯、API 回應與測試。
+**所有「介面文案」的繁中文字都只住在 `packages/shared/src/i18n/zh-TW.ts`**，以 key 對應。其他任何檔案都不得出現中文字面值——包含事件 config、業務邏輯與 API 回應。
+
+（介面文案 = 開發者寫給使用者看的字，如按鈕、標籤、錯誤訊息。使用者自己打的字不在此列，見 13.1.1。）
 
 ```ts
 // packages/shared/src/i18n/zh-TW.ts — the only file with Chinese literals
@@ -1539,7 +1594,15 @@ export const zhTW = {
 { id: 'sleep', category: 'activity', timerEnabled: true }
 ```
 
-**為什麼不讓 config 直接帶 `name`**：那份 config 同時被後端載入做驗證，文案混進去等於讓中文散進共用的業務邏輯，CI 的 CJK 掃描也就失去單一白名單。集中之後白名單只有兩個檔案：`spec.md` 與 `zh-TW.ts`。
+**為什麼不讓 config 直接帶 `name`**：那份 config 同時被後端載入做驗證，文案混進去等於讓中文散進共用的業務邏輯，CI 的 CJK 掃描也就失去單純的白名單。
+
+### CJK 白名單（§13.3 的 CI 檢查依此設定）
+
+1. `spec.md`
+2. `packages/shared/src/i18n/zh-TW.ts` —— 介面文案
+3. `packages/*/test/fixtures/user-content.ts` —— 驗證中文使用者輸入往返的固定樣本，**只放測試資料，不放邏輯**
+
+第 3 項是必要的例外：不允許中文出現在測試裡，就寫不出「中文暱稱存得進去也讀得回來」這個測試，而那正是最該驗證的行為之一。
 
 **理由**：這個 repo 由多種 coding agent 共同開發（§13.2），而英文是它們之間最沒有歧義的共同語言；識別字與註解混用中文也會讓 diff 與搜尋變得難用。至於 UI 文案，那是產品規格的一部分（§1 明訂只做繁體中文），因此保留但集中。
 
@@ -1586,7 +1649,7 @@ ln -s AGENTS.md CLAUDE.md
 | 禁止 N+1 查詢（§4.2） | D1 查詢計數 helper，超過 30 次即 fail（§11.2） |
 | 各欄位長度上限（§5.7） | Zod schema 的 `maxLength` |
 | PBKDF2 迭代數 | `packages/shared` 的具名常數，不得在 handler 內寫死 |
-| repo 內不得出現中文（§13.1） | CI 檢查：掃描追蹤中的檔案是否含 CJK 字元，白名單僅 `spec.md` 與 `packages/shared/src/i18n/zh-TW.ts` 兩個檔案。**這條特別需要機器檢查**——它是人最容易在趕時間時破例的規則，而破例後不會有任何症狀 |
+| repo 內不得出現中文（§13.1） | CI 檢查：掃描追蹤中的檔案是否含 CJK 字元，白名單為 §13.1 所列三處。**這條特別需要機器檢查**——它是人最容易在趕時間時破例的規則，而破例後不會有任何症狀 |
 
 `AGENTS.md` 只保留**真的無法機器化**的部分。
 
@@ -1609,6 +1672,18 @@ ln -s AGENTS.md CLAUDE.md
 - **`wrangler deploy`、`wrangler d1 --remote`、以及任何觸及正式資料庫的指令，在沙箱中不會成功，也不應嘗試執行。**
 - 本機測試一律使用本地 D1（`wrangler dev` / vitest-pool-workers）。
 - **禁止任何 agent 讀取或寫入 `.dev.vars`、wrangler secrets 或其他機密檔案。**
+
+### 開發用資料庫
+
+開發工具與 agent **可以**建立並使用一個本機 D1，但必須符合三個條件：
+
+1. **獨立命名**（如 `dongfan-dev`），與專案擁有者日常使用的資料庫分開。
+2. **只含假資料**，由 `scripts/seed.ts` 產生。寶寶暱稱、註解、標籤一律為合成內容。
+3. **不進版控**——`.wrangler/` 與 `*.sqlite*` 已由 `.gitignore` 擋下（§12.2）。
+
+**絕對禁止**：讀取含真實家庭資料的資料庫、對正式資料庫執行任何指令、以及 `wrangler d1 --remote`。
+
+這條的用意是讓開發與測試能真的跑起來（§11.2 要求整合測試打真實的本地 D1），同時把真實紀錄完全隔離在外。
 
 ---
 
