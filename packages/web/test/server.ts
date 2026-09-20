@@ -207,14 +207,25 @@ export const server = setupServer(
     if (failure) return refuse(failure);
 
     const created: BabyDto = {
-      id: BABY.id,
+      id: String(body['id'] ?? BABY.id),
       nickname: String(body['nickname']),
       gender: String(body['gender']),
       birthDate: String(body['birthDate']),
       timezone: TZ,
       role: 'owner',
     };
+    // The same id twice returns what is already there, as the real handler
+    // does (spec 5.8), or the retry rules on the client mean nothing.
+    const already = ME.babies.find((baby) => baby.id === body['id']);
+    if (already) return HttpResponse.json(already, { status: 200 });
+
     ME.babies = [created];
+
+    if (api.loseNextResponse) {
+      api.loseNextResponse = false;
+      // Created, but the client will never hear so.
+      return HttpResponse.error();
+    }
     return HttpResponse.json(created, { status: 201 });
   }),
 

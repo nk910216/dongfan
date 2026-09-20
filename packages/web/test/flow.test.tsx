@@ -141,6 +141,72 @@ describe('an account with no baby yet', () => {
     expect(creations).toHaveLength(1);
   });
 
+  it('keeps the name it sent when the reply to the creation is lost', async () => {
+    api.startWithNoBaby();
+    api.loseNextResponse = true;
+    const user = openSignedIn();
+
+    const field = await screen.findByLabelText(zhTW.baby.nickname);
+    await user.type(field, USER_CONTENT.nickname);
+    await user.click(screen.getByTestId('submit'));
+
+    // Created on the server; the reply never arrived. Changing the name
+    // now and pressing again would send it under the same id, the server
+    // would answer with the name it already has, and the screen would go
+    // to the home page as though the change had been saved.
+    expect(await screen.findByTestId('outcome-unknown')).toBeInTheDocument();
+    expect(field).toBeDisabled();
+
+    await user.click(screen.getByTestId('submit'));
+    await waitForHome();
+
+    expect(screen.getByText(USER_CONTENT.nickname)).toBeInTheDocument();
+
+    const creations = api.requests.filter(
+      (entry) => entry.method === 'POST' && entry.path === '/api/babies',
+    );
+    expect(creations).toHaveLength(2);
+    for (const attempt of creations) {
+      expect((attempt.body as Record<string, unknown>)['nickname']).toBe(USER_CONTENT.nickname);
+    }
+  });
+
+  it('keeps the doubt when the retry only says the account lost access', async () => {
+    api.startWithNoBaby();
+    api.loseNextResponse = true;
+    const user = openSignedIn();
+
+    await user.type(await screen.findByLabelText(zhTW.baby.nickname), USER_CONTENT.nickname);
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    // Being refused afterwards says nothing about whether the first
+    // attempt landed (spec 6.1).
+    api.nextFailure = { status: 404, code: 'NOT_FOUND' };
+    await user.click(screen.getByTestId('submit'));
+
+    expect(await screen.findByTestId('outcome-unknown')).toBeInTheDocument();
+    expect(screen.getByLabelText(zhTW.baby.nickname)).toBeDisabled();
+  });
+
+  it('lets the parent edit again once the server says it refused', async () => {
+    api.startWithNoBaby();
+    api.loseNextResponse = true;
+    const user = openSignedIn();
+
+    await user.type(await screen.findByLabelText(zhTW.baby.nickname), USER_CONTENT.nickname);
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    // A validation failure comes after the id read-back, so reaching one
+    // means the server looked and found nothing (spec 5.8).
+    api.nextFailure = { status: 422, code: 'VALIDATION_FAILED' };
+    await user.click(screen.getByTestId('submit'));
+
+    await waitFor(() => expect(screen.queryByTestId('outcome-unknown')).not.toBeInTheDocument());
+    expect(screen.getByLabelText(zhTW.baby.nickname)).not.toBeDisabled();
+  });
+
   it('sends the same id if the creation itself has to be retried', async () => {
     api.startWithNoBaby();
     const user = openSignedIn();
@@ -842,6 +908,32 @@ describe('saving again after a save that said nothing', () => {
     openSignedIn('/add/bottle');
 
     expect(await screen.findByLabelText(valueLabel('bottle'))).not.toBeDisabled();
+  });
+
+  it('resends the kind that was tapped first, not the one tapped after', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn();
+    await waitForHome();
+
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') }));
+    await screen.findByTestId('outcome-unknown');
+
+    // The shortcut has nothing to freeze -- the kind comes from whichever
+    // button is pressed -- so this is where resending the original content
+    // is the only thing standing between a lost reply and a nappy filed
+    // under the wrong kind (spec 6.1).
+    await user.click(screen.getByRole('button', { name: metadataOptionLabel('diaper_kind', 'pee') }));
+    await waitForHome();
+
+    expect(api.events).toHaveLength(1);
+    expect(api.events[0]?.metadata['diaper_kind']).toBe('poo');
+
+    const posts = api.requests.filter((entry) => entry.method === 'POST' && entry.path.endsWith('/events'));
+    expect(posts).toHaveLength(2);
+    for (const attempt of posts) {
+      expect((attempt.body as Record<string, unknown>)['metadata']).toEqual({ diaper_kind: 'poo' });
+    }
   });
 
   it('applies to the nappy shortcut too', async () => {

@@ -30,6 +30,7 @@ export const zhTW = {
     create: '建立',
     creating: '建立中…',
     createdNeedsRefresh: '寶寶已經建立好了，只是還沒讀回來。請按重試，不要重新建立一次。',
+    outcomeUnknown: '上次送出後沒有收到回應，不確定寶寶有沒有建立。請按重試確認，不要改內容重來一次。',
   },
 
   auth: {

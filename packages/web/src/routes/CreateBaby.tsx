@@ -5,6 +5,7 @@ import { apiRequest } from '../lib/api.js';
 import { describeFailure } from '../components/FieldErrors.js';
 import { useSession } from '../lib/session.js';
 import { newClientId } from '../lib/ids.js';
+import { outcomeIsUnknown, provesNotStored } from '../lib/outcome.js';
 
 /**
  * The first thing a new account sees, and the only way past it.
@@ -18,6 +19,13 @@ import { newClientId } from '../lib/ids.js';
  * baby from the account CLI, and will have one by the time they sign in
  * (spec 12).
  */
+type CreateBabyBody = {
+  id: string;
+  nickname: string;
+  gender: 'male' | 'female' | 'other';
+  birthDate: string;
+};
+
 export function CreateBaby(): React.JSX.Element {
   const { token, reload } = useSession();
 
@@ -29,6 +37,12 @@ export function CreateBaby(): React.JSX.Element {
   // Set as soon as the server has answered. After that the button is only
   // retrying the account refresh, and must not send the creation again.
   const [created, setCreated] = useState(false);
+  // Set when an attempt ended without the server saying anything. Until
+  // that is settled the fields are not the parent's to change: a corrected
+  // nickname sent under the same id comes back as the stored one, and the
+  // correction vanishes with nothing on screen to say so (spec 6.1).
+  const [outcomeUnknown, setOutcomeUnknown] = useState(false);
+  const [sent, setSent] = useState<CreateBabyBody | null>(null);
 
   const [nickname, setNickname] = useState('');
   const [gender, setGender] = useState<'male' | 'female' | 'other'>('other');
@@ -55,20 +69,47 @@ export function CreateBaby(): React.JSX.Element {
     }
 
     setBusy(true);
-    try {
-      if (!created) {
+
+    if (!created) {
+      // While the outcome is in doubt the payload is not the caller's to
+      // choose: only the original content can tell us what the server has.
+      const payload: CreateBabyBody =
+        outcomeUnknown && sent
+          ? sent
+          : { id: babyId, nickname: nickname.trim(), gender, birthDate };
+
+      try {
         await apiRequest<BabyDto>('/babies', {
           method: 'POST',
           token: token ?? undefined,
-          body: { id: babyId, nickname: nickname.trim(), gender, birthDate },
+          body: payload,
         });
         // Remembered before anything else can fail. The refresh below is a
         // separate request with its own way of going wrong, and pressing
         // the button after it did would otherwise send the creation a
         // second time.
         setCreated(true);
-      }
+        setOutcomeUnknown(false);
+      } catch (error) {
+        setFailure(error);
+        setBusy(false);
 
+        // Once in doubt, only a refusal the server could not have given for
+        // a stored baby settles it. Every other answer leaves it alone.
+        if (outcomeUnknown) {
+          if (provesNotStored(error)) {
+            setOutcomeUnknown(false);
+            setSent(null);
+          }
+        } else if (outcomeIsUnknown(error)) {
+          setSent(payload);
+          setOutcomeUnknown(true);
+        }
+        return;
+      }
+    }
+
+    try {
       // The account's baby list comes from /me, so it has to be read again
       // before anything below can find one.
       await reload();
@@ -84,7 +125,10 @@ export function CreateBaby(): React.JSX.Element {
       <p className="mb-7 text-center text-sm leading-relaxed text-ink-faint">{zhTW.baby.createHint}</p>
 
       <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-4">
-        <fieldset disabled={created} className="contents">
+        {/* Frozen once the record may exist, not only once it certainly
+            does. Editing while the outcome is unknown would send a
+            correction the server answers with the old content. */}
+        <fieldset disabled={created || outcomeUnknown} className="contents">
         <label className="flex flex-col gap-1.5">
           <span className="text-xs tracking-wide text-ink-faint">{zhTW.baby.nickname}</span>
           <input
@@ -130,6 +174,12 @@ export function CreateBaby(): React.JSX.Element {
         </label>
         </fieldset>
 
+        {outcomeUnknown ? (
+          <p className="text-xs leading-relaxed text-amber-300/90" data-testid="outcome-unknown">
+            {zhTW.baby.outcomeUnknown}
+          </p>
+        ) : null}
+
         {created ? (
           <p className="text-xs leading-relaxed text-amber-300/90" data-testid="created-pending-refresh">
             {zhTW.baby.createdNeedsRefresh}
@@ -146,7 +196,11 @@ export function CreateBaby(): React.JSX.Element {
           data-testid="submit"
           className="mt-2 min-h-11 rounded-2xl bg-accent py-4 text-base font-bold text-ground disabled:opacity-60"
         >
-          {busy ? zhTW.baby.creating : created ? zhTW.error.retry : zhTW.baby.create}
+          {busy
+            ? zhTW.baby.creating
+            : created || outcomeUnknown
+              ? zhTW.error.retry
+              : zhTW.baby.create}
         </button>
       </form>
     </div>

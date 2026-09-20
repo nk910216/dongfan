@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import type { EventDto } from '@dongfan/shared';
-import { ApiFailure, NetworkFailure } from './api.js';
+import { outcomeIsUnknown, provesNotStored } from './outcome.js';
 import { forgetPending, pendingFor, rememberPending } from './pending-create.js';
 import { useSession } from './session.js';
 import { newClientId } from './ids.js';
@@ -41,44 +41,6 @@ export type CreateEvent = {
    */
   submit: (input: NewEventInput) => Promise<EventDto | null>;
 };
-
-/**
- * The refusals that prove the server does not have the event.
- *
- * A whitelist, not a list of exceptions, and a short one: these are the
- * only answers the create handler produces *after* its idempotency read
- * back. Reaching one of them means the server looked for this id, did not
- * find it, and went on to refuse the content (spec 5.8).
- *
- * Everything else leaves the doubt where it was. A session that expired, a
- * rate limit, an account removed from the baby between the first attempt
- * and the retry -- none of them say anything about whether the first
- * attempt landed, and a 404 from losing access is not evidence that the
- * record is absent. Nor is a code this build has never seen (spec 6.1).
- */
-const PROVES_NOT_STORED = new Set([
-  'VALIDATION_FAILED',
-  'DAILY_LIMIT_EXCEEDED',
-  'ACTIVE_TIMER_EXISTS',
-  'ID_CONFLICT',
-]);
-
-function provesNotStored(error: unknown): boolean {
-  return error instanceof ApiFailure && PROVES_NOT_STORED.has(error.code);
-}
-
-/**
- * Whether a first attempt tells us nothing about what the server did.
- *
- * A request that never arrived and a server that fell over midway are the
- * same thing from here: the event may or may not be stored. Only asked
- * when there is no doubt yet -- a 404 on a first attempt really is a
- * refusal before any write, and freezing the form over it would be a lie.
- */
-function outcomeIsUnknown(error: unknown): boolean {
-  if (error instanceof NetworkFailure) return true;
-  return error instanceof ApiFailure && error.status >= 500;
-}
 
 export function useCreateEvent(typeId: string): CreateEvent {
   const { addEvent, baby } = useStore();
