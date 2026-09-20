@@ -44,6 +44,18 @@ export function categoryName(id: string): string {
   return names[id] ?? id;
 }
 
+/**
+ * Label for a type's numeric input.
+ *
+ * Falls back to the type's own name rather than its id, so a new type with
+ * no dedicated label still reads as Chinese instead of leaking an
+ * identifier into the interface.
+ */
+export function valueLabel(typeId: string): string {
+  const labels: Record<string, string> = zhTW.valueLabel;
+  return labels[typeId] ?? eventTypeName(typeId);
+}
+
 export function metadataLabel(fieldId: string): string {
   const labels: Record<string, string> = zhTW.metadata;
   return labels[fieldId] ?? fieldId;

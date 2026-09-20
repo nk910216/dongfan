@@ -61,6 +61,16 @@ export const zhTW = {
     unknown: '未知事件',
   },
 
+  /** Labels for the numeric field on types that have one. */
+  valueLabel: {
+    bottle: '奶量',
+    pumping: '擠出量',
+    weight: '體重',
+    height: '身高',
+    head_circ: '頭圍',
+    temperature: '體溫',
+  },
+
   metadata: {
     side: '哺乳邊',
     'side.left': '左邊',
@@ -100,6 +110,7 @@ export const zhTW = {
     stop: '結束',
     overrun: '{name}已逾 24 小時',
     confirmEnd: '確認結束時間',
+    justNow: '剛剛',
     neverHappened: '還沒有',
     longAgo: '很久以前',
     minutesAgo: '{minutes} 分鐘前',

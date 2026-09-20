@@ -176,7 +176,7 @@ function EventRow({ event, timezone }: { event: MockEvent; timezone: string }): 
         </div>
         <div className="mt-px truncate text-xs text-ink-faint">{details.join(' · ')}</div>
       </div>
-      {spec && event.value !== 1 ? (
+      {spec ? (
         <span className="font-numeric shrink-0 text-[15px] font-semibold" style={{ color }}>
           {formatValue(event.value, spec)}
           <span className="text-[11px] text-ink-faint">{spec.unit}</span>

@@ -1,8 +1,8 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
 import {
-  CATEGORY_IDS, categoryName, eventTypeName, eventTypesInCategory,
-  getEventType, metadataOptionLabel, zhTW,
+  CATEGORY_IDS, categoryName, deriveEventTimes, eventTypeName,
+  eventTypesInCategory, getEventType, metadataOptionLabel, zhTW,
 } from '@dongfan/shared';
 import { EventIcon, EventIconBadge } from '../components/EventIcon.js';
 import { useStore } from '../lib/store.js';
@@ -16,16 +16,17 @@ import { useStore } from '../lib/store.js';
  */
 export function AddEvent(): React.JSX.Element {
   const navigate = useNavigate();
-  const { addEvent } = useStore();
+  const { addEvent, baby } = useStore();
 
   const diaper = getEventType('diaper');
 
   const recordDiaper = (kind: string): void => {
+    if (!diaper) return;
+    const times = deriveEventTimes(diaper, Date.now(), 'record', baby.timezone);
     addEvent({
-      typeId: 'diaper',
+      typeId: diaper.id,
       intent: 'record',
-      startedAt: Date.now(),
-      endedAt: Date.now(),
+      ...times,
       value: 1,
       note: '',
       metadata: { diaper_kind: kind },

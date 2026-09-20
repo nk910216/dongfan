@@ -16,8 +16,10 @@ import type { Summary } from '../mock/derive.js';
 export type NewEventInput = {
   typeId: string;
   intent: 'start_timer' | 'record';
+  /** Supplied by deriveEventTimes so the prototype obeys the same contract. */
   startedAt: number;
   endedAt: number | null;
+  active: boolean;
   value: number;
   note: string;
   metadata: Record<string, string>;
@@ -64,7 +66,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
         typeId: input.typeId,
         startedAt: input.startedAt,
         endedAt: input.endedAt,
-        active: input.intent === 'start_timer',
+        active: input.active,
         value: input.value,
         note: input.note,
         metadata: input.metadata,

@@ -2,8 +2,8 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
 import {
-  eventTypeName, getEventType, isWithinRange, metadataLabel,
-  metadataOptionLabel, toStored, zhTW,
+  deriveEventTimes, eventTypeName, getEventType, isWithinRange, metadataLabel,
+  metadataOptionLabel, toDisplayed, toStored, valueLabel, zhTW,
 } from '@dongfan/shared';
 import type { EventIntent, MetadataField } from '@dongfan/shared';
 import { EventIcon } from '../components/EventIcon.js';
@@ -20,18 +20,33 @@ import { useStore } from '../lib/store.js';
 export function EventForm(): React.JSX.Element {
   const { typeId = '' } = useParams();
   const navigate = useNavigate();
-  const { addEvent } = useStore();
+  const { addEvent, baby, summary } = useStore();
   const type = getEventType(typeId);
 
+  // Captured once, then both displayed and submitted. Reading the clock again
+  // at submit time would store a different instant from the one shown.
+  const [startedAt] = useState(() => Date.now());
+
   const [intent, setIntent] = useState<EventIntent>(type?.timerEnabled ? 'start_timer' : 'record');
-  const [displayValue, setDisplayValue] = useState('');
+  const [displayValue, setDisplayValue] = useState(() => {
+    // Feed amounts repeat, so the last one is a better starting point than an
+    // empty box. It still has to be confirmed rather than submitted silently.
+    if (!type?.value) return '';
+    const last = summary.types.get(type.id)?.lastValue ?? null;
+    return last === null || last === 1 ? '' : String(toDisplayed(last, type.value));
+  });
   const [note, setNote] = useState('');
   const [metadata, setMetadata] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
 
   const startedAtLabel = useMemo(
-    () => new Intl.DateTimeFormat('zh-TW', { dateStyle: 'short', timeStyle: 'short' }).format(new Date()),
-    [],
+    () =>
+      new Intl.DateTimeFormat('zh-TW', {
+        timeZone: baby.timezone,
+        dateStyle: 'short',
+        timeStyle: 'short',
+      }).format(new Date(startedAt)),
+    [startedAt, baby.timezone],
   );
 
   if (!type) {
@@ -76,16 +91,8 @@ export function EventForm(): React.JSX.Element {
       }
     }
 
-    const now = Date.now();
-    addEvent({
-      typeId: type.id,
-      intent,
-      startedAt: now,
-      endedAt: isTimer ? null : now,
-      value,
-      note,
-      metadata,
-    });
+    const times = deriveEventTimes(type, startedAt, intent, baby.timezone);
+    addEvent({ typeId: type.id, intent, ...times, value, note, metadata });
     navigate('/');
   };
 
@@ -132,13 +139,13 @@ export function EventForm(): React.JSX.Element {
         {type.hasRange ? (
           <Field label={zhTW.addEvent.endedAt}>
             <div className="rounded-xl border border-dashed border-line bg-surface/60 px-4 py-3.5 text-base text-ink-dim">
-              {isTimer ? zhTW.addEvent.endedAtPlaceholder : startedAtLabel}
+              {zhTW.addEvent.endedAtPlaceholder}
             </div>
           </Field>
         ) : null}
 
         {type.value ? (
-          <Field label={`${metadataLabel(type.id)} (${type.value.unit})`}>
+          <Field label={`${valueLabel(type.id)} (${type.value.unit})`}>
             <input
               inputMode="decimal"
               value={displayValue}

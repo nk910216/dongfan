@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
-import { eventTypeName, interpolate, quickActionTypes, zhTW } from '@dongfan/shared';
+import { EVENT_TYPES, eventTypeName, interpolate, quickActionTypes, zhTW } from '@dongfan/shared';
+import type { EventTypeConfig } from '@dongfan/shared';
 import { EventIcon, EventIconBadge } from './EventIcon.js';
 import { formatStopwatch, relativeTime } from '../lib/format.js';
 import { useStore } from '../lib/store.js';
@@ -14,9 +15,17 @@ import { useStore } from '../lib/store.js';
 export function QuickActions(): React.JSX.Element {
   const { summary, now, stopTimer } = useStore();
 
+  // A running timer must always be stoppable from here. Walk and play can be
+  // started from the picker but are not shortcuts, so without this they
+  // would run with no way to end them until editing exists.
+  const running: EventTypeConfig[] = EVENT_TYPES.filter(
+    (type) => !type.quickAction && summary.types.get(type.id)?.activeEventId != null,
+  );
+  const visible = [...running, ...quickActionTypes()];
+
   return (
     <div className="flex shrink-0 gap-2.5 overflow-x-auto px-3.5 pb-3.5 [scrollbar-width:none]">
-      {quickActionTypes().map((type) => {
+      {visible.map((type) => {
         const entry = summary.types.get(type.id);
         const isRunning = entry?.activeEventId != null && entry.activeStartedAt != null;
 
@@ -40,7 +49,7 @@ export function QuickActions(): React.JSX.Element {
               <button
                 type="button"
                 onClick={() => stopTimer(entry.activeEventId ?? '')}
-                className="rounded-lg py-1.5 text-[13px] font-bold text-ground"
+                className="min-h-11 rounded-lg px-3 text-[13px] font-bold text-ground"
                 style={{ backgroundColor: type.color }}
               >
                 {zhTW.timer.stop}
@@ -62,7 +71,7 @@ export function QuickActions(): React.JSX.Element {
             <Link
               to={`/add/${type.id}`}
               aria-label={`${zhTW.addEvent.title} ${eventTypeName(type.id)}`}
-              className="flex w-full items-center justify-center rounded-lg bg-surface-raised py-1 text-base font-semibold"
+              className="flex min-h-11 w-full items-center justify-center rounded-lg bg-surface-raised text-base font-semibold"
               style={{ color: type.color }}
             >
               ＋

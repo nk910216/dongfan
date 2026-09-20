@@ -15,7 +15,7 @@ export function relativeTime(instant: number | null, now: number): string {
   if (instant === null) return zhTW.timer.neverHappened;
 
   const elapsed = now - instant;
-  if (elapsed < MINUTE) return zhTW.home.syncedJustNow;
+  if (elapsed < MINUTE) return zhTW.timer.justNow;
   if (elapsed < HOUR) return interpolate(zhTW.timer.minutesAgo, { minutes: Math.floor(elapsed / MINUTE) });
   if (elapsed < DAY) return interpolate(zhTW.timer.hoursAgo, { hours: Math.floor(elapsed / HOUR) });
   if (elapsed < 7 * DAY) return interpolate(zhTW.timer.daysAgo, { days: Math.floor(elapsed / DAY) });
