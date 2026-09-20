@@ -29,8 +29,7 @@ backup-*.sql
 # Tests
 coverage/
 
-# Reference screenshots of third-party apps: keep locally, never publish
-# (this repository is public — see spec.md 15)
+# Images (project images belong under docs/)
 *.jpeg
 *.jpg
 *.png
