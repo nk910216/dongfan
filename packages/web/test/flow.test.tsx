@@ -4,8 +4,8 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { HttpResponse, http } from 'msw';
 import {
-  eventTypeName, fromLocalInput, interpolate, metadataOptionLabel, toLocalInput,
-  toStored, valueLabel, zhTW,
+  eventTypeName, fromLocalInput, interpolate, metadataLabel, metadataOptionLabel,
+  startOfLocalDay, toLocalDate, toLocalInput, toStored, valueLabel, zhTW,
 } from '@dongfan/shared';
 import { App } from '../src/App.js';
 import { BABY, TOKEN, api, server } from './server.js';
@@ -396,5 +396,215 @@ describe('touch targets', () => {
     for (const link of shortcuts) expect(link.className).toMatch(/min-h-11/);
 
     expect(screen.getByRole('link', { name: zhTW.a11y.addEvent }).className).toMatch(/size-15/);
+  });
+});
+
+describe('saving again after a save that said nothing', () => {
+  it('reaches the same event instead of adding a second one', async () => {
+    // Stored on the server, but the reply never arrives. From the phone
+    // this is indistinguishable from a refusal (spec 6.1).
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+
+    expect(await screen.findByTestId('outcome-unknown')).toBeInTheDocument();
+    expect(api.events).toHaveLength(1);
+
+    await user.click(screen.getByTestId('submit'));
+
+    // The same id, so the server answers with what it already has. A fresh
+    // id here would have given the baby two bottles instead of one.
+    await waitFor(() => expect(screen.queryByTestId('outcome-unknown')).not.toBeInTheDocument());
+    expect(api.events).toHaveLength(1);
+
+    const posts = api.requests.filter((entry) => entry.method === 'POST' && entry.path.endsWith('/events'));
+    expect(posts).toHaveLength(2);
+    expect((posts[0]?.body as Record<string, unknown>)['id'])
+      .toBe((posts[1]?.body as Record<string, unknown>)['id']);
+  });
+
+  it('will not let the content be changed before the result is known', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    await user.type(amount, '150');
+    await user.click(screen.getByTestId('submit'));
+
+    await screen.findByTestId('outcome-unknown');
+
+    // Editing now would send a correction under an id the server may
+    // already hold, and it would answer with the old content while the
+    // screen went back to the list as though the change had landed.
+    expect(amount).toBeDisabled();
+  });
+
+  it('resends the original content, not whatever is on screen', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    await user.click(screen.getByTestId('submit'));
+    await waitFor(() => expect(screen.queryByTestId('outcome-unknown')).not.toBeInTheDocument());
+
+    const posts = api.requests.filter((entry) => entry.method === 'POST' && entry.path.endsWith('/events'));
+    expect((posts[1]?.body as Record<string, unknown>)['value']).toBe(150);
+  });
+
+  it('lets the parent correct it when the server definitely refused', async () => {
+    api.nextFailure = { status: 422, code: 'VALIDATION_FAILED', fields: [{ field: 'value', code: 'OUT_OF_RANGE', params: { min: 0, max: 500 } }] };
+    const user = openSignedIn('/add/bottle');
+
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    await user.type(amount, '150');
+    await user.click(screen.getByTestId('submit'));
+
+    // A definite answer: the server does not have it, so nothing is frozen.
+    await screen.findByTestId('form-error');
+    expect(screen.queryByTestId('outcome-unknown')).not.toBeInTheDocument();
+    expect(amount).not.toBeDisabled();
+  });
+
+  it('keeps the doubt when a later attempt only says the session expired', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    // A 401 says nothing about whether the first attempt landed, so it must
+    // not be read as proof that the server has nothing (spec 6.1).
+    api.nextFailure = { status: 429, code: 'RATE_LIMITED' };
+    await user.click(screen.getByTestId('submit'));
+
+    expect(await screen.findByTestId('outcome-unknown')).toBeInTheDocument();
+  });
+
+  it('applies to the nappy shortcut too', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn();
+    await waitForHome();
+
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    const button = await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') });
+    await user.click(button);
+
+    expect(await screen.findByTestId('outcome-unknown')).toBeInTheDocument();
+    expect(api.events).toHaveLength(1);
+
+    await user.click(button);
+    await waitForHome();
+    expect(api.events).toHaveLength(1);
+  });
+});
+
+describe('a timer that has run past a day', () => {
+  const OVERRUN = 30 * HOUR;
+
+  it('offers the form instead of a stop button that could only fail', async () => {
+    const stuck = api.add({ typeId: 'sleep', active: true, startedAt: Date.now() - OVERRUN });
+    openSignedIn();
+    await waitForHome();
+
+    // The API refuses any end time past twenty-four hours, so a stop button
+    // here would fail every time and the slot would stay occupied.
+    expect(screen.getByTestId('timer-overrun-sleep')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: zhTW.timer.stop })).not.toBeInTheDocument();
+
+    const link = screen.getByRole('link', { name: zhTW.timer.confirmEnd });
+    expect(link).toHaveAttribute('href', `/event/${stuck.id}`);
+  });
+
+  it('says plainly that it has overrun', async () => {
+    api.add({ typeId: 'sleep', active: true, startedAt: Date.now() - OVERRUN });
+    openSignedIn();
+    await waitForHome();
+
+    expect(
+      screen.getByText(interpolate(zhTW.timer.overrun, { name: eventTypeName('sleep') })),
+    ).toBeInTheDocument();
+  });
+
+  it('opens the event even though it is not in today’s list', async () => {
+    const stuck = api.add({ typeId: 'sleep', active: true, startedAt: Date.now() - OVERRUN });
+    const user = openSignedIn();
+    await waitForHome();
+
+    // Started the day before yesterday, so tapping it in the list is not an
+    // option: the card is the only way in (spec 7.2).
+    expect(screen.queryByTestId('event-row-sleep')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('link', { name: zhTW.timer.confirmEnd }));
+    expect(await screen.findByTestId('ended-at')).toBeInTheDocument();
+    expect(api.find(stuck.id)).toBeDefined();
+  });
+});
+
+describe('when stopping a timer fails', () => {
+  it('says so instead of leaving the button to spring back', async () => {
+    api.add({ typeId: 'sleep', active: true, startedAt: Date.now() - HOUR });
+    const user = openSignedIn();
+    await waitForHome();
+
+    api.nextFailure = { status: 409, code: 'VERSION_CONFLICT' };
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+
+    const error = await screen.findByTestId('timer-error');
+    expect(error).toHaveTextContent(zhTW.timer.stopFailed);
+    expect(error).toHaveTextContent(zhTW.error.VERSION_CONFLICT);
+  });
+
+  it('fetches the version the other phone left behind', async () => {
+    api.add({ typeId: 'sleep', active: true, startedAt: Date.now() - HOUR });
+    const user = openSignedIn();
+    await waitForHome();
+
+    api.nextFailure = { status: 409, code: 'VERSION_CONFLICT' };
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+    await screen.findByTestId('timer-error');
+
+    // Without this the next press sends the same stale version and fails
+    // again, and again, with nothing on screen changing.
+    const patched = api.requests.findIndex((entry) => entry.method === 'PATCH');
+    expect(patched).toBeGreaterThanOrEqual(0);
+    expect(api.requests.slice(patched).some((entry) => entry.path.endsWith('/summary'))).toBe(true);
+  });
+
+  it('reports a request that never arrived as being offline', async () => {
+    api.add({ typeId: 'sleep', active: true, startedAt: Date.now() - HOUR });
+    const user = openSignedIn();
+    await waitForHome();
+
+    server.use(http.patch('/api/events/:eventId', () => HttpResponse.error()));
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+
+    expect(await screen.findByTestId('timer-error')).toHaveTextContent(zhTW.error.offline);
+  });
+});
+
+describe('an all-day event', () => {
+  it('asks for a date and no clock time', async () => {
+    openSignedIn('/add/milestone');
+
+    // A time the parent sets and the server then discards looks like the
+    // app losing their input (spec 3.9).
+    expect(await screen.findByTestId('started-at')).toHaveAttribute('type', 'date');
+  });
+
+  it('sends local midnight for the day that was picked', async () => {
+    const user = openSignedIn('/add/milestone');
+
+    await user.type(await screen.findByLabelText(metadataLabel('title')), USER_CONTENT.milestone);
+    await user.click(screen.getByTestId('submit'));
+
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    const sent = api.lastRequest('/events')?.body as Record<string, unknown>;
+    expect(sent['startedAt']).toBe(startOfLocalDay(toLocalDate(Date.now(), BABY.timezone), BABY.timezone));
   });
 });

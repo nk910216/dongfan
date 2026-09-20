@@ -17,6 +17,11 @@
   --color-ink-dim: #776e62;
   --color-accent: #e8b15c;
 
+  /* Warm amber rather than red: an overrun timer is something to sort out,
+     not an emergency, and red at 3am reads as one. */
+  --color-warn: #e8925c;
+  --color-warn-soft: #f0ae84;
+
   --font-sans: 'Noto Sans TC', system-ui, sans-serif;
   --font-numeric: 'Outfit', system-ui, sans-serif;
 }

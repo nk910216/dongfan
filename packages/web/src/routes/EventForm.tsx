@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
-import { eventTypeName, getEventType, zhTW } from '@dongfan/shared';
+import { deriveEventTimes, eventTypeName, getEventType, zhTW } from '@dongfan/shared';
 import type { EventIntent } from '@dongfan/shared';
 import { EventIcon } from '../components/EventIcon.js';
 import { EventFields, checkDraft, draftForValue } from '../components/EventFields.js';
 import type { EventDraft } from '../components/EventFields.js';
 import { ErrorLine } from '../components/FieldErrors.js';
+import { useCreateEvent } from '../lib/create-event.js';
 import { typeSummary, useStore } from '../lib/store.js';
 
 /**
@@ -20,14 +21,20 @@ import { typeSummary, useStore } from '../lib/store.js';
 export function EventForm(): React.JSX.Element {
   const { typeId = '' } = useParams();
   const navigate = useNavigate();
-  const { addEvent, baby, summary } = useStore();
+  const { baby, summary } = useStore();
+  const create = useCreateEvent();
   const type = getEventType(typeId);
 
   const [intent, setIntent] = useState<EventIntent>(type?.timerEnabled ? 'start_timer' : 'record');
   const [draft, setDraft] = useState<EventDraft>(() => ({
     // Captured once, then both shown and submitted. Reading the clock again
     // at submit time would store a different instant from the one displayed.
-    startedAt: Date.now(),
+    //
+    // Through the shared helper, so an all-day event starts at local
+    // midnight here as well as in the database. Sending the raw clock and
+    // letting the server pin it works, but then the form is showing one
+    // day's date while holding another day's instant (spec 3.9).
+    startedAt: type ? deriveEventTimes(type, Date.now(), 'record', baby.timezone).startedAt : Date.now(),
     endedAt: null,
     // Feed amounts repeat, so the last one is a better starting point than
     // an empty box. It still has to be confirmed rather than sent silently.
@@ -35,8 +42,7 @@ export function EventForm(): React.JSX.Element {
     note: '',
     metadata: {},
   }));
-  const [failure, setFailure] = useState<unknown>(null);
-  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
 
   if (!type) {
     return (
@@ -50,7 +56,7 @@ export function EventForm(): React.JSX.Element {
   const isTimer = type.timerEnabled && intent === 'start_timer';
 
   const submit = async (): Promise<void> => {
-    setFailure(null);
+    setLocalError(null);
 
     const checked = checkDraft(type, draft, intent, {
       now: Date.now(),
@@ -58,26 +64,20 @@ export function EventForm(): React.JSX.Element {
       birthDate: baby.birthDate,
     });
     if (!checked.ok) {
-      setFailure(checked.message);
+      setLocalError(checked.message);
       return;
     }
 
-    setBusy(true);
-    try {
-      await addEvent({
-        typeId: type.id,
-        intent,
-        startedAt: draft.startedAt,
-        endedAt: checked.endedAt,
-        value: checked.value,
-        note: draft.note,
-        metadata: draft.metadata,
-      });
-      navigate('/');
-    } catch (error) {
-      setFailure(error);
-      setBusy(false);
-    }
+    const created = await create.submit({
+      typeId: type.id,
+      intent,
+      startedAt: draft.startedAt,
+      endedAt: checked.endedAt,
+      value: checked.value,
+      note: draft.note,
+      metadata: draft.metadata,
+    });
+    if (created) navigate('/');
   };
 
   return (
@@ -116,27 +116,42 @@ export function EventForm(): React.JSX.Element {
           </>
         ) : null}
 
-        <EventFields
-          type={type}
-          draft={draft}
-          timeZone={baby.timezone}
-          showEnd={!isTimer}
-          onChange={(next) => { setDraft(next); setFailure(null); }}
-        />
+        <fieldset disabled={create.outcomeUnknown} className="border-0 p-0">
+          <EventFields
+            type={type}
+            draft={draft}
+            timeZone={baby.timezone}
+            showEnd={!isTimer}
+            onChange={(next) => { setDraft(next); setLocalError(null); }}
+          />
+        </fieldset>
 
-        <ErrorLine failure={failure} />
+        {/* Frozen on purpose. Changing the content now would send a
+            correction under an id the server may already hold, and the
+            server would answer with what it already has (spec 6.1). */}
+        {create.outcomeUnknown ? (
+          <p className="mb-4 text-xs leading-relaxed text-amber-300/90" data-testid="outcome-unknown">
+            {zhTW.addEvent.outcomeUnknown}
+          </p>
+        ) : null}
+
+        <ErrorLine failure={localError ?? create.failure} />
       </div>
 
       <div className="shrink-0 border-t border-line-soft px-4.5 pt-3 pb-6">
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={busy}
+          disabled={create.busy}
           data-testid="submit"
           className="min-h-11 w-full rounded-2xl py-4 text-base font-bold text-ground disabled:opacity-60"
           style={{ backgroundColor: type.color }}
         >
-          {busy ? zhTW.addEvent.saving : isTimer ? zhTW.addEvent.startTimer : zhTW.addEvent.save}
+          {create.busy
+            ? zhTW.addEvent.saving
+            : create.outcomeUnknown
+              ? zhTW.addEvent.retry
+              : isTimer ? zhTW.addEvent.startTimer : zhTW.addEvent.save}
         </button>
       </div>
     </div>

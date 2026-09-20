@@ -7,7 +7,7 @@ import {
 } from '@dongfan/shared';
 import { EventIcon, EventIconBadge } from '../components/EventIcon.js';
 import { ErrorLine } from '../components/FieldErrors.js';
-import { useStore } from '../lib/store.js';
+import { useCreateEvent } from '../lib/create-event.js';
 
 /**
  * Type picker, grouped by category.
@@ -18,32 +18,26 @@ import { useStore } from '../lib/store.js';
  */
 export function AddEvent(): React.JSX.Element {
   const navigate = useNavigate();
-  const { addEvent } = useStore();
-  const [failure, setFailure] = useState<unknown>(null);
-  const [busy, setBusy] = useState(false);
+  const create = useCreateEvent();
+  const [pressedAt] = useState(() => Date.now());
 
   const diaper = getEventType('diaper');
 
   const recordDiaper = async (kind: string): Promise<void> => {
-    if (!diaper || busy) return;
-    setBusy(true);
-    setFailure(null);
-    try {
-      await addEvent({
-        typeId: diaper.id,
-        intent: 'record',
-        // Read once, here: this is the moment the button was pressed, not
-        // whenever the request reached the server.
-        startedAt: Date.now(),
-        endedAt: null,
-        note: '',
-        metadata: { diaper_kind: kind },
-      });
-      navigate('/');
-    } catch (error) {
-      setFailure(error);
-      setBusy(false);
-    }
+    if (!diaper || create.busy) return;
+
+    // The shortcut retries through the same hook as the form, so tapping
+    // again after a failure reaches the same event rather than adding a
+    // second nappy to the day (spec 3.8).
+    const created = await create.submit({
+      typeId: diaper.id,
+      intent: 'record',
+      startedAt: pressedAt,
+      endedAt: null,
+      note: '',
+      metadata: { diaper_kind: kind },
+    });
+    if (created) navigate('/');
   };
 
   return (
@@ -66,7 +60,7 @@ export function AddEvent(): React.JSX.Element {
                 <button
                   key={kind}
                   type="button"
-                  disabled={busy}
+                  disabled={create.busy}
                   onClick={() => void recordDiaper(kind)}
                   className="flex min-h-11 flex-col items-center gap-1.5 rounded-2xl border p-3 disabled:opacity-60"
                   style={{ borderColor: `${diaper.color}55`, backgroundColor: `${diaper.color}14` }}
@@ -76,7 +70,12 @@ export function AddEvent(): React.JSX.Element {
                 </button>
               ))}
             </div>
-            <ErrorLine failure={failure} />
+            {create.outcomeUnknown ? (
+              <p className="mt-3 text-xs leading-relaxed text-amber-300/90" data-testid="outcome-unknown">
+                {zhTW.addEvent.outcomeUnknown}
+              </p>
+            ) : null}
+            <ErrorLine failure={create.failure} />
           </section>
         ) : null}
 

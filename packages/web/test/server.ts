@@ -41,6 +41,11 @@ class Api {
   requests: Recorded[] = [];
   /** Consumed by the next write, whichever endpoint it reaches. */
   nextFailure: Failure | null = null;
+  /**
+   * Stores the next event and then loses the reply, which is the case the
+   * client cannot tell apart from a refusal (spec 6.1).
+   */
+  loseNextResponse = false;
   loginFails = false;
   private rev = 0;
 
@@ -48,6 +53,7 @@ class Api {
     this.events = [];
     this.requests = [];
     this.nextFailure = null;
+    this.loseNextResponse = false;
     this.loginFails = false;
     this.rev = 0;
   }
@@ -83,9 +89,17 @@ class Api {
     return this.events.find((event) => event.id === id && event.deletedAt === null);
   }
 
-  /** The last request to a path containing the given fragment. */
+  /**
+   * The last write to a path containing the given fragment.
+   *
+   * Reads are skipped: `/events` also matches the summary and the day, and
+   * a test asking what was sent means the body of a write. Reads are still
+   * recorded, and `requests` has all of them in order.
+   */
   lastRequest(fragment: string): Recorded | undefined {
-    return [...this.requests].reverse().find((entry) => entry.path.includes(fragment));
+    return [...this.requests]
+      .reverse()
+      .find((entry) => entry.method !== 'GET' && entry.path.includes(fragment));
   }
 
   summary(): SummaryDto {
@@ -175,9 +189,13 @@ export const server = setupServer(
     return HttpResponse.json(ME);
   }),
 
-  http.get('/api/babies/:babyId/events/summary', () => HttpResponse.json(api.summary())),
+  http.get('/api/babies/:babyId/events/summary', async ({ request }) => {
+    await record(request);
+    return HttpResponse.json(api.summary());
+  }),
 
-  http.get('/api/babies/:babyId/events/day/:date', ({ params }) => {
+  http.get('/api/babies/:babyId/events/day/:date', async ({ request, params }) => {
+    await record(request);
     const date = String(params['date']);
     const events = api.events.filter((event) => event.deletedAt === null && event.localDate === date);
     const allDay = events.filter((event) => getEventType(event.typeId)?.allDay === true);
@@ -190,6 +208,11 @@ export const server = setupServer(
     const failure = pending();
     if (failure) return refuse(failure);
 
+    // Idempotency, because the retry rules on the client are meaningless
+    // without it: the same id must reach the same row (spec 5.8).
+    const already = api.find(String(body['id']));
+    if (already) return HttpResponse.json(already, { status: 200 });
+
     const created = api.add({
       id: String(body['id']),
       typeId: String(body['typeId']),
@@ -200,6 +223,11 @@ export const server = setupServer(
       metadata: (body['metadata'] ?? {}) as Record<string, string>,
       active: body['intent'] === 'start_timer',
     });
+    if (api.loseNextResponse) {
+      api.loseNextResponse = false;
+      // Stored, but the client will never hear so.
+      return HttpResponse.error();
+    }
     return HttpResponse.json(created, { status: 201 });
   }),
 

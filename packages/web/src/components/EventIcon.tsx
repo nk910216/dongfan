@@ -1,7 +1,7 @@
 import {
   Baby, Bandage, Blocks, CircleDashed, CircleEllipsis, CloudRain, Droplets,
   Footprints, Frown, Heart, Meh, Milk, Moon, Pill, Ruler, Scale, ShowerHead,
-  Smile, Star, Stethoscope, Syringe, Thermometer, Utensils,
+  Smile, Star, Stethoscope, Syringe, Thermometer, TriangleAlert, Utensils,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -28,6 +28,7 @@ const ICONS: Record<string, LucideIcon> = {
   syringe: Syringe,
   thermometer: Thermometer,
   bandage: Bandage,
+  'triangle-alert': TriangleAlert,
   pill: Pill,
   smile: Smile,
   meh: Meh,

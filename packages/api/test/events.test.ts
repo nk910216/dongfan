@@ -490,3 +490,87 @@ describe('deleting an event', () => {
     expect(response.status).toBe(404);
   });
 });
+
+describe('two requests carrying the same id', () => {
+  it('never hands one baby’s event to a request for another', async () => {
+    const sibling = await createBaby(token, { nickname: 'Sibling', birthDate: '2026-03-08' });
+    const shared = newId();
+
+    const [a, b] = await Promise.all([
+      postEvent(token, babyId, { id: shared, typeId: 'bottle', value: 100, note: 'first baby' }),
+      postEvent(token, sibling, { id: shared, typeId: 'bottle', value: 100, note: 'second baby' }),
+    ]);
+
+    // One of them created it; the other must be told the id is taken and be
+    // shown nothing. Whichever way the two interleave, the answer is the
+    // same: the path proves access to one baby, the id proves nothing.
+    const statuses = [a.status, b.status].sort();
+    expect(statuses).toEqual([201, 409]);
+
+    const loser = a.status === 409 ? a : b;
+    const text = await loser.text();
+    expect(JSON.parse(text).error.code).toBe('ID_CONFLICT');
+    expect(text).not.toContain('first baby');
+    expect(text).not.toContain('second baby');
+  });
+
+  it('does not let the loser attach its own tags to the winner’s event', async () => {
+    const mine = await createTag(token, babyId, 'mine');
+    const theirs = await createTag(token, babyId, 'theirs');
+    const shared = newId();
+    const startedAt = Date.now();
+
+    const [a, b] = await Promise.all([
+      postEvent(token, babyId, { id: shared, typeId: 'bottle', value: 100, startedAt, tagIds: [mine] }),
+      postEvent(token, babyId, { id: shared, typeId: 'bottle', value: 100, startedAt, tagIds: [theirs] }),
+    ]);
+
+    // Exactly one creation. The other is a resend by definition, and a
+    // resend changes nothing at all (spec 5.8).
+    expect([a.status, b.status].sort()).toEqual([200, 201]);
+
+    const stored = await json<StoredEvent>(
+      await request(`/api/events/${shared}`, {}, token),
+    );
+    expect(stored.tagIds).toHaveLength(1);
+    expect(stored.version).toBe(1);
+    expect(stored.rev).toBe(1);
+  });
+
+  it('rolls the tag writes back when the id turns out to be taken', async () => {
+    // The statements the create path sends, driven directly, because the
+    // handler returns before reaching them on a sequential resend. Inside a
+    // batch there is no branching: the only thing that can stop the tag
+    // writes is the insert before them failing. An `ON CONFLICT DO NOTHING`
+    // there would let them through, onto a row this request did not create,
+    // with no version and no rev to tell another device about it.
+    const tagId = await createTag(token, babyId, 'evening');
+    const first = await createEvent(token, babyId, { typeId: 'bottle', value: 100 });
+
+    const now = first.startedAt + 1000;
+    const batch = env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO events (id, baby_id, type_id, created_by, created_at, updated_at,
+                             started_at, ended_at, local_date, value, note, metadata,
+                             version, rev, active, deleted_at)
+         VALUES (?, ?, 'bottle', ?, ?, ?, ?, NULL, ?, 1, '', '{}', 1,
+                 (SELECT COALESCE(MAX(rev), 0) + 1 FROM events WHERE baby_id = ?), NULL, NULL)`,
+      ).bind(first.id, babyId, userId, now, now, now, first.localDate, babyId),
+      env.DB.prepare(
+        `INSERT INTO event_tags (event_id, tag_id)
+         SELECT e.id, t.id
+           FROM events e
+           JOIN tags t ON t.baby_id = e.baby_id
+          WHERE e.id = ? AND t.id = ? AND e.baby_id = ?
+         ON CONFLICT DO NOTHING`,
+      ).bind(first.id, tagId, babyId),
+    ]);
+
+    await expect(batch).rejects.toThrow();
+
+    const after = await json<StoredEvent>(await request(`/api/events/${first.id}`, {}, token));
+    expect(after.tagIds).toEqual([]);
+    expect(after.version).toBe(first.version);
+    expect(after.rev).toBe(first.rev);
+  });
+});

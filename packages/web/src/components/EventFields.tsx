@@ -88,14 +88,15 @@ export function EventFields({
 
   return (
     <>
-      {/* An all-day event keeps the same control: whatever hour is picked,
-          the server pins it to local midnight, so the two cannot disagree
-          about which day it lands on (spec 3.9). */}
+      {/* An all-day event has no clock time, so the control does not offer
+          one. The server pins it to local midnight either way; showing a
+          time the parent then loses is the part worth avoiding (spec 3.9). */}
       <DateTimeField
         label={zhTW.addEvent.startedAt}
         value={draft.startedAt}
         timeZone={timeZone}
         testId="started-at"
+        dateOnly={type.allDay}
         onChange={(startedAt) => patch({ startedAt })}
       />
 

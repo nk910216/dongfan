@@ -48,7 +48,12 @@ export type Store = {
   stale: boolean;
   refresh: () => Promise<void>;
   findEvent: (eventId: string) => Promise<EventDto>;
-  addEvent: (input: NewEventInput) => Promise<EventDto>;
+  /**
+   * The id is the caller's, not this function's. Generating one here would
+   * mean a second press after a failure created a second event, which is
+   * the one thing idempotency exists to prevent (spec 3.8, 6.1).
+   */
+  addEvent: (eventId: string, input: NewEventInput) => Promise<EventDto>;
   updateEvent: (eventId: string, version: number, patch: EventPatch) => Promise<EventDto>;
   stopTimer: (eventId: string, version: number, endedAt: number) => Promise<EventDto>;
   removeEvent: (eventId: string, version: number) => Promise<void>;
@@ -164,12 +169,10 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
   }, []);
 
   const addEvent = useCallback(
-    async (input: NewEventInput): Promise<EventDto> => {
+    async (eventId: string, input: NewEventInput): Promise<EventDto> => {
       const created = await call<EventDto>(`/babies/${baby.id}/events`, {
         method: 'POST',
-        // The id is generated here and never regenerated, because it is the
-        // idempotency key the server deduplicates on (spec 3.8).
-        body: { id: newEventId(), ...input },
+        body: { id: eventId, ...input },
       });
       await settle();
       return created;

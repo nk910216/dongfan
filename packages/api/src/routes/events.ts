@@ -29,20 +29,43 @@ import type { Env } from '../lib/types.js';
 export const babyEventRoutes = new Hono<Env>();
 export const eventRoutes = new Hono<Env>();
 
+/**
+ * Creating the event.
+ *
+ * Note what is absent: `ON CONFLICT(id) DO NOTHING`. Spec 5.8 describes it,
+ * and for the statement alone it is right -- a duplicate id must not reach
+ * the client as an error, or an offline queue loops forever on it. But this
+ * statement does not travel alone. It shares a batch with the tag writes,
+ * and a batch rolls back only when a statement *fails*: swallowing the
+ * conflict here lets the insert do nothing while the tag writes carry on,
+ * attaching this request's tags to a row it did not create, with no version
+ * and no rev to show for it. Another device would never learn of the change.
+ *
+ * So the conflict is allowed to fail the batch, which is what makes the
+ * event and its tags all-or-nothing (spec 4.3), and the handler turns it
+ * into the 200 that spec 5.8 asks for. The queue sees no error either way.
+ *
+ * An earlier attempt guarded the tag writes on `created_at` and
+ * `created_by` instead. Two requests a millisecond apart share both.
+ */
 const INSERT_EVENT = `
 INSERT INTO events (
   id, baby_id, type_id, created_by, created_at, updated_at,
   started_at, ended_at, local_date, value, note, metadata,
   version, rev, active, deleted_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ${NEXT_REV}, ?, NULL)
-ON CONFLICT(id) DO NOTHING`;
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ${NEXT_REV}, ?, NULL)`;
 
 /**
  * Attaching a tag, with the ownership checks inside the statement.
  *
- * Both the event and the tag have to belong to the same baby, or a valid tag
- * id from one family could be hung on another family's event (spec 4.3).
- * Expressed as a join so the guard cannot be forgotten at a call site.
+ * Both the event and the tag have to belong to the same baby, or a valid
+ * tag id from one family could be hung on another family's event
+ * (spec 4.3). Expressed as a join so the guard cannot be forgotten at a
+ * call site.
+ *
+ * Nothing here checks that the event is new. It does not have to: on a
+ * duplicate id the insert above fails and takes this statement down with
+ * it.
  */
 const ATTACH_TAG = `
 INSERT INTO event_tags (event_id, tag_id)
@@ -95,6 +118,25 @@ UPDATE events
        rev = ${NEXT_REV}
  WHERE id = ? AND version = ? AND deleted_at IS NULL`;
 
+/**
+ * Reading an event back during a create, scoped to the baby on the path.
+ *
+ * Every read-back in this handler goes through here. Matching on the id
+ * alone would let a POST return an event belonging to another baby: the
+ * path proves access to one baby, and the id proves nothing at all
+ * (spec 5.8). The first check in the handler had this; the ones after the
+ * write did not, which a concurrent pair of requests could reach.
+ */
+async function readBack(
+  db: Env['Variables']['db'],
+  eventId: string,
+  babyId: string,
+): Promise<{ row: EventRow } | 'foreign' | null> {
+  const row = await findEvent(db, eventId);
+  if (!row) return null;
+  return row.babyId === babyId ? { row } : 'foreign';
+}
+
 function unknownType(typeId: string): FieldError[] {
   return [{ field: 'typeId', code: 'INVALID_ENUM', params: { typeId } }];
 }
@@ -120,6 +162,7 @@ babyEventRoutes.post('/:babyId/events', requireBabyAccess(), async (c) => {
   const input = parsed.data;
   const db = c.get('db');
   const baby = c.get('baby');
+  const userId = c.get('user').id;
 
   // Idempotency first, before any other check.
   //
@@ -128,11 +171,9 @@ babyEventRoutes.post('/:babyId/events', requireBabyAccess(), async (c) => {
   // failed by a limit or a rule (spec 5.8). Read back scoped to the baby:
   // matching on the id alone would let a POST read out an event belonging
   // to someone else's baby, bypassing the check on the path.
-  const existing = await findEvent(db, input.id);
-  if (existing) {
-    if (existing.babyId !== baby.id) return fail(c, 'ID_CONFLICT');
-    return c.json(toEventResponse(existing, await tagIdsFor(db, input.id)), 200);
-  }
+  const existing = await readBack(db, input.id, baby.id);
+  if (existing === 'foreign') return fail(c, 'ID_CONFLICT');
+  if (existing) return c.json(toEventResponse(existing.row, await tagIdsFor(db, input.id)), 200);
 
   const type = getEventType(input.typeId);
   if (!type) return failValidation(c, unknownType(input.typeId));
@@ -156,7 +197,7 @@ babyEventRoutes.post('/:babyId/events', requireBabyAccess(), async (c) => {
 
   const statements = [
     c.env.DB.prepare(INSERT_EVENT).bind(
-      input.id, baby.id, type.id, c.get('user').id, now, now,
+      input.id, baby.id, type.id, userId, now, now,
       times.startedAt, times.endedAt, localDate,
       input.value ?? 1, input.note ?? '', JSON.stringify(input.metadata ?? {}),
       baby.id, times.active ? 1 : null,
@@ -172,19 +213,24 @@ babyEventRoutes.post('/:babyId/events', requireBabyAccess(), async (c) => {
     // driver's error text: message formats are not a contract, and reading
     // one wrong turns two phones racing to start the same timer into a 500
     // instead of the answer the second one needs (spec 3.5).
-    const after = await loadEvent(db, input.id);
-    if (after) return c.json(after, 200);
+    //
+    // Nothing was written, whichever it was: the batch rolled back.
+    const after = await readBack(db, input.id, baby.id);
+    if (after === 'foreign') return fail(c, 'ID_CONFLICT');
+    // The id is already taken by an event of this baby, so this is a
+    // resend that raced the original and lost. It is still a resend
+    // (spec 5.8).
+    if (after) return c.json(toEventResponse(after.row, await tagIdsFor(db, input.id)), 200);
     if (times.active && (await hasRunningTimer(c.env.DB, baby.id, type.id))) {
       return fail(c, 'ACTIVE_TIMER_EXISTS');
     }
     throw error;
   }
 
-  const created = await loadEvent(db, input.id);
-  // The insert was a no-op and nothing is there: the only way that happens
-  // is a concurrent request holding the active slot.
-  if (!created) return fail(c, 'ACTIVE_TIMER_EXISTS');
-  return c.json(created, 201);
+  // The batch committed, so this request is the one that wrote the row.
+  const stored = await readBack(db, input.id, baby.id);
+  if (!stored || stored === 'foreign') return fail(c, 'INTERNAL');
+  return c.json(toEventResponse(stored.row, await tagIdsFor(db, input.id)), 201);
 });
 
 async function countOnDate(DB: D1Database, babyId: string, localDate: string): Promise<number> {
