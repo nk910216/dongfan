@@ -265,6 +265,8 @@ the offline layer in M2, and this list has to be revisited then.
   `--remote` to a `wrangler d1` command, to `scripts/backup.sh`, or to
   `scripts/users.mjs`. `npm run db:migrate:remote` is the same rule.
 - Never pass `--env production` to anything.
+- `--weak-password` is the owner's, for the local database, and is refused
+  with `--remote`. Never weaken the length policy itself to work around it.
 - Never open a database that holds the owner's real records.
 - Never run `wrangler deploy`.
 

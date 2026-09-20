@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  banner, isWrite, needsConfirmation, parseArgs, targetFor,
+  banner, isWrite, needsConfirmation, parseArgs, targetFor, weakPasswordAllowed,
 } from '../lib/cli-target.mjs';
 
 /**
@@ -17,6 +17,7 @@ describe('reading the arguments', () => {
       args: ['alice', 'baby-1', 'owner'],
       remote: false,
       assumeYes: false,
+      weakPassword: false,
     });
   });
 
@@ -103,5 +104,31 @@ describe('the banner', () => {
     expect(text).toContain('dongfan-dev');
     expect(text).toContain('local');
     expect(text).not.toContain('REMOTE');
+  });
+});
+
+describe('a password shorter than the policy', () => {
+  it('is allowed on the local database', () => {
+    // Twenty-four generated characters typed into a phone, repeatedly, to
+    // check whether a button is reachable, is its own kind of bad idea.
+    expect(weakPasswordAllowed({ remote: false, weakPassword: true })).toBe(true);
+  });
+
+  it('is refused for the deployed one', () => {
+    // The minimum is what protects a database that could leak, and the
+    // whole value of the rule is that it has no exceptions where it counts
+    // (spec 9.3).
+    expect(weakPasswordAllowed({ remote: true, weakPassword: true })).toBe(false);
+  });
+
+  it('is off unless asked for', () => {
+    expect(weakPasswordAllowed({ remote: false, weakPassword: false })).toBe(false);
+    expect(weakPasswordAllowed({ remote: false })).toBe(false);
+  });
+
+  it('is pulled out of the arguments either way', () => {
+    const parsed = parseArgs(['password', '--weak-password', 'alice']);
+    expect(parsed.args).toEqual(['alice']);
+    expect(parsed.weakPassword).toBe(true);
   });
 });

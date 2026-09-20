@@ -59,6 +59,24 @@ npm run users -- create <name>           # a new account
 `password` prints the new password once and there is no way to read it
 back. Take it to the phone before closing the terminal.
 
+Typing twenty-four generated characters into a phone, repeatedly, to check
+whether a button is reachable is its own kind of bad idea. For that:
+
+```sh
+npm run users -- password dev-parent-a --weak-password
+```
+
+It then accepts anything, including `123`. The flag works on the local
+database only and is **refused outright** with `--remote`: the minimum
+length exists because the platform caps hashing cost far below what OWASP
+asks for, which leaves length as the thing actually protecting a database
+that could leak (spec 9.3) — and a scratch database of invented records on
+a home network is not that one.
+
+Logging in never checks the minimum, by design, so an account whose
+password was set this way keeps working if the policy is later raised. Do
+not carry one of these to a deployed database; make a fresh account there.
+
 If the database is empty, create an account, sign in, and the app will ask
 you to create the first baby — that is the only thing it can do at that
 point, and it is the whole of the setup.

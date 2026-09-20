@@ -31,16 +31,36 @@ export function parseArgs(argv) {
   const rest = [];
   let remote = false;
   let assumeYes = false;
+  let weakPassword = false;
 
   for (const argument of argv) {
     if (argument === '--remote') remote = true;
     else if (argument === '--local') remote = false;
     else if (argument === '--yes' || argument === '-y') assumeYes = true;
+    else if (argument === '--weak-password') weakPassword = true;
     else rest.push(argument);
   }
 
   const [command, ...args] = rest;
-  return { command, args, remote, assumeYes };
+  return { command, args, remote, assumeYes, weakPassword };
+}
+
+/**
+ * Whether a password shorter than the policy may be set.
+ *
+ * Only on the local database. The minimum exists because the platform caps
+ * hashing cost far below what OWASP asks for, which leaves length as the
+ * thing actually protecting the database if it ever leaks (spec 9.3) --
+ * and the database that could leak is the deployed one. A scratch database
+ * of invented records on a home network is not that, and typing
+ * twenty-four generated characters into a phone to check whether a button
+ * is reachable is its own kind of bad idea.
+ *
+ * Refused for the deployed database rather than discouraged, because the
+ * whole value of the rule is that it has no exceptions where it counts.
+ */
+export function weakPasswordAllowed({ remote, weakPassword }) {
+  return weakPassword === true && remote === false;
 }
 
 export function targetFor(remote) {

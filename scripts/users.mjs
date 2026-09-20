@@ -24,8 +24,10 @@ import { createInterface } from 'node:readline/promises';
 import {
   MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, hashPassword, isPasswordLengthValid, passwordLength,
 } from '../packages/shared/dist/index.js';
-import { executeOn, literal } from './lib/d1.mjs';
-import { banner, needsConfirmation, parseArgs, targetFor } from './lib/cli-target.mjs';
+import { DEV_DATABASE, executeOn, literal } from './lib/d1.mjs';
+import {
+  banner, needsConfirmation, parseArgs, targetFor, weakPasswordAllowed,
+} from './lib/cli-target.mjs';
 
 const GENERATED_PASSWORD_BYTES = 18; // 24 base64url characters, 144 bits.
 
@@ -51,13 +53,31 @@ async function resolvePassword() {
   const chosen = await promptPassword();
   if (chosen === '') return { password: generatePassword(), generated: true };
 
-  if (!isPasswordLengthValid(chosen)) {
+  // The upper bound holds either way: it is a limit on work, not on
+  // secrecy, and the worker has ten milliseconds of CPU for the whole
+  // request however local the database is.
+  if (passwordLength(chosen) > MAX_PASSWORD_LENGTH) {
     throw new Error(
-      `Password must be between ${MIN_PASSWORD_LENGTH} and ${MAX_PASSWORD_LENGTH} ` +
-        `characters; that one is ${passwordLength(chosen)}. ` +
-        'Leave the prompt blank to generate one.',
+      `Password must be at most ${MAX_PASSWORD_LENGTH} characters; ` +
+        `that one is ${passwordLength(chosen)}.`,
     );
   }
+
+  if (!isPasswordLengthValid(chosen)) {
+    if (!allowWeak) {
+      throw new Error(
+        `Password must be at least ${MIN_PASSWORD_LENGTH} characters; ` +
+          `that one is ${passwordLength(chosen)}. ` +
+          'Leave the prompt blank to generate one, or pass --weak-password ' +
+          'to use a short one on the local database.',
+      );
+    }
+    console.error(
+      `\n  Short password on ${DEV_DATABASE}. Fine for a scratch database of\n` +
+        '  invented records; never for one holding real ones.\n',
+    );
+  }
+
   return { password: chosen, generated: false };
 }
 
@@ -69,6 +89,9 @@ async function resolvePassword() {
  * whole point is that there is no default.
  */
 let target = null;
+
+/** Set from the command line, and only ever true for the local database. */
+let allowWeak = false;
 
 function execute(sql) {
   if (target === null) throw new Error('No database chosen');
@@ -195,7 +218,7 @@ const commands = {
   },
 };
 
-const { command, args, remote, assumeYes } = parseArgs(process.argv.slice(2));
+const { command, args, remote, assumeYes, weakPassword } = parseArgs(process.argv.slice(2));
 
 if (!command || !(command in commands)) {
   console.error(`Usage: node scripts/users.mjs <command> [args]
@@ -210,9 +233,11 @@ if (!command || !(command in commands)) {
   babies                           List babies and their member counts
 
 Flags:
-  --remote    Work on the deployed database instead of the local one.
-              Writes ask you to type the database name first.
-  --local     The default, stated explicitly.
+  --remote          Work on the deployed database instead of the local one.
+                    Writes ask you to type the database name first.
+  --local           The default, stated explicitly.
+  --weak-password   Accept a password shorter than the policy. Local only,
+                    and refused outright with --remote.
 
 Without --remote everything here works on dongfan-dev, a scratch database
 holding invented records only.`);
@@ -227,7 +252,16 @@ if (assumeYes) {
   process.exit(1);
 }
 
+if (weakPassword && remote) {
+  // Refused rather than ignored or warned about. The minimum is what
+  // protects the deployed database, and an exception to it is not a thing
+  // that should exist anywhere in this file (spec 9.3).
+  console.error('Error: --weak-password is for the local database only.');
+  process.exit(1);
+}
+
 target = targetFor(remote);
+allowWeak = weakPasswordAllowed({ remote, weakPassword });
 process.stderr.write(banner(target));
 
 try {
