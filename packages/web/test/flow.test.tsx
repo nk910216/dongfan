@@ -1334,9 +1334,14 @@ describe('when stopping a timer fails', () => {
 
     // Without this the next press sends the same stale version and fails
     // again, and again, with nothing on screen changing.
-    const patched = api.requests.findIndex((entry) => entry.method === 'PATCH');
-    expect(patched).toBeGreaterThanOrEqual(0);
-    expect(api.requests.slice(patched).some((entry) => entry.path.endsWith('/summary'))).toBe(true);
+    //
+    // Waited for: the refresh goes through the same one-at-a-time lane as
+    // every other sync, so it may be queued behind one already running.
+    await waitFor(() => {
+      const patched = api.requests.findIndex((entry) => entry.method === 'PATCH');
+      expect(patched).toBeGreaterThanOrEqual(0);
+      expect(api.requests.slice(patched).some((entry) => entry.path.endsWith('/summary'))).toBe(true);
+    });
   });
 
   it('reports a request that never arrived as being offline', async () => {

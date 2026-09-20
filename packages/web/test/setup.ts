@@ -5,6 +5,7 @@ import { cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { api, server } from './server.js';
 import { closeDb } from '../src/lib/db.js';
+import { resetLanes } from '../src/lib/lane.js';
 
 /**
  * A working Storage for the tests.
@@ -80,6 +81,7 @@ afterEach(() => {
   // A brand new IndexedDB for every test. Emptying the stores would leave
   // whatever the previous test's sync cursor was, and a cursor is exactly
   // the thing that makes a sync quietly return nothing.
+  resetLanes();
   closeDb();
   globalThis.indexedDB = new IDBFactory();
   // A test may have left a Storage that throws in place.

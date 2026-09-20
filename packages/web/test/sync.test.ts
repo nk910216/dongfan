@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { EventDto, EventPageDto } from '@dongfan/shared';
+import type { SummaryDto } from '@dongfan/shared';
 import {
-  allEvents, applyPage, eventsOnDate, findEvent, readMeta, scopeOf,
+  allEvents, applyPage, eventsOnDate, findEvent, readMeta, scopeOf, writeSummary,
 } from '../src/lib/db.js';
 import { syncEvents } from '../src/lib/sync.js';
 
@@ -144,6 +145,58 @@ describe('keeping accounts apart', () => {
     // history, permanently.
     expect((await readMeta(MINE)).cursor).toBe(9);
     expect((await readMeta(THEIRS)).cursor).toBe(1);
+  });
+});
+
+describe('a reply that set out earlier and arrived later', () => {
+  function summary(totalBottleMl: number): SummaryDto {
+    return {
+      date: '2026-09-20',
+      types: [],
+      today: { totalBottleMl, diaper: { pee: 0, poo: 0, both: 0, unknown: 0, total: 0 } },
+      lastFeedAt: null,
+    };
+  }
+
+  it('cannot move the cursor backwards', async () => {
+    await applyPage(MINE, [event('a', 10)], 10);
+    // A page from a request made before that one, answering after it.
+    await applyPage(MINE, [event('b', 5)], 5);
+
+    // Left at five, every later sync would ask for six onwards again --
+    // for ever, and with nothing to show that it was happening.
+    expect((await readMeta(MINE)).cursor).toBe(10);
+  });
+
+  it('still keeps the rows that late page carried', async () => {
+    await applyPage(MINE, [event('a', 10)], 10);
+    await applyPage(MINE, [event('b', 5)], 5);
+
+    // The cursor not moving back is not a reason to throw the events away:
+    // they are rows we did not have.
+    expect((await allEvents(MINE)).map((e) => e.id).sort()).toEqual(['a', 'b']);
+  });
+
+  it('cannot write an older summary over a newer one', async () => {
+    await writeSummary(MINE, summary(240), 10);
+    await writeSummary(MINE, summary(120), 5);
+
+    // The figures going backwards while the header says the sync just
+    // succeeded is the worst of both.
+    expect((await readMeta(MINE)).summary?.today.totalBottleMl).toBe(240);
+  });
+
+  it('takes a summary fetched at the same point, because today moves', async () => {
+    await writeSummary(MINE, summary(240), 10);
+    await writeSummary(MINE, summary(300), 10);
+
+    // Two pulls that found nothing new still describe different moments.
+    expect((await readMeta(MINE)).summary?.today.totalBottleMl).toBe(300);
+  });
+
+  it('takes the first summary there has ever been', async () => {
+    await writeSummary(MINE, summary(120), 0);
+    expect((await readMeta(MINE)).summary?.today.totalBottleMl).toBe(120);
   });
 });
 

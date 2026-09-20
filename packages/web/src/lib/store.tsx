@@ -6,6 +6,7 @@ import type { BabyDto, EventDto, EventIntent, SummaryDto, TypeSummaryDto } from 
 import { ApiFailure, apiRequest } from './api.js';
 import * as local from './db.js';
 import { scopeOf } from './db.js';
+import { runExclusive } from './lane.js';
 import { syncEvents, syncSummary } from './sync.js';
 import { useSession } from './session.js';
 
@@ -149,8 +150,10 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
   const refresh = useCallback(async () => {
     await readLocal();
 
-    await syncEvents(scope, baby.id, call);
-    const next = await syncSummary(scope, baby.id, call);
+    const { cursor } = await syncEvents(scope, baby.id, call);
+    // Tagged with the cursor it was fetched at, which is the only thing
+    // that orders two summaries.
+    const next = await syncSummary(scope, baby.id, call, cursor);
 
     setEvents(allDayFirst(await local.eventsOnDate(scope, today)));
     setSummary(next);
@@ -193,16 +196,23 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
    * two small responses is far below the cost of getting the subset wrong.
    */
   const settle = useCallback(async (): Promise<void> => {
-    setSyncing(true);
-    try {
-      await refreshRef.current();
-      setStale(false);
-    } catch {
-      setStale(true);
-    } finally {
-      setSyncing(false);
-    }
-  }, []);
+    // One at a time for this baby. Four things ask for a sync and none of
+    // them knew about the others, so the one that answered last won -- and
+    // that is not the one that asked last. A request arriving during a run
+    // is queued rather than dropped, because a record written during a slow
+    // pull needs the refresh it asked for.
+    await runExclusive(scope, async () => {
+      setSyncing(true);
+      try {
+        await refreshRef.current();
+        setStale(false);
+      } catch {
+        setStale(true);
+      } finally {
+        setSyncing(false);
+      }
+    });
+  }, [scope]);
 
   /**
    * Pulls again when the app comes back.

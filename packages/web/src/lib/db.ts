@@ -76,6 +76,15 @@ export type SyncMeta = {
    */
   summary: SummaryDto | null;
   summaryAt: number | null;
+  /**
+   * The cursor the sync had reached when that summary was fetched.
+   *
+   * A summary carries no version of its own, so this is what orders two of
+   * them. Without it a slow request can write its older view over a newer
+   * one, and the figures on the home screen go backwards while the header
+   * says the sync just succeeded.
+   */
+  summaryCursor: number;
 };
 
 interface DongfanDb extends DBSchema {
@@ -125,17 +134,34 @@ const EMPTY_META = (scope: Scope): SyncMeta => ({
   syncedAt: null,
   summary: null,
   summaryAt: null,
+  summaryCursor: -1,
 });
 
 export async function readMeta(scope: Scope): Promise<SyncMeta> {
   return (await (await db()).get('meta', scope)) ?? EMPTY_META(scope);
 }
 
-export async function writeSummary(scope: Scope, summary: SummaryDto): Promise<void> {
+/**
+ * Keeps a summary, unless a newer one is already here.
+ *
+ * `atCursor` is how far the sync had got when this was fetched, which is
+ * the only ordering a summary has. Equal counts as newer: two pulls that
+ * found nothing new still describe different moments, since "today" moves
+ * on its own.
+ */
+export async function writeSummary(
+  scope: Scope,
+  summary: SummaryDto,
+  atCursor: number,
+): Promise<void> {
   const database = await db();
   const tx = database.transaction('meta', 'readwrite');
   const meta = (await tx.store.get(scope)) ?? EMPTY_META(scope);
-  await tx.store.put({ ...meta, summary, summaryAt: Date.now() });
+
+  if (atCursor >= meta.summaryCursor) {
+    await tx.store.put({ ...meta, summary, summaryAt: Date.now(), summaryCursor: atCursor });
+  }
+
   await tx.done;
 }
 
@@ -173,7 +199,14 @@ export async function applyPage(
 
   const metaStore = tx.objectStore('meta');
   const meta = (await metaStore.get(scope)) ?? EMPTY_META(scope);
-  await metaStore.put({ ...meta, cursor, syncedAt: Date.now() });
+  // Never backwards. A page from a request that set out earlier and
+  // answered later ends at a lower rev, and moving the cursor back to it
+  // would re-ask for everything in between on every sync from then on.
+  //
+  // Restoring an older backup does move the server's revs back, and that
+  // is handled by resetting the client deliberately rather than by letting
+  // a cursor drift down (spec 12.2).
+  await metaStore.put({ ...meta, cursor: Math.max(meta.cursor, cursor), syncedAt: Date.now() });
 
   await tx.done;
   return applied;

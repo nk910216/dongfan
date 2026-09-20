@@ -70,7 +70,8 @@ export async function syncEvents(
 }
 
 /**
- * Fetches the summary and keeps a copy.
+ * Fetches the summary and keeps a copy, tagged with how far the sync had
+ * got when it was asked for.
  *
  * Always from the server. What changes when an event moves is not something
  * a client can work out -- a sleep that began last night alters today's
@@ -82,8 +83,9 @@ export async function syncSummary(
   scope: Scope,
   babyId: string,
   fetch: Fetcher,
+  atCursor: number,
 ): Promise<SummaryDto> {
   const summary = await fetch<SummaryDto>(`/babies/${babyId}/events/summary`);
-  await writeSummary(scope, summary);
+  await writeSummary(scope, summary, atCursor);
   return summary;
 }
