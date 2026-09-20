@@ -25,7 +25,9 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'web',
-          include: ['packages/web/test/**/*.test.tsx'],
+          // Not only .tsx: the storage rules are plain functions, and
+          // making them a component test to be collected would hide them.
+          include: ['packages/web/test/**/*.test.{ts,tsx}'],
           environment: 'jsdom',
           setupFiles: ['./packages/web/test/setup.ts'],
         },

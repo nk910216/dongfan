@@ -28,12 +28,23 @@ import type { NewEventInput } from './store.js';
 const KEY = 'dongfan.pending-creates';
 
 /**
- * More unresolved adds than this means something is badly wrong -- the one
- * runaway case the write guardrails exist for (spec 5.7). The oldest is
- * dropped rather than refusing to record, because refusing would lose the
- * record a parent is making right now.
+ * There is no ceiling on how many entries this holds, and that is
+ * deliberate.
+ *
+ * A cap was here, dropping the oldest once there were ten. It was the same
+ * bug as the single slot it replaced, spelled differently: the eleventh add
+ * silently deleted the first one's id, and that id is the only thing
+ * standing between a retry and a duplicate record. An entry only exists
+ * because its outcome is unknown, which means the server may already hold
+ * it -- there is no version of "make room" that does not throw away
+ * something a parent wrote.
+ *
+ * Nothing retries by itself, so this cannot run away on its own: an entry
+ * is added only when a request a parent made ends in silence, and removed
+ * as soon as one gets an answer. If a limit is ever wanted, it has to
+ * refuse to send *before* the request goes out, where there is still
+ * nothing to lose.
  */
-const MAX_PENDING = 10;
 
 export type PendingCreate = {
   userId: string;
@@ -70,7 +81,7 @@ function readAll(): PendingCreate[] {
 
 function writeAll(entries: PendingCreate[]): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(entries.slice(-MAX_PENDING)));
+    localStorage.setItem(KEY, JSON.stringify(entries));
   } catch {
     // Without storage the retry still works for as long as the screen
     // stays up, which is the common case.
