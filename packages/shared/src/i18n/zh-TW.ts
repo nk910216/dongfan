@@ -14,6 +14,17 @@ export const zhTW = {
   app: {
     name: '東凡',
     noValue: '--',
+    loading: '載入中…',
+    noBaby: '這個帳號還沒有寶寶，請先用管理工具建立一個。',
+  },
+
+  auth: {
+    title: '登入',
+    username: '帳號',
+    password: '密碼',
+    submit: '登入',
+    pending: '登入中…',
+    signOut: '登出',
   },
 
   /** Labels read aloud by screen readers; invisible, but still user-facing. */
@@ -103,6 +114,8 @@ export const zhTW = {
     syncedJustNow: '剛剛同步',
     emptyTitle: '今天還沒有紀錄',
     emptyHint: '點右下角的 ＋ 開始',
+    syncing: '同步中…',
+    syncFailed: '同步失敗',
   },
 
   timer: {
@@ -123,6 +136,10 @@ export const zhTW = {
     inProgress: '進行中',
     duration: '{hours} 小時 {minutes} 分',
     durationMinutes: '{minutes} 分',
+    edit: '編輯紀錄',
+    deleteConfirm: '確定要刪除這筆紀錄嗎？刪除後另一支手機也會一起移除。',
+    deleteConfirmYes: '刪除',
+    open: '開啟 {name} 的紀錄',
   },
 
   addEvent: {
@@ -138,8 +155,17 @@ export const zhTW = {
     tags: '標籤',
     addTag: '＋ 新增',
     save: '儲存',
+    saving: '儲存中…',
     cancel: '取消',
     delete: '刪除',
+    endNow: '設為現在',
+    clearEnd: '清除',
+    endedAtEmpty: '尚未填寫',
+  },
+
+  conflict: {
+    body: '你的變更尚未儲存。重新載入後可再編輯一次。',
+    reload: '重新載入',
   },
 
   error: {
@@ -147,6 +173,7 @@ export const zhTW = {
     FORBIDDEN: '沒有權限進行這個操作',
     NOT_FOUND: '找不到這筆資料',
     VERSION_CONFLICT: '這筆資料已被其他人修改',
+    ID_CONFLICT: '這個紀錄編號已經用在別的寶寶身上',
     VALIDATION_FAILED: '輸入有誤，請檢查標示的欄位',
     RATE_LIMITED: '操作太頻繁，請稍後再試',
     DAILY_LIMIT_EXCEEDED: '今日新增數量已達上限',
@@ -168,6 +195,7 @@ export const zhTW = {
     END_BEFORE_START: '結束時間不可早於開始時間',
     DURATION_TOO_LONG: '單筆紀錄不可超過 {maxHours} 小時',
     TOO_FAR_IN_FUTURE: '時間不可超過 {maxDays} 天之後',
+    BEFORE_BIRTH: '時間不可早於寶寶的出生日',
     UNKNOWN: '輸入有誤',
   },
 } as const;

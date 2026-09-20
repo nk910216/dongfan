@@ -11,6 +11,7 @@ export const ERROR_CODES = [
   'FORBIDDEN',
   'NOT_FOUND',
   'VERSION_CONFLICT',
+  'ID_CONFLICT',
   'VALIDATION_FAILED',
   'RATE_LIMITED',
   'DAILY_LIMIT_EXCEEDED',
@@ -31,6 +32,7 @@ export const FIELD_ERROR_CODES = [
   'END_BEFORE_START',
   'DURATION_TOO_LONG',
   'TOO_FAR_IN_FUTURE',
+  'BEFORE_BIRTH',
 ] as const;
 
 export type FieldErrorCode = (typeof FIELD_ERROR_CODES)[number];

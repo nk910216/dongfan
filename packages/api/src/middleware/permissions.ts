@@ -1,8 +1,8 @@
 import { and, eq } from 'drizzle-orm';
 import { createMiddleware } from 'hono/factory';
-import { babyMembers, events } from '../db/schema.js';
+import { babies, babyMembers, events } from '../db/schema.js';
 import { fail } from '../lib/errors.js';
-import type { Env } from '../lib/types.js';
+import type { Baby, Env } from '../lib/types.js';
 
 /**
  * Permission checks live here and nowhere else.
@@ -11,19 +11,40 @@ import type { Env } from '../lib/types.js';
  * (spec 6.4, 9.5).
  */
 
-async function membership(
+type Access = { role: 'owner' | 'member'; baby: Baby };
+
+/**
+ * Membership and the baby record in one query.
+ *
+ * Every event route needs the timezone and the birth date to validate a
+ * timestamp, and joining them onto a lookup that already has to happen keeps
+ * the query budget flat (spec 4.2).
+ */
+async function access(
   db: Env['Variables']['db'],
   userId: string,
   babyId: string,
-): Promise<'owner' | 'member' | null> {
+): Promise<Access | null> {
   const rows = await db
-    .select({ role: babyMembers.role })
+    .select({
+      role: babyMembers.role,
+      id: babies.id,
+      nickname: babies.nickname,
+      birthDate: babies.birthDate,
+      timezone: babies.timezone,
+    })
     .from(babyMembers)
+    .innerJoin(babies, eq(babies.id, babyMembers.babyId))
     .where(and(eq(babyMembers.userId, userId), eq(babyMembers.babyId, babyId)))
     .limit(1);
 
-  const role = rows[0]?.role;
-  return role === 'owner' || role === 'member' ? role : null;
+  const row = rows[0];
+  if (!row || (row.role !== 'owner' && row.role !== 'member')) return null;
+
+  return {
+    role: row.role,
+    baby: { id: row.id, nickname: row.nickname, birthDate: row.birthDate, timezone: row.timezone },
+  };
 }
 
 /** For routes whose path carries the baby id. */
@@ -32,13 +53,14 @@ export function requireBabyAccess(param = 'babyId') {
     const babyId = c.req.param(param);
     if (!babyId) return fail(c, 'NOT_FOUND');
 
-    const role = await membership(c.get('db'), c.get('user').id, babyId);
+    const found = await access(c.get('db'), c.get('user').id, babyId);
     // 404 rather than 403: telling a stranger that an id exists is itself
     // information they should not have.
-    if (!role) return fail(c, 'NOT_FOUND');
+    if (!found) return fail(c, 'NOT_FOUND');
 
     c.set('babyId', babyId);
-    c.set('role', role);
+    c.set('role', found.role);
+    c.set('baby', found.baby);
     await next();
   });
 }
@@ -63,11 +85,12 @@ export function requireEventAccess(param = 'eventId') {
     const babyId = rows[0]?.babyId;
     if (!babyId) return fail(c, 'NOT_FOUND');
 
-    const role = await membership(db, c.get('user').id, babyId);
-    if (!role) return fail(c, 'NOT_FOUND');
+    const found = await access(db, c.get('user').id, babyId);
+    if (!found) return fail(c, 'NOT_FOUND');
 
     c.set('babyId', babyId);
-    c.set('role', role);
+    c.set('role', found.role);
+    c.set('baby', found.baby);
     await next();
   });
 }

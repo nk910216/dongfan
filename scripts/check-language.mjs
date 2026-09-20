@@ -42,7 +42,11 @@ function hasCjk(line) {
   return false;
 }
 
-const tracked = execSync('git ls-files', { encoding: 'utf8' })
+// Untracked files count too. Scanning only what git already knows about
+// means a new file is checked for the first time *after* it was committed,
+// which is exactly one commit too late. `--exclude-standard` keeps ignored
+// build output and the local database out of it.
+const tracked = execSync('git ls-files --cached --others --exclude-standard', { encoding: 'utf8' })
   .split('\n')
   .filter(Boolean)
   .filter((path) => /\.(ts|tsx|js|jsx|mjs|json|md|css|html|yml|yaml|sql|sh)$/.test(path));
