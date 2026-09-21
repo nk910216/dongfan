@@ -229,6 +229,40 @@ describe('the window between a request and its answer', () => {
     expect(refused).toBe(true);
   });
 
+  it.each([
+    ['the send goes first', true],
+    ['the correction goes first', false],
+  ])('cannot have a correction slip past a send when %s', async (_name, sendFirst) => {
+    await queueAdd(USER, BABY, 'event-1', input({ value: 80 }), NOW);
+
+    // Started together, with no await between them, which is how they
+    // actually arrive: the queue runs on its own schedule and the screen
+    // offering the correction has no way to know a send has just begun.
+    const send = (): Promise<QueuedCreate | null> => beginSend(SCOPE, 'event-1');
+    const correct = (): Promise<QueuedCreate> =>
+      correctQueued(SCOPE, 'event-1', input({ value: 100 }), NOW);
+
+    const [sent, corrected] = sendFirst
+      ? await Promise.allSettled([send(), correct()])
+      : await Promise.allSettled([correct(), send()]).then(([a, b]) => [b, a] as const);
+
+    const sending = sent.status === 'fulfilled' ? (sent.value as QueuedCreate | null) : null;
+    const held = await getQueued(SCOPE, 'event-1');
+
+    // Whichever wins, the two must agree. The failure this guards against
+    // is 80 ml on its way to the server while 100 ml sits in the queue:
+    // the response to the 80 then removes the entry, and the correction is
+    // gone with nothing on screen to say so (spec 6.1).
+    expect(sending?.input.value).toBe(held?.input.value);
+
+    if (corrected.status === 'fulfilled') {
+      expect(held?.input.value).toBe(100);
+    } else {
+      expect(held?.input.value).toBe(80);
+      expect(held?.outcomeUnknown).toBe(true);
+    }
+  });
+
   it('sends what is stored, not the copy the caller was holding', async () => {
     await queueAdd(USER, BABY, 'event-1', input({ value: 150 }), NOW);
 

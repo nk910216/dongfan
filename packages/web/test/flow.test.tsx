@@ -10,6 +10,7 @@ import {
 import { App } from '../src/App.js';
 import { BABY, TOKEN, api, server } from './server.js';
 import { resetLanes } from '../src/lib/lane.js';
+import { earlierToday as atEarlierToday } from './fixtures/clock.js';
 import { breakStorage, setOnline } from './setup.js';
 import { USER_CONTENT } from './fixtures/user-content.js';
 
@@ -24,17 +25,14 @@ import { USER_CONTENT } from './fixtures/user-content.js';
 const HOUR = 3_600_000;
 
 /**
- * An instant earlier today, in the baby's timezone, never yesterday.
+ * An instant earlier today, in the baby's timezone.
  *
- * "Two hours ago" is a different local day for a few minutes every night,
- * and a test written that way passes all day and fails just after
- * midnight -- which is precisely when this app is being used. Anything
- * that has to land on today's date goes through here.
+ * Its rules, and the midnight boundary they exist for, are pinned in
+ * `clock.test.ts` rather than left to be discovered by this suite failing
+ * at two in the morning.
  */
 function earlierToday(msAgo: number): number {
-  const now = Date.now();
-  const dayStart = startOfLocalDay(toLocalDate(now, BABY.timezone), BABY.timezone);
-  return Math.max(now - msAgo, dayStart + 60_000);
+  return atEarlierToday(msAgo, BABY.timezone);
 }
 
 function open(path = '/'): ReturnType<typeof userEvent.setup> {

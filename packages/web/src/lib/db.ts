@@ -461,6 +461,109 @@ export async function enqueue(
 }
 
 /**
+ * Why a correction was not taken.
+ *
+ * Returned rather than thrown, because deciding what it means to the
+ * person at the screen is not this layer's job.
+ */
+export type CorrectionRefusal = 'gone' | 'in-doubt';
+
+export type Correction =
+  | { ok: true; entry: QueuedCreate }
+  | { ok: false; reason: CorrectionRefusal };
+
+/**
+ * Replaces the content of a waiting entry, if it is still allowed to be
+ * replaced.
+ *
+ * Checked and written inside one transaction, and that is the whole point
+ * of the function existing. Reading the entry, deciding it is safe to
+ * correct, and writing the new content in a second transaction leaves a
+ * gap that `beginSend` fits through exactly: the correction reads "no
+ * doubt", the send marks the doubt and takes the original 80 ml to the
+ * server, and then the correction writes 100 ml over the entry it was
+ * never allowed to touch. The response to the 80 arrives, the entry is
+ * removed, and the 100 is gone (spec 6.1).
+ *
+ * Two readwrite transactions over the same store cannot interleave, so one
+ * of the two always loses cleanly: either the correction lands and the
+ * send takes the corrected content, or the send starts and the correction
+ * is refused.
+ *
+ * The counters are reset because a person asked for this, and
+ * `outcomeUnknown` is untouched -- it is false here by definition, since a
+ * true one is what this refuses.
+ */
+export async function correctQueuedEntry(
+  scope: Scope,
+  eventId: string,
+  input: NewEventInput,
+  now: number,
+): Promise<Correction> {
+  const database = await db();
+  const tx = database.transaction('outbox', 'readwrite');
+  const existing = await tx.store.get([scope, eventId]);
+
+  if (!existing) {
+    await tx.done;
+    return { ok: false, reason: 'gone' };
+  }
+  if (existing.outcomeUnknown) {
+    await tx.done;
+    return { ok: false, reason: 'in-doubt' };
+  }
+
+  const corrected: QueuedCreate = {
+    ...existing,
+    input,
+    attempts: 0,
+    nextAttemptAt: now,
+    state: 'queued',
+    lastCode: null,
+  };
+  await tx.store.put(corrected);
+  await tx.done;
+  return { ok: true, entry: corrected };
+}
+
+/**
+ * Puts a stopped entry back in the queue, unchanged.
+ *
+ * Read and written in one transaction for the same reason as above.
+ *
+ * It takes no content, and that absence is the point rather than a check
+ * that could be got wrong: "send this again" cannot mean "send what it
+ * said when I read it", because a copy read a moment ago may have been
+ * corrected since. There is no parameter here to pass a stale one
+ * through.
+ */
+export async function requeue(
+  scope: Scope,
+  eventId: string,
+  now: number,
+): Promise<QueuedCreate | null> {
+  const database = await db();
+  const tx = database.transaction('outbox', 'readwrite');
+  const existing = await tx.store.get([scope, eventId]);
+
+  if (!existing) {
+    await tx.done;
+    return null;
+  }
+
+  const requeued: QueuedCreate = {
+    ...existing,
+    attempts: 0,
+    nextAttemptAt: now,
+    state: 'queued',
+    lastCode: null,
+  };
+  await tx.store.put(requeued);
+  await tx.done;
+  return requeued;
+}
+
+/**
  * Marks an entry as being in doubt, and hands back what to send.
  *
  * Called immediately before a request leaves, in its own transaction,

@@ -283,6 +283,17 @@ on today's date is anchored to the start of the local day, not to an offset
 from now. Tests that pass all day and fail just after midnight are worse
 than no tests.
 
+Clamp both ends. Anchoring to the start of the day alone leaves the
+opposite mistake: in the first minutes of a local day there is no "two
+hours ago" that is still today, and a fixture that answers with a *future*
+instant makes every end time invalid. `test/fixtures/clock.ts` does both,
+and `test/clock.test.ts` pins the boundary at fixed times so that the rest
+of the suite does not have to wait for the clock to come round to find out.
+
+Freezing the clock for the whole suite is not the answer. At least one test
+depends on time passing between a page opening and a button being tapped,
+and a frozen clock makes it pass without testing anything.
+
 Cross-cutting scenarios that must have tests (spec 11.2) — these are the ones
 that are invisible to the eye:
 

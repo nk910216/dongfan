@@ -1,8 +1,8 @@
 import type { EventDto } from '@dongfan/shared';
 import { ApiFailure, NetworkFailure } from './api.js';
 import {
-  applyOne, beginSend, enqueue, getQueued, listQueued, putQueued, queueIfAbsent, removeQueued,
-  scopeOf,
+  applyOne, beginSend, correctQueuedEntry, enqueue, getQueued, listQueued, putQueued, queueIfAbsent,
+  removeQueued, requeue, scopeOf,
 } from './db.js';
 import type { NewEventInput, QueuedCreate, Scope } from './db.js';
 import { outcomeIsUnknown, provesNotStored } from './outcome.js';
@@ -289,11 +289,15 @@ export async function queueAdd(
  * has and the correction is lost without a trace; the way forward is to
  * resend the original first and find out (spec 6.1).
  *
- * The list does not offer the button in that state, so this refusal is not
- * something a parent can reach -- it is here because the rule belongs to
- * the data and not to one screen, and it is exercised by calling this
- * directly. It throws rather than returning, because a caller reaching it
- * has a bug, not a situation.
+ * The check and the write are one transaction, in `correctQueuedEntry`,
+ * because a send starting between them would take the original to the
+ * server while this wrote the correction over it. That is reachable: the
+ * queue sends on its own schedule, and the screen offering this button has
+ * no way to know one has just begun.
+ *
+ * Pressing the button when the entry is already in doubt is not reachable
+ * -- the list hides it -- so this throws rather than returning: a caller
+ * that gets here has a bug, not a situation.
  */
 export async function correctQueued(
   scope: Scope,
@@ -301,14 +305,10 @@ export async function correctQueued(
   input: NewEventInput,
   now: number = Date.now(),
 ): Promise<QueuedCreate> {
-  const entry = await getQueued(scope, eventId);
-  if (!entry) throw new EntryGone(eventId);
-  if (entry.outcomeUnknown) throw new Error('Cannot correct an entry whose outcome is unknown');
-
-  return enqueue(
-    { scope, userId: entry.userId, babyId: entry.babyId, eventId, input },
-    now,
-  );
+  const result = await correctQueuedEntry(scope, eventId, input, now);
+  if (result.ok) return result.entry;
+  if (result.reason === 'gone') throw new EntryGone(eventId);
+  throw new Error('Cannot correct an entry whose outcome is unknown');
 }
 
 /**
@@ -322,12 +322,9 @@ export async function retryQueued(
   eventId: string,
   now: number = Date.now(),
 ): Promise<QueuedCreate> {
-  const entry = await getQueued(scope, eventId);
+  const entry = await requeue(scope, eventId, now);
   if (!entry) throw new EntryGone(eventId);
-  return enqueue(
-    { scope, userId: entry.userId, babyId: entry.babyId, eventId, input: entry.input },
-    now,
-  );
+  return entry;
 }
 
 /**
