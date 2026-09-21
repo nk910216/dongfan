@@ -100,7 +100,11 @@ first.
 | 5 | Members and invite codes (spec 6.5) | |
 
 The queue lives in `packages/web/src/lib/outbox.ts`, with its storage in
-`db.ts` under `outbox`. `dongfan.pending-creates` is gone: whatever it was
+`db.ts` under `outbox`. An entry is put in doubt by `beginSend` *before*
+its request leaves, not after one comes back badly: the window between the
+server storing an event and the device hearing so is the window in which a
+correction is lost, and a browser closed inside it has to reopen knowing
+that (spec 6.1). `dongfan.pending-creates` is gone: whatever it was
 holding is migrated into the queue on the first load after the upgrade,
 under the account that wrote it, and marked as being in doubt — which is
 the state it was always in.
@@ -254,6 +258,22 @@ that already makes it impossible — say so rather than implying coverage.
 Structure it as the correct thing to do ("check what you are sending")
 rather than as a conditional that pretends to be covered ("skip the check
 when resending").
+
+### Collapsing requests is right for a sync and wrong for a send
+
+`lane.ts` has two primitives and they are not interchangeable.
+`runExclusive` folds requests that arrive during a run into one, because
+four requests to catch up are one catching up. `runSerial` runs every task
+in turn, because each of its tasks is a particular record leaving the
+device.
+
+Sending was written on the collapsing one first. A save made while the
+queue happened to be running was folded into the queue's task, never ran,
+and handed its caller a resolved promise — so the screen reported that the
+record had been dealt with. Nothing logged, nothing failed.
+
+Ask which kind of work it is: "bring me up to date" collapses, "do this
+specific thing" does not.
 
 ### Never build "today" out of a relative offset
 

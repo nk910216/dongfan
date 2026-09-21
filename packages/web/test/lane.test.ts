@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { resetLanes, runExclusive } from '../src/lib/lane.js';
+import { resetLanes, runExclusive, runSerial } from '../src/lib/lane.js';
 
 /**
  * Keeping overlapping work out of each other's way.
@@ -153,5 +153,102 @@ describe('when one fails', () => {
     let ran = false;
     await runExclusive('baby', async () => { ran = true; });
     expect(ran).toBe(true);
+  });
+});
+
+/**
+ * The other primitive, and the reason there are two.
+ *
+ * `runExclusive` collapses requests that arrive during a run, because four
+ * requests to catch up are one catching up. `runSerial` cannot: each of
+ * its tasks is a particular record being sent, and a task that was
+ * collapsed into somebody else's never happens at all -- while its caller
+ * is handed the other one's promise and concludes that it did.
+ *
+ * That is not a theory. Sending was written on the collapsing one first,
+ * and a save made while the queue happened to be running was silently
+ * dropped, the screen reporting that nothing had gone wrong.
+ */
+describe('a queue where every task matters', () => {
+  it('runs all of them, including ones that arrive together', async () => {
+    const first = deferred();
+    const ran: number[] = [];
+
+    const a = runSerial('outbox', async () => {
+      await first.done;
+      ran.push(1);
+    });
+    const b = runSerial('outbox', () => Promise.resolve(ran.push(2)));
+    const c = runSerial('outbox', () => Promise.resolve(ran.push(3)));
+
+    first.release();
+    await Promise.all([a, b, c]);
+
+    // The same three through `runExclusive` would be two: the third joins
+    // the second and never runs.
+    expect(ran).toEqual([1, 2, 3]);
+  });
+
+  it('is not the collapsing one', async () => {
+    const first = deferred();
+    let collapsed = 0;
+    let serial = 0;
+
+    const a = runExclusive('sync', async () => { await first.done; });
+    const b = runExclusive('sync', () => Promise.resolve(void (collapsed += 1)));
+    const c = runExclusive('sync', () => Promise.resolve(void (collapsed += 1)));
+
+    const d = runSerial('send', async () => { await first.done; });
+    const e = runSerial('send', () => Promise.resolve(void (serial += 1)));
+    const f = runSerial('send', () => Promise.resolve(void (serial += 1)));
+
+    first.release();
+    await Promise.all([a, b, c, d, e, f]);
+
+    expect(collapsed).toBe(1);
+    expect(serial).toBe(2);
+  });
+
+  it('does not let two run at once', async () => {
+    const first = deferred();
+    let running = 0;
+    let most = 0;
+
+    const watch = async (): Promise<void> => {
+      running += 1;
+      most = Math.max(most, running);
+      await first.done;
+      running -= 1;
+    };
+
+    const a = runSerial('outbox', watch);
+    const b = runSerial('outbox', watch);
+    first.release();
+    await Promise.all([a, b]);
+
+    expect(most).toBe(1);
+  });
+
+  it('hands each caller its own answer', async () => {
+    const [a, b] = await Promise.all([
+      runSerial('outbox', () => Promise.resolve('first')),
+      runSerial('outbox', () => Promise.resolve('second')),
+    ]);
+
+    // Handing the second caller the first one's result is how a send that
+    // never happened comes to look like one that did.
+    expect([a, b]).toEqual(['first', 'second']);
+  });
+
+  it('still runs what was behind a task that threw', async () => {
+    const ran: string[] = [];
+
+    const failed = runSerial('outbox', () => Promise.reject(new Error('no')));
+    const after = runSerial('outbox', () => Promise.resolve(void ran.push('after')));
+
+    await expect(failed).rejects.toThrow('no');
+    await after;
+
+    expect(ran).toEqual(['after']);
   });
 });

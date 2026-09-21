@@ -5,13 +5,14 @@ import { Message } from '../components/Message.js';
 import type { BabyDto, EventDto, SummaryDto, TypeSummaryDto } from '@dongfan/shared';
 import { ApiFailure, OfflineError, apiRequest, isOffline } from './api.js';
 import * as local from './db.js';
-import { listQueued, scopeOf } from './db.js';
+import { getQueued, listQueued, scopeOf } from './db.js';
 import type { NewEventInput, QueuedCreate } from './db.js';
-import { runExclusive } from './lane.js';
+import { runExclusive, runSerial } from './lane.js';
 import {
-  abandonQueued, attemptQueued, correctQueued, ensureMigrated, queueAdd, retryQueued, runOutbox,
+  EntryGone, abandonQueued, attemptQueued, correctQueued, ensureMigrated, queueAdd, retryQueued,
+  runOutbox,
 } from './outbox.js';
-import type { Send } from './outbox.js';
+import type { Attempt, Send } from './outbox.js';
 import { syncEvents, syncSummary } from './sync.js';
 import { useSession } from './session.js';
 
@@ -145,6 +146,8 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
   // firing against a session that has already been rejected.
   const [dueAt, setDueAt] = useState<number | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // Whether a drain is already waiting its turn. See `drain` below.
+  const drainWaiting = useRef(false);
   const [now, setNow] = useState(() => Date.now());
 
   // One interval drives every elapsed display, rather than one per component.
@@ -304,7 +307,16 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
   const drain = useCallback(async (): Promise<void> => {
     let sent = 0;
 
-    await runExclusive(`outbox:${scope}`, async () => {
+    // At most one waiting behind whatever is running. Four things ask for
+    // a drain and a second queued one would find nothing left to do, but
+    // this cannot be done by collapsing tasks in the queue itself: a send
+    // that was collapsed into somebody else's would never happen, and its
+    // caller would be told it had.
+    if (drainWaiting.current) return;
+    drainWaiting.current = true;
+
+    await runSerial(`outbox:${scope}`, async () => {
+      drainWaiting.current = false;
       await ensureMigrated();
 
       // Nothing is attempted while the device says it has no connection.
@@ -406,19 +418,45 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
         return null;
       }
 
-      const result = await attemptQueued(scope, entry, send);
-      setUnsynced(await listQueued(scope));
+      // Held in an object rather than a plain variable so that what the
+      // lane assigns is visible to the code after it.
+      const outcome: { attempt: Attempt | null } = { attempt: null };
 
-      if (!result.ok) {
-        setDueAt(result.entry.state === 'queued' ? result.entry.nextAttemptAt : null);
-        throw result.error;
+      // Through the same lane as the background run. Coming back online, a
+      // timer falling due and somebody pressing retry are three entrances
+      // to one queue; without this they can have the same entry in the air
+      // twice, with the two answers racing to write its state.
+      await runSerial(`outbox:${scope}`, async () => {
+        // Read again now the queue is ours. Whatever ran in front may have
+        // sent this entry, corrected it or been given up on.
+        const current = await getQueued(scope, entry.eventId);
+        if (!current) return;
+
+        outcome.attempt = await attemptQueued(scope, current, send);
+        setUnsynced(await listQueued(scope));
+      });
+
+      if (outcome.attempt === null) {
+        // Not in the queue any more. If it is in the local database then
+        // the run in front of this one sent it, which is what was being
+        // asked for -- so this is a success, not a failure.
+        const already = await local.findEvent(scope, entry.eventId);
+        if (already) return already;
+        // Neither queued nor stored: abandoned while this was waiting.
+        throw new EntryGone(entry.eventId);
+      }
+
+      if (!outcome.attempt.ok) {
+        const failed = outcome.attempt.entry;
+        setDueAt(failed.state === 'queued' ? failed.nextAttemptAt : null);
+        throw outcome.attempt.error;
       }
 
       await settle();
       // Reaching the server says the connection is up, which is the best
       // moment there is to clear whatever else is waiting.
       void drain();
-      return result.event;
+      return outcome.attempt.event;
     },
     [scope, send, settle, drain],
   );

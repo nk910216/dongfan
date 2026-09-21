@@ -1,7 +1,8 @@
 import type { EventDto } from '@dongfan/shared';
 import { ApiFailure, NetworkFailure } from './api.js';
 import {
-  applyOne, enqueue, getQueued, listQueued, putQueued, queueIfAbsent, removeQueued, scopeOf,
+  applyOne, beginSend, enqueue, getQueued, listQueued, putQueued, queueIfAbsent, removeQueued,
+  scopeOf,
 } from './db.js';
 import type { NewEventInput, QueuedCreate, Scope } from './db.js';
 import { outcomeIsUnknown, provesNotStored } from './outcome.js';
@@ -128,6 +129,25 @@ export function afterFailure(entry: QueuedCreate, error: unknown, now: number): 
   }
 }
 
+/**
+ * Thrown when an entry a screen was working on is no longer in the queue.
+ *
+ * Almost always because the queue sent it in the background while the
+ * screen was open. It matters most for a correction: the server now holds
+ * the *original*, so posting the amended version under the same id would
+ * come back as the stored one and the correction would be lost. The way to
+ * change it from here is an edit, with a version (spec 6.1, 6.3).
+ */
+export class EntryGone extends Error {
+  readonly eventId: string;
+
+  constructor(eventId: string) {
+    super(`No queued entry for ${eventId}`);
+    this.name = 'EntryGone';
+    this.eventId = eventId;
+  }
+}
+
 /** Sends one add. Supplied by the caller so this file never touches fetch. */
 export type Send = (eventId: string, input: NewEventInput) => Promise<EventDto>;
 
@@ -137,6 +157,16 @@ export type Attempt =
 
 /**
  * One attempt at one entry.
+ *
+ * The entry is put in doubt *before* the request leaves, not after it
+ * comes back badly. Everything between the two is a window in which the
+ * server may already hold the event while this device believes it does
+ * not, and a correction made or allowed in that window is lost in
+ * silence (spec 6.1). A browser closed mid-request lands in the same
+ * window, and the doubt is what is still there when it reopens.
+ *
+ * What is sent is what that transaction read back, not the copy the
+ * caller was holding, which may have been corrected since.
  *
  * On success the event is stored before the entry is removed. Crashing
  * between the two leaves an entry that will be sent again, get the stored
@@ -149,10 +179,14 @@ export async function attemptQueued(
   send: Send,
   now: number = Date.now(),
 ): Promise<Attempt> {
+  const sending = await beginSend(scope, entry.eventId);
+  // Abandoned before this got started. Nothing is put back.
+  if (!sending) return { ok: false, error: new EntryGone(entry.eventId), entry };
+
   try {
-    const event = await send(entry.eventId, entry.input);
+    const event = await send(sending.eventId, sending.input);
     await applyOne(scope, event);
-    await removeQueued(scope, entry.eventId);
+    await removeQueued(scope, sending.eventId);
     return { ok: true, event };
   } catch (error) {
     // Read back rather than written from the copy in hand: a correction or
@@ -245,25 +279,6 @@ export async function queueAdd(
   now: number = Date.now(),
 ): Promise<QueuedCreate> {
   return enqueue({ scope: scopeOf(userId, babyId), userId, babyId, eventId, input }, now);
-}
-
-/**
- * Thrown when an entry a screen was working on is no longer in the queue.
- *
- * Almost always because the queue sent it in the background while the
- * screen was open. It matters most for a correction: the server now holds
- * the *original*, so posting the amended version under the same id would
- * come back as the stored one and the correction would be lost. The way to
- * change it from here is an edit, with a version (spec 6.1, 6.3).
- */
-export class EntryGone extends Error {
-  readonly eventId: string;
-
-  constructor(eventId: string) {
-    super(`No queued entry for ${eventId}`);
-    this.name = 'EntryGone';
-    this.eventId = eventId;
-  }
 }
 
 /**

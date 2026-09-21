@@ -62,6 +62,22 @@ class Api {
     return this.rev;
   }
 
+  /**
+   * A different account for every test.
+   *
+   * Everything the app stores is scoped by account, so a test that starts
+   * where the last one left off can have the previous test's still-running
+   * work reading and writing its queue. Giving each test its own account
+   * makes that impossible rather than unlikely: a leftover drain looks in
+   * a scope nothing has put anything into.
+   */
+  private accounts = 0;
+
+  /** The account the token currently belongs to. */
+  get userId(): string {
+    return ME.user.id;
+  }
+
   /** Switches which account the token belongs to, for isolation tests. */
   signInAs(userId: string): void {
     ME.user = { id: userId, username: userId };
@@ -121,7 +137,8 @@ class Api {
   }
 
   reset(): void {
-    ME.user = { id: 'user-1', username: 'parent' };
+    this.accounts += 1;
+    ME.user = { id: `user-${this.accounts}`, username: 'parent' };
     ME.babies = [BABY];
     this.events = [];
     this.requests = [];

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { EventDto } from '@dongfan/shared';
 import { EntryGone } from './outbox.js';
 import type { QueuedCreate } from './db.js';
@@ -100,10 +100,32 @@ export function useCreateEvent(typeId: string, eventId?: string): CreateEvent {
   // The queue's own view of this add, which is the only authority on it.
   const entry = unsynced.find((candidate) => candidate.eventId === id) ?? null;
   const outcomeUnknown = entry?.outcomeUnknown ?? false;
-  const held = entry !== null;
+
+  /**
+   * Whether this screen has ever had an entry of its own.
+   *
+   * True from the start when it took one over, and true from the first
+   * submit otherwise. It is not the same question as "is there one now",
+   * and answering with that one loses corrections: the queue can send the
+   * entry in the background while this form is still open, and a screen
+   * that only looked at the present would see no entry, call `addEvent`,
+   * and post the amended content under an id the server already holds.
+   * The server answers with what it stored, and the correction is gone
+   * while the screen says it was saved (spec 6.1).
+   */
+  const owned = useRef(resumed !== null);
 
   const submit = useCallback(
     async (input: NewEventInput): Promise<SubmitResult> => {
+      // Read before this attempt makes the screen an owner.
+      const hadEntry = owned.current;
+      owned.current = true;
+
+      // Gone, and it was ours: the queue sent it while this screen was
+      // open. The server holds the original, so anything typed here is a
+      // change to a stored event and has to go out as one.
+      if (hadEntry && entry === null) return { kind: 'gone', eventId: id };
+
       setBusy(true);
       setFailure(null);
 
@@ -113,7 +135,7 @@ export function useCreateEvent(typeId: string, eventId?: string): CreateEvent {
         // the queue stored can tell us what the server may already have.
         const event = outcomeUnknown
           ? await retryUnsynced(id)
-          : held
+          : entry !== null
             ? await correctUnsynced(id, input)
             : await addEvent(id, input);
 
@@ -132,7 +154,7 @@ export function useCreateEvent(typeId: string, eventId?: string): CreateEvent {
         return { kind: 'failed' };
       }
     },
-    [addEvent, retryUnsynced, correctUnsynced, id, outcomeUnknown, held],
+    [addEvent, retryUnsynced, correctUnsynced, id, outcomeUnknown, entry],
   );
 
   const retry = useCallback((): Promise<SubmitResult> => {

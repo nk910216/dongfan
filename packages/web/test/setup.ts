@@ -76,17 +76,48 @@ export function setOnline(online: boolean): void {
 
 installStorage();
 
-// Vitest does not expose globals here, so Testing Library's automatic
-// cleanup never registers. Without this every test renders on top of the
-// previous one and queries start matching several copies of the app.
-afterEach(cleanup);
+/**
+ * Waits until the app has stopped talking to the server.
+ *
+ * A test finishes as soon as its assertions pass, which is usually while
+ * the app is still working: a pull, a write and the queue's own run all
+ * carry on afterwards. Anything still in the air when the next test starts
+ * is served by that test's stubs, reads that test's database, and eats the
+ * one-shot behaviour it armed for itself -- "lose the next response" being
+ * the one that caused this. The failure lands in the next test, which is
+ * the worst place for it.
+ *
+ * Several consecutive ticks with no new request are the signal, not one:
+ * the chains here go through IndexedDB between requests, so a single quiet
+ * tick is regularly the gap between two halves of the same run. The app is
+ * unmounted by the time this is called, so nothing new can be started.
+ */
+async function settleInFlight(): Promise<void> {
+  let quiet = 0;
+  let seen = -1;
+
+  for (let i = 0; i < 60 && quiet < 4; i += 1) {
+    quiet = api.requests.length === seen ? quiet + 1 : 0;
+    seen = api.requests.length;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
 
 // Requests are intercepted at the network boundary rather than by replacing
 // the client. Stubbing our own fetch wrapper would remove the thing under
 // test: whether the screen sends the body the contract describes.
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 
-afterEach(() => {
+afterEach(async () => {
+  // Vitest does not expose globals here, so Testing Library's automatic
+  // cleanup never registers. Without this every test renders on top of the
+  // previous one and queries start matching several copies of the app.
+  //
+  // First, so that the app stops scheduling more work before anything is
+  // taken away from underneath it.
+  cleanup();
+  await settleInFlight();
+
   server.resetHandlers();
   api.reset();
 

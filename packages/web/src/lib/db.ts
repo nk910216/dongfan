@@ -461,6 +461,41 @@ export async function enqueue(
 }
 
 /**
+ * Marks an entry as being in doubt, and hands back what to send.
+ *
+ * Called immediately before a request leaves, in its own transaction,
+ * because the window it covers is the one that loses corrections. Between
+ * a POST reaching the server and its response reaching the device the
+ * event exists and this device does not know it. An entry that still said
+ * "no doubt" through that window would let somebody correct it from the
+ * list, or let a browser killed mid-request reopen offering a correction
+ * -- and a corrected POST under an id the server already holds comes back
+ * as the stored event, so the correction disappears with nothing on screen
+ * to say so (spec 6.1).
+ *
+ * What comes back is the row as stored, and that is what gets sent. The
+ * copy the caller was holding may have been corrected since it was read.
+ *
+ * Null means the entry is no longer there, which is somebody having
+ * abandoned it; nothing is put back.
+ */
+export async function beginSend(scope: Scope, eventId: string): Promise<QueuedCreate | null> {
+  const database = await db();
+  const tx = database.transaction('outbox', 'readwrite');
+  const existing = await tx.store.get([scope, eventId]);
+
+  if (!existing) {
+    await tx.done;
+    return null;
+  }
+
+  const sending: QueuedCreate = { ...existing, outcomeUnknown: true };
+  await tx.store.put(sending);
+  await tx.done;
+  return sending;
+}
+
+/**
  * Adds an entry only if that scope and id are not already held.
  *
  * For the migration out of the old store, which may run again after a

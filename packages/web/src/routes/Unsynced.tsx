@@ -229,10 +229,22 @@ export function CorrectUnsynced(): React.JSX.Element {
   const { eventId = '' } = useParams();
   const { unsynced } = useStore();
 
-  const entry = unsynced.find((candidate) => candidate.eventId === eventId) ?? null;
+  /**
+   * Looked up once, at mount.
+   *
+   * If the queue sends the entry while this screen is open, the screen
+   * stays where it is. Somebody is typing a correction into it, and
+   * replacing the page underneath them would throw that away without a
+   * word. What has changed is where the correction has to go, and saying
+   * so is the submit's job -- it knows this form had an entry, finds it
+   * gone, and sends the parent to the edit screen rather than posting a
+   * creation the server would answer with the record it already has
+   * (spec 6.1, 6.3).
+   */
+  const [entry] = useState(() => unsynced.find((candidate) => candidate.eventId === eventId) ?? null);
 
-  // Gone means the queue sent it while this link was being followed. The
-  // event exists now, so changing it is an edit (spec 6.3).
+  // Never here in the first place: the link was followed after it had
+  // already gone.
   if (!entry) return <Navigate to={`/event/${eventId}`} replace />;
 
   return <EventForm typeId={entry.input.typeId} entryId={entry.eventId} />;

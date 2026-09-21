@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { EventDto } from '@dongfan/shared';
 import { ApiFailure, NetworkFailure } from '../src/lib/api.js';
-import { getQueued, listQueued, putQueued, scopeOf } from '../src/lib/db.js';
+import { beginSend, getQueued, listQueued, putQueued, scopeOf } from '../src/lib/db.js';
 import type { NewEventInput, QueuedCreate } from '../src/lib/db.js';
 import {
   EntryGone, FIRST_DELAY_MS, MAX_ATTEMPTS, MAX_DELAY_MS, afterFailure, attemptQueued,
@@ -181,6 +181,83 @@ describe('an attempt that came back badly', () => {
 
   it('remembers what the server said, for the list', () => {
     expect(afterFailure(entry(), refused(403, 'FORBIDDEN'), NOW).lastCode).toBe('FORBIDDEN');
+  });
+});
+
+describe('the window between a request and its answer', () => {
+  /**
+   * The server may have the event while this device does not know it. Two
+   * things have to be true through that window, and neither was: the
+   * record must already be marked as being in doubt, and nothing may
+   * change its content (spec 6.1).
+   */
+  it('marks the record as being in doubt before the request goes out', async () => {
+    await queueAdd(USER, BABY, 'event-1', input(), NOW);
+    await beginSend(SCOPE, 'event-1');
+
+    // What is on disk at this instant is what a browser killed mid-request
+    // would find when it reopened.
+    expect((await getQueued(SCOPE, 'event-1'))?.outcomeUnknown).toBe(true);
+  });
+
+  it('is already in doubt while the request is in the air', async () => {
+    const queued = await queueAdd(USER, BABY, 'event-1', input(), NOW);
+    let duringFlight: QueuedCreate | null = null;
+
+    await attemptQueued(SCOPE, queued, async (id) => {
+      duringFlight = await getQueued(SCOPE, 'event-1');
+      return stored(id);
+    });
+
+    expect(duringFlight).not.toBeNull();
+    expect((duringFlight as unknown as QueuedCreate).outcomeUnknown).toBe(true);
+  });
+
+  it('refuses a correction made while the request is in the air', async () => {
+    const queued = await queueAdd(USER, BABY, 'event-1', input({ value: 80 }), NOW);
+    let refused = false;
+
+    await attemptQueued(SCOPE, queued, async (id) => {
+      // 80 ml is on its way. Changing it to 100 here and letting the
+      // original response land would leave the server holding 80, the
+      // queue empty, and the correction nowhere at all.
+      await expect(correctQueued(SCOPE, 'event-1', input({ value: 100 }), NOW)).rejects.toThrow();
+      refused = true;
+      return stored(id);
+    });
+
+    expect(refused).toBe(true);
+  });
+
+  it('sends what is stored, not the copy the caller was holding', async () => {
+    await queueAdd(USER, BABY, 'event-1', input({ value: 150 }), NOW);
+
+    // A caller that read the entry, then waited its turn while somebody
+    // corrected it.
+    const stale = entry({ input: input({ value: 999 }) });
+    let sent: number | undefined;
+
+    await attemptQueued(SCOPE, stale, async (id, payload) => {
+      sent = payload.value;
+      return stored(id);
+    });
+
+    expect(sent).toBe(150);
+  });
+
+  it('does not start at all for an entry that has been given up on', async () => {
+    const queued = await queueAdd(USER, BABY, 'event-1', input(), NOW);
+    const { abandonQueued } = await import('../src/lib/outbox.js');
+    await abandonQueued(SCOPE, 'event-1');
+
+    let attempts = 0;
+    const result = await attemptQueued(SCOPE, queued, (id) => {
+      attempts += 1;
+      return Promise.resolve(stored(id));
+    });
+
+    expect(attempts).toBe(0);
+    expect(result.ok).toBe(false);
   });
 });
 

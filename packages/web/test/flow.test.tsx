@@ -396,7 +396,10 @@ describe('the home screen', () => {
 
     // The write landed; only the refresh after it did not. Saying "synced"
     // here would be a lie about data the other phone may already have.
-    expect(api.events).toHaveLength(1);
+    //
+    // Waited for: a save now takes its turn behind whatever the queue is
+    // doing, so it is not necessarily finished by the time the tap is.
+    await waitFor(() => expect(api.events).toHaveLength(1));
     await waitFor(() =>
       expect(screen.getByTestId('sync-state')).toHaveTextContent(zhTW.home.syncFailed),
     );
@@ -1309,6 +1312,7 @@ describe('saving again after a save that said nothing', () => {
   });
 
   it('is left alone by another account recording successfully', async () => {
+    const first = api.userId;
     api.loseNextResponse = true;
     const user = openSignedIn('/add/bottle');
 
@@ -1330,11 +1334,11 @@ describe('saving again after a save that said nothing', () => {
 
     // Back as the first parent, whose bottle is still unaccounted for.
     closeApp();
-    signedInAs('user-1');
-    const first = openSignedIn('/');
+    signedInAs(first);
+    const firstAgain = openSignedIn('/');
     await waitForHome();
 
-    await first.click(await screen.findByTestId('unsynced-count'));
+    await firstAgain.click(await screen.findByTestId('unsynced-count'));
     expect(await screen.findAllByTestId('unsynced-retry')).toHaveLength(1);
   });
 
@@ -1678,6 +1682,41 @@ describe('recording with no signal', () => {
     expect(screen.getByTestId('unsynced-correct')).toBeInTheDocument();
   });
 
+  it('turns a correction into an edit when the queue sent the original first', async () => {
+    const user = openSignedIn('/add/bottle');
+    await screen.findByLabelText(valueLabel('bottle'));
+
+    goOffline();
+    await user.type(screen.getByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await waitForHome();
+
+    // Queued and not in doubt, because nothing left the device -- so the
+    // list offers to correct it.
+    await user.click(await screen.findByTestId('unsynced-count'));
+    await user.click(await screen.findByTestId('unsynced-correct'));
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    expect(amount).toHaveValue('150');
+
+    // The signal comes back while the correction is being typed, and the
+    // queue does what it is for.
+    comeBack();
+    await waitFor(() => expect(api.events).toHaveLength(1));
+
+    await user.clear(amount);
+    await user.type(amount, '100');
+    await user.click(screen.getByTestId('submit'));
+
+    // The server holds 150 now. Posting 100 under the same id would come
+    // back as the stored 150, and the correction would be gone while the
+    // screen said it had been saved. It has to become an edit, with a
+    // version (spec 6.1, 6.3).
+    expect(await screen.findByText(zhTW.event.edit)).toBeInTheDocument();
+    expect(posts()).toHaveLength(1);
+    expect(api.events).toHaveLength(1);
+    expect(api.events[0]?.value).toBe(150);
+  });
+
   it('refuses to edit, and says why', async () => {
     const event = api.add({ typeId: 'bottle', value: 140 });
     const user = openSignedIn(`/event/${event.id}`);
@@ -1788,6 +1827,30 @@ describe('the list of records that would not send', () => {
 
     await waitFor(() => expect(api.events).toHaveLength(1));
     expect(api.events[0]?.value).toBe(150);
+  });
+
+  it('is not sent twice when a retry by hand and the queue overlap', async () => {
+    await refusedBottle();
+    closeApp();
+    const next = openSignedIn('/');
+    await waitForHome();
+    await next.click(await screen.findByTestId('unsynced-count'));
+
+    // The hand retry is still in the air when the connection coming back
+    // sets the queue going too. Both of them want this entry, and a queue
+    // that let them both have it would send the same record twice.
+    const release = api.holdNextWrite();
+    await next.click(await screen.findByTestId('unsynced-retry'));
+    window.dispatchEvent(new Event('online'));
+    release();
+
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByTestId('unsynced-retry')).not.toBeInTheDocument());
+
+    // One for the refusal that started this, one for the retry. A third
+    // would be the queue sending what the retry had already sent.
+    const sent = api.requests.filter((e) => e.method === 'POST' && e.path.endsWith('/events'));
+    expect(sent).toHaveLength(2);
   });
 
   it('gives up without claiming the server does not have it', async () => {
