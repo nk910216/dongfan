@@ -9,7 +9,8 @@ import {
 } from '@dongfan/shared';
 import { App } from '../src/App.js';
 import { BABY, TOKEN, api, server } from './server.js';
-import { breakStorage } from './setup.js';
+import { resetLanes } from '../src/lib/lane.js';
+import { breakStorage, setOnline } from './setup.js';
 import { USER_CONTENT } from './fixtures/user-content.js';
 
 /**
@@ -44,6 +45,32 @@ function open(path = '/'): ReturnType<typeof userEvent.setup> {
     </MemoryRouter>,
   );
   return user;
+}
+
+/**
+ * Closes the app, as navigating away or reloading would.
+ *
+ * The sync lane is module state and outlives the component tree, which in
+ * a browser never happens: there is only ever one app. Unmounting without
+ * clearing it lets the next mount join a task belonging to the tree that
+ * was just thrown away -- so the new one's refresh never runs, and it sits
+ * on a loading screen or reports a sync that was somebody else's.
+ */
+function closeApp(): void {
+  cleanup();
+  resetLanes();
+}
+
+/**
+ * Somebody else picking up the same phone.
+ *
+ * The remembered description of the account goes with them. In the app
+ * that is what signing in does; these tests put a session straight into
+ * storage instead, so they have to do it themselves.
+ */
+function signedInAs(userId: string): void {
+  api.signInAs(userId);
+  localStorage.removeItem('dongfan.me');
 }
 
 /** Renders already signed in, which is where most of these tests start. */
@@ -404,7 +431,7 @@ describe('when the API cannot be reached', () => {
 
     // A fresh start with the network gone: a reload in a tunnel, or the
     // app reopened from the home screen.
-    cleanup();
+    closeApp();
     goOffline();
     openSignedIn();
 
@@ -421,7 +448,7 @@ describe('when the API cannot be reached', () => {
     openSignedIn();
     await waitForHome();
 
-    cleanup();
+    closeApp();
     goOffline();
     openSignedIn();
     await waitForHome();
@@ -442,7 +469,7 @@ describe('when the API cannot be reached', () => {
     // Not a failure: a request that hangs. A phone with one bar does this
     // rather than erroring, and waiting for it held the whole app on a
     // loading screen with the records sitting on the device.
-    cleanup();
+    closeApp();
     server.use(http.get('/api/me', () => new Promise<never>(() => undefined)));
     openSignedIn();
 
@@ -454,7 +481,7 @@ describe('when the API cannot be reached', () => {
     openSignedIn();
     await waitForHome();
 
-    cleanup();
+    closeApp();
     server.use(http.get('/api/me', () => HttpResponse.json(
       { error: { code: 'UNAUTHENTICATED', details: null } },
       { status: 401 },
@@ -477,7 +504,7 @@ describe('when the API cannot be reached', () => {
     // Signing out has to take the remembered account with it, or the next
     // person to open the app without a network is shown the records of the
     // one who signed out.
-    cleanup();
+    closeApp();
     goOffline();
     open();
 
@@ -659,9 +686,16 @@ describe('keeping up with the other parent', () => {
 
     // "Just synced", permanently, is an assurance that is wrong at exactly
     // the moment it matters.
-    expect(screen.getByTestId('sync-state')).toHaveTextContent(zhTW.home.syncedJustNow);
+    //
+    // Waited for rather than asserted outright: the home screen appears as
+    // soon as there is a summary to show, which is a render or two before
+    // the pull that produced it has finished. Read at that moment this said
+    // "syncing", and the test failed perhaps one run in ten.
+    await waitFor(() =>
+      expect(screen.getByTestId('sync-state')).toHaveTextContent(zhTW.home.syncedJustNow),
+    );
 
-    cleanup();
+    closeApp();
     server.use(http.get('/api/babies/:babyId/events', () => HttpResponse.error()));
     openSignedIn();
     await waitForHome();
@@ -1119,7 +1153,7 @@ describe('saving again after a save that said nothing', () => {
     expect(await screen.findByLabelText(valueLabel('bottle'))).not.toBeDisabled();
   });
 
-  it('survives being signed out and back in', async () => {
+  it('survives being signed out, and is sent once the same person is back', async () => {
     api.loseNextResponse = true;
     const user = openSignedIn('/add/bottle');
 
@@ -1128,7 +1162,9 @@ describe('saving again after a save that said nothing', () => {
     await screen.findByTestId('outcome-unknown');
 
     // Signing out takes the form, the store and every piece of state the
-    // retry depended on with it -- including the id (spec 6.1).
+    // retry depended on with it -- including the id (spec 6.1). A session
+    // that expired is not the record being refused, so the queue pauses
+    // rather than giving up on it.
     api.nextFailure = { status: 401, code: 'UNAUTHENTICATED' };
     await user.click(screen.getByTestId('submit'));
 
@@ -1136,20 +1172,38 @@ describe('saving again after a save that said nothing', () => {
     await user.type(screen.getByLabelText(zhTW.auth.password), 'a-long-enough-password');
     await user.click(screen.getByRole('button', { name: zhTW.auth.submit }));
 
-    // Back with the content it was sent with, still frozen.
-    const amount = await screen.findByLabelText(valueLabel('bottle'));
-    expect(amount).toHaveValue('150');
-    expect(amount).toBeDisabled();
-    expect(screen.getByTestId('outcome-unknown')).toBeInTheDocument();
-
-    await user.click(screen.getByTestId('submit'));
-    await waitFor(() => expect(screen.queryByTestId('outcome-unknown')).not.toBeInTheDocument());
+    // The queue starts again by itself and resends the original under the
+    // original id, which is exactly how the doubt is meant to be settled.
+    await waitFor(() => expect(api.events).toHaveLength(1));
 
     // One bottle, not two, and always under the same id.
-    expect(api.events).toHaveLength(1);
     const posts = api.requests.filter((entry) => entry.method === 'POST' && entry.path.endsWith('/events'));
     const ids = new Set(posts.map((entry) => (entry.body as Record<string, unknown>)['id']));
     expect(ids.size).toBe(1);
+    expect((posts[0]?.body as Record<string, unknown>)['value']).toBe(150);
+  });
+
+  it('does not let a different account send what the last one was holding', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    const before = api.requests.filter((e) => e.method === 'POST' && e.path.endsWith('/events')).length;
+
+    // Somebody else signs in on the same phone. Their queue is empty, and
+    // sending the previous account's record under their session would file
+    // it against the wrong family (spec 6.1).
+    closeApp();
+    signedInAs('the-other-parent');
+    openSignedIn('/');
+    await waitForHome();
+
+    expect(screen.queryByTestId('unsynced-count')).not.toBeInTheDocument();
+    expect(api.requests.filter((e) => e.method === 'POST' && e.path.endsWith('/events')))
+      .toHaveLength(before);
   });
 
   it('is findable again from the home screen', async () => {
@@ -1162,12 +1216,42 @@ describe('saving again after a save that said nothing', () => {
 
     // A fresh start, as a reload after signing back in would be: without a
     // way back to it, the parent would simply record the bottle again.
-    cleanup();
+    closeApp();
     const next = openSignedIn('/');
     await waitForHome();
 
-    await next.click(await screen.findByTestId('pending-create'));
-    expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('150');
+    await next.click(await screen.findByTestId('unsynced-count'));
+
+    // The content, so it can be recognised as the bottle that was given
+    // rather than as an id (spec 6.1).
+    expect(await screen.findByTestId('unsynced-retry')).toBeInTheDocument();
+    expect(screen.getByTestId('unsynced-state')).toHaveTextContent(zhTW.unsynced.unknown);
+
+    await next.click(screen.getByTestId('unsynced-retry'));
+
+    await waitFor(() => expect(screen.queryByTestId('unsynced-retry')).not.toBeInTheDocument());
+    expect(api.events).toHaveLength(1);
+  });
+
+  it('cannot be corrected from the list until the doubt is settled', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    closeApp();
+    const next = openSignedIn('/');
+    await waitForHome();
+    await next.click(await screen.findByTestId('unsynced-count'));
+
+    // The server may already hold 150 ml. Sending 100 ml under the same id
+    // would come back as the stored 150 and the correction would be gone
+    // without a trace (spec 6.1).
+    await screen.findByTestId('unsynced-retry');
+    expect(screen.queryByTestId('unsynced-correct')).not.toBeInTheDocument();
+    expect(screen.getByTestId('unsynced-unknown')).toBeInTheDocument();
   });
 
   it('is left alone when a different event is recorded successfully', async () => {
@@ -1180,16 +1264,18 @@ describe('saving again after a save that said nothing', () => {
 
     // Life carries on. A nappy going through says nothing whatsoever about
     // whether the bottle landed, and must not take its id with it.
-    cleanup();
+    closeApp();
     const next = openSignedIn('/');
     await waitForHome();
     await next.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
     await next.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'pee') }));
     await waitForHome();
 
-    expect(screen.getByTestId('pending-create')).toBeInTheDocument();
-    await next.click(screen.getByTestId('pending-create'));
-    expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('150');
+    expect(screen.getByTestId('unsynced-count')).toHaveTextContent(
+      interpolate(zhTW.home.unsynced, { count: 1 }),
+    );
+    await next.click(screen.getByTestId('unsynced-count'));
+    expect(await screen.findByTestId('unsynced-retry')).toBeInTheDocument();
   });
 
   it('is not overwritten when a different event also goes unanswered', async () => {
@@ -1200,7 +1286,7 @@ describe('saving again after a save that said nothing', () => {
     await user.click(screen.getByTestId('submit'));
     await screen.findByTestId('outcome-unknown');
 
-    cleanup();
+    closeApp();
     const next = openSignedIn('/');
     await waitForHome();
     await next.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
@@ -1211,15 +1297,15 @@ describe('saving again after a save that said nothing', () => {
 
     // Two in doubt, and one store: the second must not land on top of the
     // first. Both ids have to survive to be worth keeping at all.
-    cleanup();
+    closeApp();
     const third = openSignedIn('/');
     await waitForHome();
-    expect(screen.getByTestId('pending-create')).toHaveTextContent(
-      interpolate(zhTW.home.pendingUnknownMany, { count: 2 }),
+    expect(screen.getByTestId('unsynced-count')).toHaveTextContent(
+      interpolate(zhTW.home.unsynced, { count: 2 }),
     );
 
-    await third.click(screen.getByTestId('pending-create'));
-    expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('150');
+    await third.click(screen.getByTestId('unsynced-count'));
+    expect(await screen.findAllByTestId('unsynced-retry')).toHaveLength(2);
   });
 
   it('is left alone by another account recording successfully', async () => {
@@ -1230,8 +1316,8 @@ describe('saving again after a save that said nothing', () => {
     await user.click(screen.getByTestId('submit'));
     await screen.findByTestId('outcome-unknown');
 
-    cleanup();
-    api.signInAs('the-other-parent');
+    closeApp();
+    signedInAs('the-other-parent');
     const other = openSignedIn('/add/bottle');
 
     // The form offers the last amount, which here is the very bottle that
@@ -1243,13 +1329,13 @@ describe('saving again after a save that said nothing', () => {
     await waitForHome();
 
     // Back as the first parent, whose bottle is still unaccounted for.
-    cleanup();
-    api.signInAs('user-1');
+    closeApp();
+    signedInAs('user-1');
     const first = openSignedIn('/');
     await waitForHome();
 
-    await first.click(await screen.findByTestId('pending-create'));
-    expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('150');
+    await first.click(await screen.findByTestId('unsynced-count'));
+    expect(await screen.findAllByTestId('unsynced-retry')).toHaveLength(1);
   });
 
   it('is gone once its own add is confirmed', async () => {
@@ -1263,16 +1349,16 @@ describe('saving again after a save that said nothing', () => {
     await user.click(screen.getByTestId('submit'));
     await waitFor(() => expect(screen.queryByTestId('outcome-unknown')).not.toBeInTheDocument());
 
-    cleanup();
+    closeApp();
     openSignedIn('/');
     await waitForHome();
-    expect(screen.queryByTestId('pending-create')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('unsynced-count')).not.toBeInTheDocument();
   });
 
   it('leaves the home screen alone when there is nothing pending', async () => {
     openSignedIn();
     await waitForHome();
-    expect(screen.queryByTestId('pending-create')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('unsynced-count')).not.toBeInTheDocument();
   });
 
   it('is not picked up by a different type', async () => {
@@ -1283,13 +1369,47 @@ describe('saving again after a save that said nothing', () => {
     await user.click(screen.getByTestId('submit'));
     await screen.findByTestId('outcome-unknown');
 
-    cleanup();
+    closeApp();
     openSignedIn('/add/temperature');
 
     // Resending somebody's bottle because they opened a different form
     // would be worse than the duplicate this is all meant to prevent.
     expect(await screen.findByLabelText(valueLabel('temperature'))).not.toBeDisabled();
     expect(screen.queryByTestId('outcome-unknown')).not.toBeInTheDocument();
+  });
+
+  it('is not claimed by a different account while the app still shows the old one', async () => {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    const isPost = (entry: { method: string; path: string }): boolean =>
+      entry.method === 'POST' && entry.path.endsWith('/events');
+    const abandoned = (api.requests.filter(isPost)[0]?.body as Record<string, unknown>)['id'];
+
+    // The remembered description of the account is deliberately left in
+    // place. The app shows it straight away and asks the server who the
+    // token really belongs to in the background -- and the answer here is
+    // somebody else, so everything below has to be built again.
+    closeApp();
+    api.signInAs('someone-else');
+    const other = openSignedIn('/add/bottle');
+
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    await waitFor(() => expect(screen.getByLabelText(valueLabel('bottle'))).not.toBeDisabled());
+    await other.clear(amount);
+    await other.type(amount, '90');
+    await other.click(screen.getByTestId('submit'));
+    await waitForHome();
+
+    // Sending under the id the previous account was waiting on would file
+    // one family's record against another's, and would settle a doubt that
+    // was never theirs to settle (spec 6.1).
+    const ids = api.requests.filter(isPost).map((e) => (e.body as Record<string, unknown>)['id']);
+    expect(ids[ids.length - 1]).not.toBe(abandoned);
   });
 
   it('is not picked up by a different account', async () => {
@@ -1300,8 +1420,8 @@ describe('saving again after a save that said nothing', () => {
     await user.click(screen.getByTestId('submit'));
     await screen.findByTestId('outcome-unknown');
 
-    cleanup();
-    api.signInAs('someone-else');
+    closeApp();
+    signedInAs('someone-else');
     openSignedIn('/add/bottle');
 
     expect(await screen.findByLabelText(valueLabel('bottle'))).not.toBeDisabled();
@@ -1458,5 +1578,237 @@ describe('an all-day event', () => {
     await waitFor(() => expect(api.events).toHaveLength(1));
     const sent = api.lastRequest('/events')?.body as Record<string, unknown>;
     expect(sent['startedAt']).toBe(startOfLocalDay(toLocalDate(Date.now(), BABY.timezone), BABY.timezone));
+  });
+});
+
+describe('recording with no signal', () => {
+  /**
+   * Flight mode, as a phone actually presents it.
+   *
+   * Both halves matter. `navigator.onLine` is what the app asks before it
+   * sends anything, and the handlers are what would happen if it asked
+   * wrongly -- so a guard that stopped working would show up here as an
+   * entry that came back in doubt rather than as a silent extra request.
+   */
+  function goOffline(): void {
+    setOnline(false);
+    server.use(
+      http.post('*', () => HttpResponse.error()),
+      http.patch('*', () => HttpResponse.error()),
+      http.delete('*', () => HttpResponse.error()),
+    );
+  }
+
+  function comeBack(): void {
+    setOnline(true);
+    server.resetHandlers();
+    window.dispatchEvent(new Event('online'));
+  }
+
+  function posts(): unknown[] {
+    return api.requests.filter((entry) => entry.method === 'POST' && entry.path.endsWith('/events'));
+  }
+
+  it('keeps the record, and sends it exactly once when the signal comes back', async () => {
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') }));
+    await waitForHome();
+
+    // Written down, said so, and visible in today's list rather than only
+    // counted -- a parent who cannot see it records it again (spec 6.2).
+    expect(await screen.findByTestId('unsynced-count')).toHaveTextContent(
+      interpolate(zhTW.home.unsynced, { count: 1 }),
+    );
+    expect(screen.getByTestId('waiting-row-diaper')).toBeInTheDocument();
+    expect(posts()).toHaveLength(0);
+
+    comeBack();
+
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    expect(posts()).toHaveLength(1);
+    expect(api.events[0]?.metadata['diaper_kind']).toBe('poo');
+
+    // And it stops being a waiting record, without becoming a second one.
+    await waitFor(() => expect(screen.queryByTestId('unsynced-count')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByTestId('event-row-diaper')).toHaveLength(1));
+    expect(screen.queryByTestId('waiting-row-diaper')).not.toBeInTheDocument();
+  });
+
+  it('sends several in the order they were recorded, and none of them twice', async () => {
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    for (const kind of ['pee', 'poo', 'both']) {
+      await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+      await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', kind) }));
+      await waitForHome();
+    }
+
+    expect(await screen.findByTestId('unsynced-count')).toHaveTextContent(
+      interpolate(zhTW.home.unsynced, { count: 3 }),
+    );
+
+    comeBack();
+
+    await waitFor(() => expect(api.events).toHaveLength(3));
+    expect(posts()).toHaveLength(3);
+    expect(api.events.map((event) => event.metadata['diaper_kind'])).toEqual(['pee', 'poo', 'both']);
+  });
+
+  it('does not spend a retry, or gain any doubt, while there is no signal', async () => {
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'pee') }));
+    await waitForHome();
+
+    await user.click(await screen.findByTestId('unsynced-count'));
+
+    // Nothing left the device, so nothing is in doubt -- which is what
+    // leaves the parent free to correct it (spec 6.1).
+    expect(await screen.findByTestId('unsynced-state')).toHaveTextContent(zhTW.unsynced.queued);
+    expect(screen.queryByTestId('unsynced-unknown')).not.toBeInTheDocument();
+    expect(screen.getByTestId('unsynced-correct')).toBeInTheDocument();
+  });
+
+  it('refuses to edit, and says why', async () => {
+    const event = api.add({ typeId: 'bottle', value: 140 });
+    const user = openSignedIn(`/event/${event.id}`);
+
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    await user.clear(amount);
+    await user.type(amount, '160');
+
+    goOffline();
+    await user.click(screen.getByTestId('submit'));
+
+    // An edit made offline carries the version read offline, so it comes
+    // back 409 almost every time -- and the answer to a 409 is a question
+    // for somebody who is asleep (spec 6.1).
+    expect(await screen.findByTestId('form-error')).toHaveTextContent(zhTW.error.needsConnection);
+    expect(api.find(event.id)?.value).toBe(140);
+  });
+
+  it('refuses to delete, and says why', async () => {
+    const event = api.add({ typeId: 'bottle', value: 140 });
+    const user = openSignedIn(`/event/${event.id}`);
+
+    await user.click(await screen.findByRole('button', { name: zhTW.addEvent.delete }));
+    goOffline();
+    await user.click(screen.getByRole('button', { name: zhTW.event.deleteConfirmYes }));
+
+    expect(await screen.findByTestId('form-error')).toHaveTextContent(zhTW.error.needsConnection);
+    expect(api.find(event.id)).toBeDefined();
+  });
+});
+
+describe('the list of records that would not send', () => {
+  /** A refusal the server could only give for something it has not stored. */
+  const REFUSED = {
+    status: 422,
+    code: 'VALIDATION_FAILED',
+    fields: [{ field: 'value', code: 'OUT_OF_RANGE', params: { min: 0, max: 500 } }],
+  };
+
+  async function refusedBottle(): Promise<ReturnType<typeof userEvent.setup>> {
+    api.nextFailure = REFUSED;
+    const user = openSignedIn('/add/bottle');
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('form-error');
+    return user;
+  }
+
+  it('keeps what the server refused rather than dropping it', async () => {
+    await refusedBottle();
+
+    // It is a record somebody wrote by hand. Giving up on sending it is
+    // not the same as being allowed to throw it away (spec 6.1).
+    closeApp();
+    const next = openSignedIn('/');
+    await waitForHome();
+
+    await next.click(await screen.findByTestId('unsynced-count'));
+    expect(await screen.findByTestId('unsynced-state')).toHaveTextContent(zhTW.unsynced.failed);
+  });
+
+  it('says what the server answered', async () => {
+    await refusedBottle();
+    closeApp();
+    const next = openSignedIn('/');
+    await waitForHome();
+    await next.click(await screen.findByTestId('unsynced-count'));
+
+    expect(await screen.findByTestId('unsynced-retry')).toBeInTheDocument();
+    expect(screen.getByText(
+      interpolate(zhTW.unsynced.lastResponse, { message: zhTW.error.VALIDATION_FAILED }),
+    )).toBeInTheDocument();
+  });
+
+  it('sends a correction under the same id, so it cannot become a second event', async () => {
+    await refusedBottle();
+    closeApp();
+    const next = openSignedIn('/');
+    await waitForHome();
+
+    await next.click(await screen.findByTestId('unsynced-count'));
+    await next.click(await screen.findByTestId('unsynced-correct'));
+
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    expect(amount).toHaveValue('150');
+    await next.clear(amount);
+    await next.type(amount, '100');
+    await next.click(screen.getByTestId('submit'));
+
+    await waitForHome();
+    expect(api.events).toHaveLength(1);
+    expect(api.events[0]?.value).toBe(100);
+
+    const sent = api.requests.filter((e) => e.method === 'POST' && e.path.endsWith('/events'));
+    const ids = new Set(sent.map((e) => (e.body as Record<string, unknown>)['id']));
+    expect(ids.size).toBe(1);
+    await waitFor(() => expect(screen.queryByTestId('unsynced-count')).not.toBeInTheDocument());
+  });
+
+  it('can be told to try again by hand', async () => {
+    await refusedBottle();
+    closeApp();
+    const next = openSignedIn('/');
+    await waitForHome();
+    await next.click(await screen.findByTestId('unsynced-count'));
+
+    await next.click(await screen.findByTestId('unsynced-retry'));
+
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    expect(api.events[0]?.value).toBe(150);
+  });
+
+  it('gives up without claiming the server does not have it', async () => {
+    await refusedBottle();
+    closeApp();
+    const next = openSignedIn('/');
+    await waitForHome();
+    await next.click(await screen.findByTestId('unsynced-count'));
+
+    await next.click(await screen.findByTestId('unsynced-abandon'));
+
+    // Giving up stops this phone trying. It says nothing about the server,
+    // and the words on screen must not either (spec 6.1).
+    expect(screen.getByText(zhTW.unsynced.abandonBody)).toBeInTheDocument();
+    await next.click(screen.getByTestId('abandon-confirm'));
+
+    expect(await screen.findByText(zhTW.unsynced.empty)).toBeInTheDocument();
+
+    closeApp();
+    openSignedIn('/');
+    await waitForHome();
+    expect(screen.queryByTestId('unsynced-count')).not.toBeInTheDocument();
   });
 });

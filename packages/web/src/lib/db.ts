@@ -1,14 +1,14 @@
 import { openDB } from 'idb';
 import type { DBSchema, IDBPDatabase } from 'idb';
-import type { EventDto, SummaryDto } from '@dongfan/shared';
+import type { EventDto, EventIntent, SummaryDto } from '@dongfan/shared';
 
 /**
  * The only thing on this device that persists.
  *
- * Events, the sync cursor and (from the next stage) the queue of writes
- * waiting to be sent all live here. The query cache above it is a view and
- * may be thrown away at any moment; this is what survives a reload, and it
- * is what "the app works on a train" means (spec 6.2).
+ * Events, the sync cursor and the queue of writes waiting to be sent all
+ * live here. The query cache above it is a view and may be thrown away at
+ * any moment; this is what survives a reload, and it is what "the app
+ * works on a train" means (spec 6.2).
  *
  * Everything is scoped to one account and one baby. Not as a tidiness
  * measure: without it, switching accounts shows the previous one's records,
@@ -21,7 +21,7 @@ import type { EventDto, SummaryDto } from '@dongfan/shared';
  */
 
 const DB_NAME = 'dongfan';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 /**
  * One account, one baby.
@@ -56,6 +56,81 @@ export type StoredEvent = {
 function toRow(scope: Scope, event: EventDto): StoredEvent {
   return { scope, id: event.id, rev: event.rev, localDate: event.localDate, event };
 }
+
+/**
+ * What a parent filled in, before the server has seen it.
+ *
+ * Defined here rather than beside the screens because it is a stored
+ * shape: a queued add outlives the form that produced it, the process
+ * that was running at the time, and in the worst case the build. Anything
+ * added to it has to be optional or defaulted on read, for the same
+ * reason `withDefaults` exists below.
+ */
+export type NewEventInput = {
+  typeId: string;
+  intent: EventIntent;
+  startedAt: number;
+  endedAt: number | null;
+  value?: number | undefined;
+  note: string;
+  metadata: Record<string, string>;
+};
+
+/**
+ * `queued` is waiting its turn; `failed` has stopped by itself and needs a
+ * person. Nothing is ever thrown away by either (spec 6.1).
+ */
+export type QueuedState = 'queued' | 'failed';
+
+/**
+ * One add waiting to reach the server.
+ *
+ * The queue takes creations only. An offline `PATCH` carries the version
+ * read while offline and comes back 409 almost every time, and a 409 is
+ * answered by asking the person -- who is asleep (spec 6.1). Editing and
+ * deleting are refused outright instead.
+ */
+export type QueuedCreate = {
+  scope: Scope;
+  /**
+   * Repeated from the scope rather than parsed back out of it.
+   *
+   * A row has to be able to say whose it is on its own, because the
+   * migration from the old store writes rows for accounts that are not
+   * the one signed in now, and reading them back means knowing which
+   * account each belongs to without splitting a string.
+   */
+  userId: string;
+  babyId: string;
+  /**
+   * Generated once, by the screen, and never regenerated. It is the
+   * server's idempotency key: a resend under a new id is the duplicate
+   * the whole queue exists to prevent (spec 3.8, 5.8).
+   */
+  eventId: string;
+  /** Exactly what was, or will be, sent. */
+  input: NewEventInput;
+  /**
+   * Sticky. Set when an attempt ended with nothing from the server, and
+   * cleared only by a refusal the server could not have given for a
+   * stored event (spec 6.1).
+   *
+   * While it is true the content may not be corrected: sending amended
+   * content under an id the server may already hold returns the *stored*
+   * event, and the correction disappears with nothing on screen to say
+   * so.
+   */
+  outcomeUnknown: boolean;
+  /** Attempts that count towards the cap. A 401 or a 429 is not one. */
+  attempts: number;
+  /** Epoch ms; the queue will not touch this entry before it. */
+  nextAttemptAt: number;
+  state: QueuedState;
+  /** The last code the server answered with, for the list of failures. */
+  lastCode: string | null;
+  /** When it first joined the queue. Orders the queue, oldest first. */
+  queuedAt: number;
+};
 
 export type SyncMeta = {
   scope: Scope;
@@ -100,21 +175,44 @@ interface DongfanDb extends DBSchema {
     key: Scope;
     value: SyncMeta;
   };
+  outbox: {
+    key: [Scope, string];
+    value: QueuedCreate;
+    indexes: {
+      'by-scope': Scope;
+    };
+  };
 }
 
 let handle: Promise<IDBPDatabase<DongfanDb>> | null = null;
 
 export function db(): Promise<IDBPDatabase<DongfanDb>> {
   handle ??= openDB<DongfanDb>(DB_NAME, DB_VERSION, {
+    // Each store is created only if it is missing, rather than switching on
+    // the version it is coming from. A phone that has had every build sees
+    // the same thing as one installing today, and a store added in a later
+    // version cannot be skipped by a device that jumped two versions at
+    // once.
     upgrade(database) {
-      const events = database.createObjectStore('events', { keyPath: ['scope', 'id'] });
-      // Ordered by rev, which is how a page of the sync feed arrives and
-      // the only ordering the server guarantees is a write order.
-      events.createIndex('by-scope-rev', ['scope', 'rev']);
-      // The home screen and the calendar both ask for one local day.
-      events.createIndex('by-scope-date', ['scope', 'localDate']);
+      if (!database.objectStoreNames.contains('events')) {
+        const events = database.createObjectStore('events', { keyPath: ['scope', 'id'] });
+        // Ordered by rev, which is how a page of the sync feed arrives and
+        // the only ordering the server guarantees is a write order.
+        events.createIndex('by-scope-rev', ['scope', 'rev']);
+        // The home screen and the calendar both ask for one local day.
+        events.createIndex('by-scope-date', ['scope', 'localDate']);
+      }
 
-      database.createObjectStore('meta', { keyPath: 'scope' });
+      if (!database.objectStoreNames.contains('meta')) {
+        database.createObjectStore('meta', { keyPath: 'scope' });
+      }
+
+      if (!database.objectStoreNames.contains('outbox')) {
+        const outbox = database.createObjectStore('outbox', { keyPath: ['scope', 'eventId'] });
+        // Everything the queue does is per account and baby: what it sends,
+        // what it counts and what it shows (spec 6.1).
+        outbox.createIndex('by-scope', 'scope');
+      }
     },
   });
 
@@ -299,4 +397,83 @@ export async function allEvents(scope: Scope): Promise<EventDto[]> {
     IDBKeyRange.bound([scope, -Infinity], [scope, Infinity]),
   );
   return rows.map((row) => row.event);
+}
+
+/**
+ * Everything waiting to be sent for one account and baby, oldest first.
+ *
+ * Ordered by when each joined the queue, not by the key. An index gives
+ * back its matches in primary-key order, which here is the event id -- a
+ * random UUID, so the queue would drain in an order with no relation to
+ * the order a parent recorded things in.
+ */
+export async function listQueued(scope: Scope): Promise<QueuedCreate[]> {
+  const rows = await (await db()).getAllFromIndex('outbox', 'by-scope', scope);
+  return rows.sort((a, b) => a.queuedAt - b.queuedAt || (a.eventId < b.eventId ? -1 : 1));
+}
+
+export async function getQueued(scope: Scope, eventId: string): Promise<QueuedCreate | null> {
+  return (await (await db()).get('outbox', [scope, eventId])) ?? null;
+}
+
+export async function putQueued(entry: QueuedCreate): Promise<void> {
+  await (await db()).put('outbox', entry);
+}
+
+export async function removeQueued(scope: Scope, eventId: string): Promise<void> {
+  await (await db()).delete('outbox', [scope, eventId]);
+}
+
+/**
+ * Puts an add into the queue, keeping what the queue already knew about it.
+ *
+ * The content is replaced, because a correction is the one thing a person
+ * may change about a waiting entry, and the counters are reset, because
+ * asking for it again by hand is a fresh start (spec 6.1). What survives is
+ * `outcomeUnknown`: it is sticky, and an entry that has ever ended in
+ * silence is still in doubt no matter how many times it is resent.
+ *
+ * Read and write in one transaction. Two mounts racing here would
+ * otherwise both see nothing and both write a first attempt, and the later
+ * one would carry `outcomeUnknown: false` over an entry that was in doubt.
+ */
+export async function enqueue(
+  entry: Omit<QueuedCreate, 'outcomeUnknown' | 'attempts' | 'nextAttemptAt' | 'state' | 'lastCode' | 'queuedAt'>,
+  now: number,
+): Promise<QueuedCreate> {
+  const database = await db();
+  const tx = database.transaction('outbox', 'readwrite');
+  const existing = await tx.store.get([entry.scope, entry.eventId]);
+
+  const next: QueuedCreate = {
+    ...entry,
+    outcomeUnknown: existing?.outcomeUnknown ?? false,
+    attempts: 0,
+    nextAttemptAt: now,
+    state: 'queued',
+    lastCode: null,
+    queuedAt: existing?.queuedAt ?? now,
+  };
+
+  await tx.store.put(next);
+  await tx.done;
+  return next;
+}
+
+/**
+ * Adds an entry only if that scope and id are not already held.
+ *
+ * For the migration out of the old store, which may run again after a
+ * crash between writing here and clearing there. The entry already in the
+ * queue is the one that has been attempted, counted and possibly marked;
+ * overwriting it with the migration's fresh copy would reset all of that,
+ * and reset `outcomeUnknown` with it.
+ */
+export async function queueIfAbsent(entry: QueuedCreate): Promise<boolean> {
+  const database = await db();
+  const tx = database.transaction('outbox', 'readwrite');
+  const existing = await tx.store.get([entry.scope, entry.eventId]);
+  if (!existing) await tx.store.put(entry);
+  await tx.done;
+  return !existing;
 }

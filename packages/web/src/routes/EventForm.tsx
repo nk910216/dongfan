@@ -8,6 +8,7 @@ import { EventFields, checkDraft, draftForValue } from '../components/EventField
 import type { EventDraft } from '../components/EventFields.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { useCreateEvent } from '../lib/create-event.js';
+import type { SubmitResult } from '../lib/create-event.js';
 import { typeSummary, useStore } from '../lib/store.js';
 
 /**
@@ -17,12 +18,20 @@ import { typeSummary, useStore } from '../lib/store.js';
  * be expressed: starting a timer and writing up a finished event carry
  * identical fields, so the server cannot tell them apart unless the client
  * says which it meant (spec 3.5).
+ *
+ * The same form serves "record something new" and "correct the one that
+ * would not send". The failure list passes the entry it wants by props;
+ * everything else comes in by route, and neither knows about the other.
  */
-export function EventForm(): React.JSX.Element {
-  const { typeId = '' } = useParams();
+export function EventForm({ typeId: given, entryId }: {
+  typeId?: string;
+  entryId?: string;
+} = {}): React.JSX.Element {
+  const params = useParams();
+  const typeId = given ?? params['typeId'] ?? '';
   const navigate = useNavigate();
   const { baby, summary } = useStore();
-  const create = useCreateEvent(typeId);
+  const create = useCreateEvent(typeId, entryId);
   const type = getEventType(typeId);
 
   const [intent, setIntent] = useState<EventIntent>(
@@ -77,15 +86,30 @@ export function EventForm(): React.JSX.Element {
 
   const isTimer = type.timerEnabled && intent === 'start_timer';
 
+  /**
+   * Where to go once the queue has answered.
+   *
+   * Waiting in the queue counts as done: the record is written down and
+   * the parent has nothing left to do about it. Only a refusal keeps them
+   * here, because only a refusal is something they can act on.
+   */
+  const finish = (result: SubmitResult): void => {
+    if (result.kind === 'failed') return;
+    // The queue sent the original while this screen was open, so what is
+    // typed here is now an edit to a stored event and has to carry a
+    // version. That is the edit screen's job (spec 6.3).
+    navigate(result.kind === 'gone' ? `/event/${result.eventId}` : '/');
+  };
+
   const submit = async (): Promise<void> => {
     setLocalError(null);
 
-    // A resend carries what was sent before, so the draft is not what is
+    // A resend carries what the queue holds, so the draft is not what is
     // being checked and must not be able to block it. Frozen fields plus a
     // draft that no longer passes would leave no way forward and no way
     // back (spec 6.1).
     if (create.outcomeUnknown) {
-      if (await create.retry()) navigate('/');
+      finish(await create.retry());
       return;
     }
 
@@ -99,7 +123,7 @@ export function EventForm(): React.JSX.Element {
       return;
     }
 
-    const created = await create.submit({
+    finish(await create.submit({
       typeId: type.id,
       intent,
       startedAt: draft.startedAt,
@@ -107,8 +131,7 @@ export function EventForm(): React.JSX.Element {
       value: checked.value,
       note: draft.note,
       metadata: draft.metadata,
-    });
-    if (created) navigate('/');
+    }));
   };
 
   return (

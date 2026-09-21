@@ -233,8 +233,10 @@ platform, and that says nothing about anything. Installation and the update
 flow belong to the PWA work in M2 (spec 12), and the check goes there.
 
 iOS clears storage for sites not used in seven days (spec 9.6), which means
-a sign-in can vanish on its own. That is expected here; it becomes
-consequential once the offline queue exists, and is handled in M2.
+a sign-in can vanish on its own — and now that the offline queue exists, so
+can records that have not been sent. The app says how many are waiting so
+that this is visible rather than silent, and the answer is to use it from
+the home screen, which is exempt. The prompt for that is stage 4 of M2.
 
 ## After restoring a backup
 
@@ -249,7 +251,11 @@ On every device:
 3. Sync again from `since=0`.
 4. Send the kept items.
 
-In this milestone the web client keeps no sync cursor yet: only the
-unresolved adds under `dongfan.pending-creates` in local storage, which are
-step 1. Steps 2 and 3 become real with the offline layer in M2, and this
-note has to be revisited then.
+All four are concrete now. The client keeps everything in IndexedDB, in the
+database `dongfan`: the `outbox` store is step 1 and must be kept, and the
+`events` and `meta` stores are step 2 and must be emptied. An absent `meta`
+row reads as a cursor of zero, which is step 3, and the queue then does
+step 4 by itself.
+
+Clearing site data from the browser is the wrong tool: it does steps 2 and 3
+and destroys step 1 along with them. See `AGENTS.md`.

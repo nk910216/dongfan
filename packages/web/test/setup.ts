@@ -6,6 +6,7 @@ import '@testing-library/jest-dom/vitest';
 import { api, server } from './server.js';
 import { closeDb } from '../src/lib/db.js';
 import { resetLanes } from '../src/lib/lane.js';
+import { resetMigration } from '../src/lib/outbox.js';
 
 /**
  * A working Storage for the tests.
@@ -62,6 +63,17 @@ export function breakStorage(): void {
   }
 }
 
+/**
+ * Flight mode, and back out of it.
+ *
+ * The app asks `navigator.onLine` before sending an add, because a `false`
+ * there means nothing can have left the device -- which is what lets a
+ * queued record still be corrected later (spec 6.1).
+ */
+export function setOnline(online: boolean): void {
+  Object.defineProperty(navigator, 'onLine', { value: online, configurable: true });
+}
+
 installStorage();
 
 // Vitest does not expose globals here, so Testing Library's automatic
@@ -82,6 +94,10 @@ afterEach(() => {
   // whatever the previous test's sync cursor was, and a cursor is exactly
   // the thing that makes a sync quietly return nothing.
   resetLanes();
+  // The move out of the old store runs once per load. Without this, one
+  // test's migration would count as the next one's.
+  resetMigration();
+  setOnline(true);
   closeDb();
   globalThis.indexedDB = new IDBFactory();
   // A test may have left a Storage that throws in place.

@@ -135,8 +135,7 @@ export const zhTW = {
     neverSynced: '尚未同步',
     syncedHoursAgo: '{hours} 小時前同步',
     syncedDaysAgo: '{days} 天前同步',
-    pendingUnknown: '有一筆{name}紀錄不確定是否已送出，請開啟確認',
-    pendingUnknownMany: '有 {count} 筆紀錄不確定是否已送出，請逐筆確認',
+    unsynced: '尚有 {count} 筆未同步',
   },
 
   timer: {
@@ -187,6 +186,27 @@ export const zhTW = {
     endedAtEmpty: '尚未填寫',
   },
 
+  unsynced: {
+    title: '未同步紀錄',
+    hint: '這些紀錄還在這支手機上。加入主畫面使用比較不會被清掉。',
+    empty: '沒有未同步的紀錄',
+    badge: '未同步',
+    queued: '等待送出',
+    waiting: '稍後自動重試',
+    failed: '已停止重試',
+    unknown: '不確定是否已送出',
+    unknownHint: '上次送出後沒有收到回應。請先原樣重送，確認伺服器上有沒有這筆之後才能修改內容。',
+    attempts: '已嘗試 {attempts} 次',
+    lastResponse: '上次回應：{message}',
+    retry: '立即重試',
+    correct: '修正後重試',
+    abandon: '放棄',
+    abandonTitle: '放棄這筆？',
+    abandonBody: '放棄只會讓這支手機不再送出，不代表伺服器上沒有這筆紀錄。',
+    abandonYes: '確定放棄',
+    correctTitle: '修正後重試',
+  },
+
   conflict: {
     body: '你的變更尚未儲存。重新載入後可再編輯一次。',
     reload: '重新載入',
@@ -205,6 +225,7 @@ export const zhTW = {
     INTERNAL: '伺服器發生錯誤，請稍後再試',
     UNKNOWN: '發生未預期的錯誤，請稍後再試',
     offline: '目前離線，無法完成這個操作',
+    needsConnection: '需要連線才能編輯或刪除',
     retry: '重試',
   },
 

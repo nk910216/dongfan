@@ -37,6 +37,34 @@ export class NetworkFailure extends Error {
   }
 }
 
+/**
+ * Thrown by the client before anything is sent, because it knows there is
+ * no connection.
+ *
+ * Distinct from `NetworkFailure` on purpose. That one means "we do not
+ * know whether the server got it"; this one means "nothing left the
+ * device", which is a fact and not a doubt. Conflating them would put an
+ * event into the queue marked as possibly stored when it certainly is not,
+ * and a parent would then be barred from correcting it (spec 6.1).
+ */
+export class OfflineError extends Error {
+  constructor() {
+    super('The device is offline');
+    this.name = 'OfflineError';
+  }
+}
+
+/**
+ * Whether the device says it has no connection at all.
+ *
+ * Only trusted in one direction. `false` means no interface is up, so
+ * nothing can have been sent; `true` means very little, which is why a
+ * request is still attempted and still has to cope with failing.
+ */
+export function isOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false;
+}
+
 type ErrorBody = {
   error?: { code?: unknown; details?: { fields?: unknown } | null };
 };

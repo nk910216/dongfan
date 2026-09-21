@@ -1,8 +1,7 @@
 import { useCallback, useState } from 'react';
 import type { EventDto } from '@dongfan/shared';
-import { outcomeIsUnknown, provesNotStored } from './outcome.js';
-import { forgetPending, pendingFor, rememberPending } from './pending-create.js';
-import { useSession } from './session.js';
+import { EntryGone } from './outbox.js';
+import type { QueuedCreate } from './db.js';
 import { newClientId } from './ids.js';
 import { useStore } from './store.js';
 import type { NewEventInput } from './store.js';
@@ -14,104 +13,132 @@ import type { NewEventInput } from './store.js';
  * deduplicates on: a second press after a failed save must reach the same
  * row, not make a new one (spec 3.8).
  *
- * The harder half is what happens when the attempt ends without an answer.
- * A lost response looks exactly like a refusal from here, but the two call
- * for opposite handling: if the event is already stored, sending corrected
- * content under the same id gets the *stored* version back, and the
- * correction disappears without a trace (spec 6.1). So an attempt that ends
- * in silence is written to storage and marked unresolved, and until the
- * server says something definite the only thing the caller may do is resend
- * what was sent before, unchanged.
+ * What this no longer does is hold the record. Everything a retry needs --
+ * the id, the content that was sent, whether the outcome is in doubt --
+ * lives in the queue, where it survives the screen being unmounted by a
+ * 401, the tab being killed, and the phone being put down for an hour
+ * (spec 6.1). This hook picks which of the queue's three doors to use and
+ * reports what came back.
  *
- * This is not the offline queue. That belongs to M2, with its own storage
- * and its own backoff. This is only the rule that a retry in front of the
- * parent cannot quietly duplicate their record.
+ * Because of that, `outcomeUnknown` here is read from the queue on every
+ * render rather than mirrored into state. A copy would be the second
+ * source of truth this project keeps being bitten by, and it would go
+ * stale the moment the queue retried in the background.
  */
+
+export type SubmitResult =
+  /** The server has it, and said so. */
+  | { kind: 'sent'; event: EventDto }
+  /** In the queue, not yet sent. Nothing more for this screen to do. */
+  | { kind: 'queued' }
+  /**
+   * The queue sent it in the background while this screen was open, so a
+   * correction typed here cannot go out as a creation any more: the server
+   * would answer with the event it already has. It has to become an edit
+   * (spec 6.1, 6.3).
+   */
+  | { kind: 'gone'; eventId: string }
+  /** The server refused it. `failure` says what it said. */
+  | { kind: 'failed' };
 
 export type CreateEvent = {
   busy: boolean;
   /** True when an attempt ended without the server saying anything. */
   outcomeUnknown: boolean;
-  /** What that attempt sent. The screen shows this rather than a new draft. */
+  /**
+   * The content of the entry this screen took over, so the form can show
+   * what is actually waiting rather than an empty draft.
+   */
   pending: NewEventInput | null;
   failure: unknown;
   /**
-   * Sends the draft, or -- once the outcome is unknown -- resends exactly
-   * what was sent before, whatever is passed in.
+   * Sends the draft, or -- once the outcome is unknown -- sends exactly
+   * what the queue holds, whatever is passed in.
    */
-  submit: (input: NewEventInput) => Promise<EventDto | null>;
+  submit: (input: NewEventInput) => Promise<SubmitResult>;
   /**
-   * Resends the captured payload, for a caller that has a draft it must
-   * not consult. Falls back to `submit` when there is nothing captured.
+   * Sends what the queue holds, for a caller that has a draft it must not
+   * consult.
    */
-  retry: () => Promise<EventDto | null>;
+  retry: () => Promise<SubmitResult>;
 };
 
-export function useCreateEvent(typeId: string): CreateEvent {
-  const { addEvent, baby } = useStore();
-  const { me } = useSession();
-  const userId = me?.user.id ?? '';
+/**
+ * The waiting entry this screen should take over, if there is one.
+ *
+ * Named explicitly when the failure list sent us here. Otherwise the
+ * oldest of this type that needs a person: one that is merely waiting its
+ * turn is the queue's business, and hijacking the form with it would stop
+ * a parent recording the next feed at all.
+ */
+function resumable(
+  entries: readonly QueuedCreate[],
+  typeId: string,
+  eventId: string | undefined,
+): QueuedCreate | null {
+  if (eventId !== undefined) return entries.find((entry) => entry.eventId === eventId) ?? null;
+  return (
+    entries.find(
+      (entry) =>
+        entry.input.typeId === typeId && (entry.outcomeUnknown || entry.state === 'failed'),
+    ) ?? null
+  );
+}
 
-  // Picked up from storage when it belongs to this user, this baby and
-  // this type. A nappy shortcut must not resend somebody's bottle.
-  const [resumed] = useState(() => pendingFor(userId, baby.id, typeId));
+export function useCreateEvent(typeId: string, eventId?: string): CreateEvent {
+  const { addEvent, retryUnsynced, correctUnsynced, unsynced } = useStore();
 
-  const [eventId] = useState(() => resumed?.eventId ?? newClientId());
-  const [sent, setSent] = useState<NewEventInput | null>(resumed?.input ?? null);
-  const [outcomeUnknown, setOutcomeUnknown] = useState(resumed !== null);
+  // Read once, at mount, and only ever used to fill the form in. Letting
+  // it follow the queue would swap the fields out from under a parent's
+  // fingers when a background retry happened to land.
+  const [resumed] = useState(() => resumable(unsynced, typeId, eventId));
+
+  const [id] = useState(() => resumed?.eventId ?? newClientId());
   const [failure, setFailure] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
-  const submit = useCallback(
-    async (input: NewEventInput): Promise<EventDto | null> => {
-      // While the outcome is in doubt, the payload is not the caller's to
-      // choose: only the original content can tell us what the server has.
-      const payload = outcomeUnknown && sent ? sent : input;
+  // The queue's own view of this add, which is the only authority on it.
+  const entry = unsynced.find((candidate) => candidate.eventId === id) ?? null;
+  const outcomeUnknown = entry?.outcomeUnknown ?? false;
+  const held = entry !== null;
 
+  const submit = useCallback(
+    async (input: NewEventInput): Promise<SubmitResult> => {
       setBusy(true);
       setFailure(null);
+
       try {
-        const created = await addEvent(eventId, payload);
-        setOutcomeUnknown(false);
-        setSent(null);
-        // This add and no other. A nappy going through says nothing about
-        // a bottle still waiting to be confirmed.
-        forgetPending(userId, baby.id, eventId);
+        // While the outcome is in doubt the content is not the caller's to
+        // choose, and it is not this screen's to supply either: only what
+        // the queue stored can tell us what the server may already have.
+        const event = outcomeUnknown
+          ? await retryUnsynced(id)
+          : held
+            ? await correctUnsynced(id, input)
+            : await addEvent(id, input);
+
         setBusy(false);
-        return created;
+        // Null means it is waiting: the device was offline, so nothing was
+        // sent and nothing is in doubt.
+        return event === null ? { kind: 'queued' } : { kind: 'sent', event };
       } catch (error) {
-        setFailure(error);
         setBusy(false);
+        if (error instanceof EntryGone) return { kind: 'gone', eventId: id };
 
-        // Once in doubt, only a refusal the server could not have given
-        // for a stored event settles it. Every other answer -- including
-        // the ones that look definite -- leaves it exactly where it was.
-        if (outcomeUnknown) {
-          if (provesNotStored(error)) {
-            setOutcomeUnknown(false);
-            setSent(null);
-            forgetPending(userId, baby.id, eventId);
-          }
-          return null;
-        }
-
-        if (outcomeIsUnknown(error)) {
-          setSent(payload);
-          setOutcomeUnknown(true);
-          // Written down before the screen has a chance to disappear,
-          // which a 401 makes it do immediately.
-          rememberPending({ userId, babyId: baby.id, eventId, input: payload });
-        }
-        return null;
+        // Only for display. Whether this may be retried, corrected or
+        // resent is decided by the entry, which the queue has just
+        // updated.
+        setFailure(error);
+        return { kind: 'failed' };
       }
     },
-    [addEvent, eventId, outcomeUnknown, sent, userId, baby.id],
+    [addEvent, retryUnsynced, correctUnsynced, id, outcomeUnknown, held],
   );
 
-  const retry = useCallback(
-    (): Promise<EventDto | null> => (sent === null ? Promise.resolve(null) : submit(sent)),
-    [sent, submit],
-  );
+  const retry = useCallback((): Promise<SubmitResult> => {
+    if (!entry) return Promise.resolve<SubmitResult>({ kind: 'gone', eventId: id });
+    return submit(entry.input);
+  }, [entry, id, submit]);
 
-  return { busy, outcomeUnknown, pending: sent, failure, submit, retry };
+  return { busy, outcomeUnknown, pending: resumed?.input ?? null, failure, submit, retry };
 }

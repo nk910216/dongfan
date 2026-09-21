@@ -9,6 +9,7 @@ import { EditEvent } from './routes/EditEvent.js';
 import { EventForm } from './routes/EventForm.js';
 import { Home } from './routes/Home.js';
 import { Login } from './routes/Login.js';
+import { CorrectUnsynced, Unsynced } from './routes/Unsynced.js';
 
 export function App(): React.JSX.Element {
   return (
@@ -40,12 +41,18 @@ function Shell(): React.JSX.Element {
   if (!baby) return <CreateBaby />;
 
   return (
-    <StoreProvider baby={baby}>
+    // Keyed by the account and the baby, so changing either builds
+    // everything below from scratch. Without it a screen keeps whatever it
+    // read at mount -- a queued add, a draft, a list of events -- and goes
+    // on showing one family's records under another's name (spec 6.2).
+    <StoreProvider key={`${me.user.id}\u0000${baby.id}`} baby={baby}>
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/add" element={<AddEvent />} />
         <Route path="/add/:typeId" element={<EventForm />} />
         <Route path="/event/:eventId" element={<EditEvent />} />
+        <Route path="/unsynced" element={<Unsynced />} />
+        <Route path="/unsynced/:eventId" element={<CorrectUnsynced />} />
       </Routes>
     </StoreProvider>
   );

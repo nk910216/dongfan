@@ -1,5 +1,5 @@
 import { errorMessage, fieldErrorMessage, zhTW } from '@dongfan/shared';
-import { ApiFailure, NetworkFailure } from '../lib/api.js';
+import { ApiFailure, NetworkFailure, OfflineError } from '../lib/api.js';
 
 /**
  * Turns whatever a request threw into something a parent can read.
@@ -11,6 +11,10 @@ import { ApiFailure, NetworkFailure } from '../lib/api.js';
 export function describeFailure(failure: unknown): string {
   // A check the form made itself, already resolved through the copy file.
   if (typeof failure === 'string') return failure;
+  // Refused here, before sending, because editing needs a connection
+  // (spec 6.1). Worth its own line: "you are offline" explains nothing
+  // about why saving a new event just worked.
+  if (failure instanceof OfflineError) return zhTW.error.needsConnection;
   // Not an error code: the server never answered, so there is none.
   if (failure instanceof NetworkFailure) return zhTW.error.offline;
   if (failure instanceof ApiFailure) {

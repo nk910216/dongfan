@@ -158,10 +158,59 @@ one. The web server keeps serving the page; every `/api` request now fails.
 - The indicator at the top says the sync failed rather than claiming it
   just succeeded.
 - Reloading the page still works, and still shows the records.
-- Adding an event fails — the queue that lets it wait is the next stage.
+- Adding an event still works. It goes into the queue, appears in today's
+  list marked as unsynced, and is sent when the worker comes back.
 
 Start the worker again and the indicator goes back to saying when it last
 succeeded.
+
+### Recording with the phone in flight mode
+
+This is the M2 criterion from spec 12.1: record with no signal, reconnect,
+and confirm it synced exactly once.
+
+**Load the app first, then turn the network off.** There is still no
+service worker, so a phone with no connection cannot fetch the page at all
+and you would be looking at a browser error rather than at this code. Once
+the page is open it stays open, which is the situation the queue is for.
+
+1. Open the app on the phone over the LAN address and sign in.
+2. Turn off Wi-Fi and mobile data. **Do not reload.**
+3. Record a nappy from the shortcut.
+   - It appears in today's list, dimmed, with an unsynced badge.
+   - The strip above says how many records are waiting.
+   - Tapping that strip lists them, with what each one contains.
+4. Open an existing event and try to save a change.
+   - It is refused, and says a connection is needed (spec 6.1). Stopping a
+     timer offline is the case this genuinely loses, and it gets a draft of
+     its own in the next stage (spec 7.2).
+5. Turn Wi-Fi back on.
+   - Within a few seconds the strip disappears, the dimmed row becomes a
+     normal one, and the count of today's events does not change.
+
+Then check it landed once rather than twice:
+
+```sh
+npx wrangler d1 execute DB --config packages/api/wrangler.jsonc --local \
+  --command "SELECT id, type_id, started_at FROM events WHERE deleted_at IS NULL ORDER BY rev DESC LIMIT 5"
+```
+
+One row for the nappy, with the same id the phone generated. Two rows with
+different ids would mean the id was regenerated on the retry, which is the
+one mistake the whole mechanism exists to prevent (spec 3.8, 5.8).
+
+### What the queue will not do
+
+- It takes creations only. Edits and deletions are refused while offline
+  rather than queued (spec 6.1).
+- It stops after ten counted attempts and waits for a person. A record that
+  has stopped is still in the list, with its content intact.
+- "Give up" stops this phone trying. It does not mean the server does not
+  have the record, and the wording on screen says so.
+- The figures in the summary strip stay the server's. A feed recorded
+  offline shows in the list but does not move "last feed" until it has
+  been sent, because what changes when an event moves is not something a
+  phone can work out (spec 6.2).
 
 ### A restore drill
 
@@ -180,7 +229,8 @@ the checks are exercised here against synthetic data.
 | Login CPU under the 10 ms limit | Local runs enforce no CPU limit at all (spec 9.3) |
 | Backup of the deployed database | There is no deployed database |
 | The scheduled backup workflow | It runs on GitHub against a deployed database |
-| Installing to the home screen | No manifest yet; this belongs to the PWA work in M2 |
+| Installing to the home screen | No manifest yet; this belongs to stage 4 of M2 |
+| A cold start with no network | Needs a service worker, which needs HTTPS; stage 4 |
 
 These stay outstanding. [`deployment.md`](deployment.md) is what to do when
 deploying becomes the plan; none of it has been done.

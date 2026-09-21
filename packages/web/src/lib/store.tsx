@@ -2,11 +2,16 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react';
 import { getEventType, toLocalDate, zhTW } from '@dongfan/shared';
 import { Message } from '../components/Message.js';
-import type { BabyDto, EventDto, EventIntent, SummaryDto, TypeSummaryDto } from '@dongfan/shared';
-import { ApiFailure, apiRequest } from './api.js';
+import type { BabyDto, EventDto, SummaryDto, TypeSummaryDto } from '@dongfan/shared';
+import { ApiFailure, OfflineError, apiRequest, isOffline } from './api.js';
 import * as local from './db.js';
-import { scopeOf } from './db.js';
+import { listQueued, scopeOf } from './db.js';
+import type { NewEventInput, QueuedCreate } from './db.js';
 import { runExclusive } from './lane.js';
+import {
+  abandonQueued, attemptQueued, correctQueued, ensureMigrated, queueAdd, retryQueued, runOutbox,
+} from './outbox.js';
+import type { Send } from './outbox.js';
 import { syncEvents, syncSummary } from './sync.js';
 import { useSession } from './session.js';
 
@@ -23,20 +28,21 @@ import { useSession } from './session.js';
  * cached, and shown as old rather than as current when the fetch fails
  * (spec 5.5, 6.2).
  *
- * Writes still go straight to the server. The queue that lets them wait is
- * the next stage; a half-built one is worse than none, because it would
- * look like it was keeping a parent's records safe.
+ * Adds go through the queue in `outbox.ts`, which means they are written
+ * down before anything is sent and survive whatever happens next. Edits
+ * and deletions do not: offline they are refused outright, because the
+ * version they carry would be stale by the time they left and the answer
+ * to the conflict that follows is a question for somebody who is asleep
+ * (spec 6.1).
  */
 
-export type NewEventInput = {
-  typeId: string;
-  intent: EventIntent;
-  startedAt: number;
-  endedAt: number | null;
-  value?: number | undefined;
-  note: string;
-  metadata: Record<string, string>;
-};
+/**
+ * Re-exported from the storage layer, where it is defined.
+ *
+ * It is the shape of a queued add as much as the shape of a form, and the
+ * two must not be allowed to drift apart.
+ */
+export type { NewEventInput };
 
 export type EventPatch = {
   startedAt?: number;
@@ -59,7 +65,33 @@ export type Store = {
   syncing: boolean;
   /** When the last successful pull finished, or null if there never was one. */
   syncedAt: number | null;
+  /**
+   * Adds that have not reached the server, oldest first.
+   *
+   * On screen as a count and as a list, never implied: storage here can be
+   * cleared by the browser without warning, so "we are holding four of
+   * your records" is something a parent has to be told (spec 6.1, 9.6).
+   */
+  unsynced: QueuedCreate[];
   refresh: () => Promise<void>;
+  /**
+   * Sends one waiting add now, exactly as it stands, and resets its
+   * counters.
+   *
+   * The content comes from the entry, not from a screen. That is the whole
+   * point when the outcome is unknown: what has to go back is what went
+   * before, and an entry can say what that was long after the form that
+   * produced it has gone (spec 6.1).
+   */
+  retryUnsynced: (eventId: string) => Promise<EventDto | null>;
+  /**
+   * Replaces the content of a waiting add and sends it.
+   *
+   * Refused while its outcome is unknown; see `correctQueued`.
+   */
+  correctUnsynced: (eventId: string, input: NewEventInput) => Promise<EventDto | null>;
+  /** Stops trying. Says nothing about whether the server has it. */
+  abandonUnsynced: (eventId: string) => Promise<void>;
   /**
    * One event. Local when we have it, unless `fresh` is asked for.
    *
@@ -69,11 +101,18 @@ export type Store = {
    */
   findEvent: (eventId: string, options?: { fresh?: boolean }) => Promise<EventDto>;
   /**
+   * Queues an add and, unless the device is plainly offline, tries to send
+   * it there and then.
+   *
    * The id is the caller's, not this function's. Generating one here would
    * mean a second press after a failure created a second event, which is
    * the one thing idempotency exists to prevent (spec 3.8, 6.1).
+   *
+   * Returns the stored event, or null when it is waiting in the queue.
+   * A refusal from the server is thrown, because somebody is looking at
+   * the screen and can do something about it.
    */
-  addEvent: (eventId: string, input: NewEventInput) => Promise<EventDto>;
+  addEvent: (eventId: string, input: NewEventInput) => Promise<EventDto | null>;
   updateEvent: (eventId: string, version: number, patch: EventPatch) => Promise<EventDto>;
   stopTimer: (eventId: string, version: number, endedAt: number) => Promise<EventDto>;
   removeEvent: (eventId: string, version: number) => Promise<void>;
@@ -92,13 +131,19 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
   // One account, one baby. Everything below reads and writes under this,
   // so switching accounts cannot show the previous one's records and a
   // record cannot be filed against the wrong baby (spec 6.1, 6.2).
-  const scope = scopeOf(me?.user.id ?? '', baby.id);
+  const userId = me?.user.id ?? '';
+  const scope = scopeOf(userId, baby.id);
   const [events, setEvents] = useState<EventDto[]>([]);
   const [summary, setSummary] = useState<SummaryDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [stale, setStale] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncedAt, setSyncedAt] = useState<number | null>(null);
+  const [unsynced, setUnsynced] = useState<QueuedCreate[]>([]);
+  // When the queue should wake up next. Null while there is nothing
+  // waiting, and null while it is paused, which is what stops a timer
+  // firing against a session that has already been rejected.
+  const [dueAt, setDueAt] = useState<number | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [now, setNow] = useState(() => Date.now());
 
@@ -130,12 +175,14 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
 
   /** Shows whatever is already here, without asking the network. */
   const readLocal = useCallback(async () => {
-    const [day, meta] = await Promise.all([
+    const [day, meta, queued] = await Promise.all([
       local.eventsOnDate(scope, today),
       local.readMeta(scope),
+      listQueued(scope),
     ]);
     setEvents(allDayFirst(day));
     setSyncedAt(meta.syncedAt);
+    setUnsynced(queued);
     if (meta.summary) setSummary(meta.summary);
     return meta;
   }, [scope, today]);
@@ -161,6 +208,7 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     // screen and the device disagreeing until the next reload.
     const meta = await local.readMeta(scope);
     setEvents(allDayFirst(await local.eventsOnDate(scope, today)));
+    setUnsynced(await listQueued(scope));
     if (meta.summary) setSummary(meta.summary);
     setSyncedAt(meta.syncedAt);
   }, [call, readLocal, scope, baby.id, today]);
@@ -227,6 +275,88 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
   }, [scope]);
 
   /**
+   * The one way an add leaves this device.
+   *
+   * Handed to the queue rather than called by it, so that nothing in
+   * `outbox.ts` knows about tokens, paths or the session -- and so the
+   * queue's rules can be tested without a network at all.
+   */
+  const send = useCallback<Send>(
+    (eventId, input) =>
+      call<EventDto>(`/babies/${baby.id}/events`, {
+        method: 'POST',
+        body: { id: eventId, ...input },
+      }),
+    [call, baby.id],
+  );
+
+  /**
+   * Sends whatever the queue says is due.
+   *
+   * In its own lane, not the sync one: a queue working through ten entries
+   * must not hold up the pull that shows what the other parent just
+   * recorded, and neither may overlap with itself.
+   *
+   * The migration runs first, every time, because it is cheap when there
+   * is nothing to move and because the first drain after an upgrade is
+   * exactly when the entries it rescues matter most.
+   */
+  const drain = useCallback(async (): Promise<void> => {
+    let sent = 0;
+
+    await runExclusive(`outbox:${scope}`, async () => {
+      await ensureMigrated();
+
+      // Nothing is attempted while the device says it has no connection.
+      // An attempt that cannot leave still fails, and a failure that
+      // cannot leave would spend one of the ten and mark the entry as
+      // possibly stored -- barring a parent from correcting a record that
+      // certainly never went anywhere (spec 6.1). Coming back online is
+      // one of the things that calls this, so nothing is left waiting on a
+      // timer that was deliberately not armed.
+      if (isOffline()) {
+        setUnsynced(await listQueued(scope));
+        setDueAt(null);
+        return;
+      }
+
+      const result = await runOutbox(scope, send);
+      sent = result.sent;
+      setUnsynced(await listQueued(scope));
+      // A paused queue arms no timer. It waits for the same person to sign
+      // in again, which remounts everything below and starts it off
+      // (spec 6.1).
+      setDueAt(result.paused ? null : result.nextDueAt);
+    });
+
+    // Outside the queue's lane and through the sync one, or a drain and a
+    // pull could run against each other.
+    if (sent > 0) await settle();
+  }, [scope, send, settle]);
+
+  /**
+   * Wakes the queue when the next entry falls due.
+   *
+   * One timer for the earliest of them rather than one each, and none at
+   * all when nothing is waiting: a phone in a pocket should not be woken
+   * to find out there is nothing to do.
+   */
+  useEffect(() => {
+    if (dueAt === null) return;
+
+    // A floor, so that an entry which somehow reports itself due on every
+    // pass cannot turn this into a spin.
+    const delay = Math.max(1_000, dueAt - Date.now());
+    const timer = setTimeout(() => void drain(), delay);
+    return () => clearTimeout(timer);
+  }, [dueAt, drain]);
+
+  /** First pass, once the app has an account and a baby. */
+  useEffect(() => {
+    void drain();
+  }, [drain]);
+
+  /**
    * Pulls again when the app comes back.
    *
    * Without this the only thing that syncs is this device's own writing.
@@ -241,6 +371,9 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     const again = (): void => {
       if (document.visibilityState === 'hidden') return;
       void settle();
+      // The same two moments the queue has been waiting for. A phone that
+      // was in a pocket through a tunnel has both a pull and a send to do.
+      void drain();
     };
 
     window.addEventListener('online', again);
@@ -249,26 +382,68 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
       window.removeEventListener('online', again);
       document.removeEventListener('visibilitychange', again);
     };
-  }, [settle]);
+  }, [settle, drain]);
+
+  /**
+   * Tries to send one entry that is already in the queue.
+   *
+   * Every add goes through here, whether it is new, being resent or being
+   * corrected, and in all three cases the entry is in storage before the
+   * request leaves. A refusal is thrown because somebody is looking at the
+   * screen; the entry stays queued either way, so nothing at all depends
+   * on what they do about it.
+   */
+  const push = useCallback(
+    async (entry: QueuedCreate | null): Promise<EventDto | null> => {
+      setUnsynced(await listQueued(scope));
+      if (!entry) return null;
+
+      // Nothing can have been sent, so nothing is in doubt. This is the
+      // three-in-the-morning case the queue exists for, and it is also
+      // what lets the entry still be corrected later (spec 6.1).
+      if (isOffline()) {
+        setDueAt(Date.now());
+        return null;
+      }
+
+      const result = await attemptQueued(scope, entry, send);
+      setUnsynced(await listQueued(scope));
+
+      if (!result.ok) {
+        setDueAt(result.entry.state === 'queued' ? result.entry.nextAttemptAt : null);
+        throw result.error;
+      }
+
+      await settle();
+      // Reaching the server says the connection is up, which is the best
+      // moment there is to clear whatever else is waiting.
+      void drain();
+      return result.event;
+    },
+    [scope, send, settle, drain],
+  );
 
   const addEvent = useCallback(
-    async (eventId: string, input: NewEventInput): Promise<EventDto> => {
-      const created = await call<EventDto>(`/babies/${baby.id}/events`, {
-        method: 'POST',
-        body: { id: eventId, ...input },
-      });
-      // Kept before the sync is attempted. The write succeeded; if the pull
-      // that follows does not, the record must still be here rather than
-      // vanishing from a screen that just said it was saved.
-      await local.applyOne(scope, created);
-      await settle();
-      return created;
+    async (eventId: string, input: NewEventInput): Promise<EventDto | null> => {
+      // Written down before anything is sent, every time. The window
+      // between pressing save and a request failing is where a record used
+      // to be lost: a 401 takes the screen holding it away immediately,
+      // and a browser killed in that moment took the event id with it.
+      return push(await queueAdd(userId, baby.id, eventId, input));
     },
-    [call, baby.id, scope, settle],
+    [userId, baby.id, push],
   );
 
   const updateEvent = useCallback(
     async (eventId: string, version: number, patch: EventPatch): Promise<EventDto> => {
+      // Refused rather than queued. An edit made offline carries the
+      // version that was read offline, so it comes back 409 nearly every
+      // time, and a 409 is answered by asking somebody who is asleep
+      // (spec 6.1). Stopping a timer offline is the one case that genuinely
+      // loses data this way, and it gets a draft of its own in the next
+      // stage (spec 7.2) rather than a general offline edit queue.
+      if (isOffline()) throw new OfflineError();
+
       const updated = await call<EventDto>(`/events/${eventId}`, {
         method: 'PATCH',
         body: { version, ...patch },
@@ -288,6 +463,9 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
 
   const removeEvent = useCallback(
     async (eventId: string, version: number): Promise<void> => {
+      // Same rule as editing, and for the same reason.
+      if (isOffline()) throw new OfflineError();
+
       // The tombstone comes back, and storing it is what hides the event
       // even if the sync afterwards fails.
       const tombstone = await call<EventDto>(`/events/${eventId}`, {
@@ -321,12 +499,39 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     [call, scope],
   );
 
+  /**
+   * The three things a parent can do with a record that has not been sent.
+   *
+   * Each one writes to the queue first and then asks it to run, so what
+   * happens next does not depend on the screen still being there.
+   */
+  const retryUnsynced = useCallback(
+    async (eventId: string): Promise<EventDto | null> => push(await retryQueued(scope, eventId)),
+    [scope, push],
+  );
+
+  const correctUnsynced = useCallback(
+    async (eventId: string, input: NewEventInput): Promise<EventDto | null> =>
+      push(await correctQueued(scope, eventId, input)),
+    [scope, push],
+  );
+
+  const abandonUnsynced = useCallback(
+    async (eventId: string): Promise<void> => {
+      await abandonQueued(scope, eventId);
+      setUnsynced(await listQueued(scope));
+    },
+    [scope],
+  );
+
   const value = useMemo<Store>(
     () => ({
       baby, events, summary: summary as SummaryDto, now, loading, stale, syncing, syncedAt,
-      refresh: settle, findEvent, addEvent, updateEvent, stopTimer, removeEvent,
+      unsynced, refresh: settle, findEvent, addEvent, updateEvent, stopTimer, removeEvent,
+      retryUnsynced, correctUnsynced, abandonUnsynced,
     }),
-    [baby, events, summary, now, loading, stale, syncing, syncedAt, settle, findEvent, addEvent, updateEvent, stopTimer, removeEvent],
+    [baby, events, summary, now, loading, stale, syncing, syncedAt, unsynced, settle, findEvent,
+      addEvent, updateEvent, stopTimer, removeEvent, retryUnsynced, correctUnsynced, abandonUnsynced],
   );
 
   // Nothing below this point has to cope with an absent summary. Gating here

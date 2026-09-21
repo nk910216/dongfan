@@ -94,19 +94,27 @@ first.
 | | | |
 |---|---|---|
 | 1 | IndexedDB as the persistent copy, and incremental sync into it | **done** |
-| 2 | The offline queue: POST only, backoff, retry cap, `outcome_unknown`, a list of what failed, "N unsynced" | next |
-| 3 | The offline stop-timer draft (spec 7.2) | |
+| 2 | The offline queue: POST only, backoff, retry cap, `outcome_unknown`, a list of what failed, "N unsynced" | **done** |
+| 3 | The offline stop-timer draft (spec 7.2) | next |
 | 4 | PWA: manifest, service worker, update flow, the iOS add-to-home prompt | |
 | 5 | Members and invite codes (spec 6.5) | |
 
-Two things are carried into stage 2 and must not be dropped:
+The queue lives in `packages/web/src/lib/outbox.ts`, with its storage in
+`db.ts` under `outbox`. `dongfan.pending-creates` is gone: whatever it was
+holding is migrated into the queue on the first load after the upgrade,
+under the account that wrote it, and marked as being in doubt — which is
+the state it was always in.
 
-- The unresolved adds already in `dongfan.pending-creates` have to be taken
-  over by the queue. Somebody's phone may be holding one, and an upgrade
-  that loses it, sends it twice, or sends it as the wrong account is the
-  failure the queue exists to prevent.
-- `spec 12.1`'s M2 criterion is the whole point: record in flight mode,
-  reconnect, and confirm it synced exactly once.
+What stage 3 inherits:
+
+- Stopping a timer offline is still refused, like any other edit. That is
+  the one refusal that genuinely loses data, and spec 7.2 answers it with a
+  local draft of the moment the button was pressed rather than with a
+  general offline edit queue. `updateEvent` in `store.tsx` is where the
+  refusal is, and where the draft has to be taken instead.
+- The summary is still the server's, so a feed recorded offline does not
+  move "last feed" until it is sent. That is deliberate (spec 6.2) and the
+  waiting row in the list is the mitigation.
 
 Stage 4 needs HTTPS, which a local network address is not. Use
 `cloudflared tunnel --url http://localhost:5180` (spec 10.1, option two).
@@ -309,9 +317,21 @@ perfectly healthy and silently never syncs again (spec 12.2).
 3. Sync again from `since=0`.
 4. Send the kept items.
 
-Today the web client keeps no sync cursor — only the unresolved adds under
-`dongfan.pending-creates`, which are step 1. Steps 2 and 3 become real with
-the offline layer in M2, and this list has to be revisited then.
+All four are now concrete, and all four are in IndexedDB under the database
+`dongfan`:
+
+1. The `outbox` store holds what is waiting. **Keep it.**
+2. Empty the `events` and `meta` stores. `meta.cursor` is the one that
+   matters; `events` goes with it because the rows it holds are ahead of
+   the restored server.
+3. Opening the app then syncs from `since=0`, because an absent `meta` row
+   reads as a cursor of zero.
+4. The queue sends what was kept, under the ids it already had.
+
+**There is no button for this.** Clearing site data from the browser would
+do steps 2 and 3 and destroy step 1 with them, so it is the wrong tool. A
+restore has not happened yet; if one ever does, this needs a screen or a
+console snippet that empties those two stores and leaves `outbox` alone.
 
 ## Environment and secrets
 

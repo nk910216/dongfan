@@ -3,28 +3,46 @@ import { Link } from 'react-router-dom';
 import { Menu, Plus, Settings } from 'lucide-react';
 import {
   ageAt, eventTypeName, formatValue, getEventType, interpolate,
-  metadataOptionLabel, zhTW,
+  metadataOptionLabel, toLocalDate, zhTW,
 } from '@dongfan/shared';
 import type { EventDto } from '@dongfan/shared';
 import { EventIconBadge, FALLBACK_COLOR } from '../components/EventIcon.js';
 import { QuickActions } from '../components/QuickActions.js';
+import type { QueuedCreate } from '../lib/db.js';
 import { formatClock, formatDuration, relativeTime, syncedAgo } from '../lib/format.js';
 import { typeSummary, useStore } from '../lib/store.js';
-import { pendingList } from '../lib/pending-create.js';
+import { describeQueued } from './Unsynced.js';
 import { useSession } from '../lib/session.js';
 
 export function Home(): React.JSX.Element {
-  const { baby, summary, events, now, stale, syncing, syncedAt, refresh } = useStore();
-  const { me, signOut } = useSession();
+  const { baby, summary, events, now, stale, syncing, syncedAt, refresh, unsynced } = useStore();
+  const { signOut } = useSession();
 
-  // An add left unresolved has to be findable again. Signing out and back
-  // in unmounts the form it started on, and without a way back the parent
-  // would simply record it a second time (spec 6.1).
-  const pending = useMemo(
-    () => pendingList(me?.user.id ?? '', baby.id),
-    [me, baby.id, events],
-  );
-  const oldestPending = pending[0] ?? null;
+  /**
+   * The waiting records that belong on today's list.
+   *
+   * They have to be visible, not just counted. A parent who recorded a
+   * feed in a room with no signal and then cannot see it on the screen
+   * records it again, and the duplicate is the thing all of this exists
+   * to avoid (spec 6.2).
+   *
+   * An entry whose event is already here is left out: between the queue
+   * removing it and this screen reading both stores again there is a
+   * moment where each has a copy, and showing the same feed twice would
+   * be its own small lie.
+   */
+  // Held as a string, so the clock ticking every second does not make this
+  // list rebuild every second. The date comes from the baby's timezone,
+  // never the device's.
+  const today = toLocalDate(now, baby.timezone);
+  const waiting = useMemo(() => {
+    const known = new Set(events.map((event) => event.id));
+    return unsynced.filter(
+      (entry) =>
+        !known.has(entry.eventId) &&
+        toLocalDate(entry.input.startedAt, baby.timezone) === today,
+    );
+  }, [unsynced, events, baby.timezone, today]);
 
   const age = ageAt(baby.birthDate, now, baby.timezone);
   const height = typeSummary(summary, 'height')?.lastValue ?? null;
@@ -120,15 +138,16 @@ export function Home(): React.JSX.Element {
         </SummaryCell>
       </section>
 
-      {oldestPending ? (
+      {/* Never implied. Storage here can be cleared by the browser without
+          warning, so a parent has to be told outright how many of their
+          records this phone is still holding (spec 6.1, 9.6). */}
+      {unsynced.length > 0 ? (
         <Link
-          to={`/add/${oldestPending.input.typeId}`}
-          data-testid="pending-create"
+          to="/unsynced"
+          data-testid="unsynced-count"
           className="mx-3.5 mb-3 flex shrink-0 items-center gap-2 rounded-xl border border-warn/50 bg-warn/10 px-3.5 py-2.5 text-[13px] text-warn-soft"
         >
-          {pending.length === 1
-            ? interpolate(zhTW.home.pendingUnknown, { name: eventTypeName(oldestPending.input.typeId) })
-            : interpolate(zhTW.home.pendingUnknownMany, { count: pending.length })}
+          {interpolate(zhTW.home.unsynced, { count: unsynced.length })}
         </Link>
       ) : null}
 
@@ -137,15 +156,24 @@ export function Home(): React.JSX.Element {
       <div className="flex shrink-0 items-baseline justify-between px-4.5 pb-2">
         <span className="text-[13px] font-medium tracking-wide text-ink-muted">{zhTW.home.todayEvents}</span>
         <span className="font-numeric text-xs text-ink-dim" data-testid="today-count">
-          {interpolate(zhTW.home.eventCount, { count: events.length })}
+          {/* Counts the waiting ones too, because they are on the list
+              below. A count that disagreed with what is visible would send
+              somebody looking for a record that is right in front of
+              them. */}
+          {interpolate(zhTW.home.eventCount, { count: events.length + waiting.length })}
         </span>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-24">
-        {events.length === 0 ? (
+        {events.length === 0 && waiting.length === 0 ? (
           <EmptyState />
         ) : (
-          events.map((event) => <EventRow key={event.id} event={event} timezone={baby.timezone} />)
+          <>
+            {waiting.map((entry) => (
+              <WaitingRow key={entry.eventId} entry={entry} timezone={baby.timezone} />
+            ))}
+            {events.map((event) => <EventRow key={event.id} event={event} timezone={baby.timezone} />)}
+          </>
         )}
       </div>
 
@@ -191,6 +219,39 @@ function EmptyState(): React.JSX.Element {
       <p className="text-sm text-ink-muted">{zhTW.home.emptyTitle}</p>
       <p className="text-xs text-ink-dim">{zhTW.home.emptyHint}</p>
     </div>
+  );
+}
+
+/**
+ * A record this device is still holding.
+ *
+ * Deliberately not dressed as a synced one. Spec 6.2 asks for pending
+ * entries to be shown alongside the rest and to be tellable apart at a
+ * glance, so this one is dimmer, carries a badge, and leads to the list
+ * where something can be done about it rather than to an edit screen for
+ * an event the server has never heard of.
+ */
+function WaitingRow({ entry, timezone }: { entry: QueuedCreate; timezone: string }): React.JSX.Element {
+  const type = getEventType(entry.input.typeId);
+  const color = type?.color ?? FALLBACK_COLOR;
+
+  return (
+    <Link
+      to="/unsynced"
+      className="flex items-center gap-2.5 border-b border-dashed border-line px-1 py-2.5 opacity-70"
+      data-testid={`waiting-row-${entry.input.typeId}`}
+    >
+      <EventIconBadge icon={type?.icon ?? 'circle-ellipsis'} color={color} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[15px] font-medium">{eventTypeName(entry.input.typeId)}</span>
+          <span className="rounded border border-warn/60 px-1.5 py-px text-[10px] text-warn-soft">
+            {zhTW.unsynced.badge}
+          </span>
+        </div>
+        <div className="mt-px truncate text-xs text-ink-faint">{describeQueued(entry, timezone)}</div>
+      </div>
+    </Link>
   );
 }
 

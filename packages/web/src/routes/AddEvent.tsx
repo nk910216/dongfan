@@ -27,19 +27,24 @@ export function AddEvent(): React.JSX.Element {
     // The shortcut retries through the same hook as the form, so tapping
     // again after a failure reaches the same event rather than adding a
     // second nappy to the day (spec 3.8).
-    const created = await create.submit({
+    const result = await create.submit({
       typeId: diaper.id,
       intent: 'record',
       // Read here, at the press. Taken when the screen opened, a picker
       // left sitting for five minutes would file the change five minutes
       // early -- and across midnight, on the wrong day. A retry ignores
-      // this and resends the original anyway.
+      // this and resends what the queue holds anyway.
       startedAt: Date.now(),
       endedAt: null,
       note: '',
       metadata: { diaper_kind: kind },
     });
-    if (created) navigate('/');
+
+    // Queued counts as recorded: it is written down, and the home screen
+    // says how many are still waiting (spec 6.1). Only a refusal keeps
+    // the parent on this screen.
+    if (result.kind === 'failed') return;
+    navigate(result.kind === 'gone' ? `/event/${result.eventId}` : '/');
   };
 
   return (
