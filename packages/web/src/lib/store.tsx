@@ -5,8 +5,8 @@ import { Message } from '../components/Message.js';
 import type { BabyDto, EventDto, SummaryDto, TypeSummaryDto } from '@dongfan/shared';
 import { ApiFailure, OfflineError, apiRequest, isOffline } from './api.js';
 import * as local from './db.js';
-import { getQueued, listQueued, scopeOf } from './db.js';
-import type { NewEventInput, QueuedCreate } from './db.js';
+import { getQueued, keepDraft, listDrafts, listQueued, removeDraft, scopeOf } from './db.js';
+import type { NewEventInput, QueuedCreate, StopDraft } from './db.js';
 import { runExclusive, runSerial } from './lane.js';
 import {
   EntryGone, abandonQueued, attemptQueued, correctQueued, ensureMigrated, queueAdd, retryQueued,
@@ -74,6 +74,11 @@ export type Store = {
    * your records" is something a parent has to be told (spec 6.1, 9.6).
    */
   unsynced: QueuedCreate[];
+  /**
+   * Timers stopped with no signal, waiting for somebody to confirm the
+   * moment they were stopped at (spec 7.2).
+   */
+  stopDrafts: StopDraft[];
   refresh: () => Promise<void>;
   /**
    * Sends one waiting add now, exactly as it stands, and resets its
@@ -115,7 +120,21 @@ export type Store = {
    */
   addEvent: (eventId: string, input: NewEventInput) => Promise<EventDto | null>;
   updateEvent: (eventId: string, version: number, patch: EventPatch) => Promise<EventDto>;
-  stopTimer: (eventId: string, version: number, endedAt: number) => Promise<EventDto>;
+  /**
+   * Ends a running timer.
+   *
+   * Returns null when there was no connection: the moment is written down
+   * instead, and has to be confirmed against the server's latest version
+   * before it can be sent (spec 7.2).
+   */
+  stopTimer: (eventId: string, version: number, endedAt: number) => Promise<EventDto | null>;
+  /**
+   * Throws away an unconfirmed stop, leaving the timer running.
+   *
+   * What it does not do is end the event: the server never heard about
+   * this, so there is nothing there to undo.
+   */
+  discardStop: (eventId: string) => Promise<void>;
   removeEvent: (eventId: string, version: number) => Promise<void>;
 };
 
@@ -141,6 +160,7 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
   const [syncing, setSyncing] = useState(false);
   const [syncedAt, setSyncedAt] = useState<number | null>(null);
   const [unsynced, setUnsynced] = useState<QueuedCreate[]>([]);
+  const [stopDrafts, setStopDrafts] = useState<StopDraft[]>([]);
   // When the queue should wake up next. Null while there is nothing
   // waiting, and null while it is paused, which is what stops a timer
   // firing against a session that has already been rejected.
@@ -178,14 +198,16 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
 
   /** Shows whatever is already here, without asking the network. */
   const readLocal = useCallback(async () => {
-    const [day, meta, queued] = await Promise.all([
+    const [day, meta, queued, drafts] = await Promise.all([
       local.eventsOnDate(scope, today),
       local.readMeta(scope),
       listQueued(scope),
+      listDrafts(scope),
     ]);
     setEvents(allDayFirst(day));
     setSyncedAt(meta.syncedAt);
     setUnsynced(queued);
+    setStopDrafts(drafts);
     if (meta.summary) setSummary(meta.summary);
     return meta;
   }, [scope, today]);
@@ -212,6 +234,7 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     const meta = await local.readMeta(scope);
     setEvents(allDayFirst(await local.eventsOnDate(scope, today)));
     setUnsynced(await listQueued(scope));
+    setStopDrafts(await listDrafts(scope));
     if (meta.summary) setSummary(meta.summary);
     setSyncedAt(meta.syncedAt);
   }, [call, readLocal, scope, baby.id, today]);
@@ -487,16 +510,50 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
         body: { version, ...patch },
       });
       await local.applyOne(scope, updated);
+      // Whatever this update was, the event has now been changed with a
+      // version the server accepted, so an unconfirmed stop for it is
+      // answered. Leaving it would keep offering a moment that has already
+      // been dealt with.
+      await removeDraft(scope, eventId);
+      setStopDrafts(await listDrafts(scope));
       await settle();
       return updated;
     },
     [call, scope, settle],
   );
 
+  /**
+   * Ends a running timer, or writes down when it was ended.
+   *
+   * The one edit that may not simply be refused offline. Somebody presses
+   * stop at 03:10 and the signal comes back at 03:40; telling them to
+   * remember and fill it in later means the sleep is recorded half an hour
+   * too long, and sleep length is the thing this app exists to get right
+   * (spec 7.2).
+   *
+   * The draft is not sent when the connection returns. The other parent
+   * may have stopped or edited the same timer in between, and what to do
+   * about that is a question for a person, not a rule (spec 6.3).
+   */
   const stopTimer = useCallback(
-    (eventId: string, version: number, endedAt: number): Promise<EventDto> =>
-      updateEvent(eventId, version, { endedAt }),
-    [updateEvent],
+    async (eventId: string, version: number, endedAt: number): Promise<EventDto | null> => {
+      if (isOffline()) {
+        await keepDraft({ scope, eventId, endedAt, version, createdAt: Date.now() });
+        setStopDrafts(await listDrafts(scope));
+        return null;
+      }
+
+      return updateEvent(eventId, version, { endedAt });
+    },
+    [scope, updateEvent],
+  );
+
+  const discardStop = useCallback(
+    async (eventId: string): Promise<void> => {
+      await removeDraft(scope, eventId);
+      setStopDrafts(await listDrafts(scope));
+    },
+    [scope],
   );
 
   const removeEvent = useCallback(
@@ -565,11 +622,12 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
   const value = useMemo<Store>(
     () => ({
       baby, events, summary: summary as SummaryDto, now, loading, stale, syncing, syncedAt,
-      unsynced, refresh: settle, findEvent, addEvent, updateEvent, stopTimer, removeEvent,
-      retryUnsynced, correctUnsynced, abandonUnsynced,
+      unsynced, stopDrafts, refresh: settle, findEvent, addEvent, updateEvent, stopTimer,
+      discardStop, removeEvent, retryUnsynced, correctUnsynced, abandonUnsynced,
     }),
-    [baby, events, summary, now, loading, stale, syncing, syncedAt, unsynced, settle, findEvent,
-      addEvent, updateEvent, stopTimer, removeEvent, retryUnsynced, correctUnsynced, abandonUnsynced],
+    [baby, events, summary, now, loading, stale, syncing, syncedAt, unsynced, stopDrafts, settle,
+      findEvent, addEvent, updateEvent, stopTimer, discardStop, removeEvent, retryUnsynced,
+      correctUnsynced, abandonUnsynced],
   );
 
   // Nothing below this point has to cope with an absent summary. Gating here
@@ -589,6 +647,12 @@ export function useStore(): Store {
   const store = useContext(StoreContext);
   if (!store) throw new Error('useStore used outside StoreProvider');
   return store;
+}
+
+/** The unconfirmed stop for one event, if there is one. */
+export function draftFor(drafts: readonly StopDraft[], eventId: string | null): StopDraft | null {
+  if (eventId === null) return null;
+  return drafts.find((draft) => draft.eventId === eventId) ?? null;
 }
 
 /** The summary entry for one type, or null when nothing is recorded yet. */

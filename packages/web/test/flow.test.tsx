@@ -11,6 +11,7 @@ import { App } from '../src/App.js';
 import { BABY, TOKEN, api, server } from './server.js';
 import { resetLanes } from '../src/lib/lane.js';
 import { earlierToday as atEarlierToday } from './fixtures/clock.js';
+import { formatClock } from '../src/lib/format.js';
 import { breakStorage, setOnline } from './setup.js';
 import { USER_CONTENT } from './fixtures/user-content.js';
 
@@ -43,6 +44,37 @@ function open(path = '/'): ReturnType<typeof userEvent.setup> {
     </MemoryRouter>,
   );
   return user;
+}
+
+/**
+ * Flight mode, as a phone actually presents it.
+ *
+ * Both halves matter. `navigator.onLine` is what the app asks before it
+ * writes anything, and the handlers are what would happen if it asked
+ * wrongly -- so a guard that stopped working shows up here as a request
+ * that should never have been attempted.
+ */
+function goOffline(): void {
+  setOnline(false);
+  server.use(
+    http.post('*', () => HttpResponse.error()),
+    http.patch('*', () => HttpResponse.error()),
+    http.delete('*', () => HttpResponse.error()),
+  );
+}
+
+function comeBack(): void {
+  setOnline(true);
+  server.resetHandlers();
+  window.dispatchEvent(new Event('online'));
+}
+
+function posts(): { method: string; path: string; body: unknown }[] {
+  return api.requests.filter((entry) => entry.method === 'POST' && entry.path.endsWith('/events'));
+}
+
+function patches(): { method: string; path: string; body: unknown }[] {
+  return api.requests.filter((entry) => entry.method === 'PATCH');
 }
 
 /**
@@ -1584,33 +1616,6 @@ describe('an all-day event', () => {
 });
 
 describe('recording with no signal', () => {
-  /**
-   * Flight mode, as a phone actually presents it.
-   *
-   * Both halves matter. `navigator.onLine` is what the app asks before it
-   * sends anything, and the handlers are what would happen if it asked
-   * wrongly -- so a guard that stopped working would show up here as an
-   * entry that came back in doubt rather than as a silent extra request.
-   */
-  function goOffline(): void {
-    setOnline(false);
-    server.use(
-      http.post('*', () => HttpResponse.error()),
-      http.patch('*', () => HttpResponse.error()),
-      http.delete('*', () => HttpResponse.error()),
-    );
-  }
-
-  function comeBack(): void {
-    setOnline(true);
-    server.resetHandlers();
-    window.dispatchEvent(new Event('online'));
-  }
-
-  function posts(): unknown[] {
-    return api.requests.filter((entry) => entry.method === 'POST' && entry.path.endsWith('/events'));
-  }
-
   it('keeps the record, and sends it exactly once when the signal comes back', async () => {
     const user = openSignedIn();
     await waitForHome();
@@ -1871,5 +1876,228 @@ describe('the list of records that would not send', () => {
     openSignedIn('/');
     await waitForHome();
     expect(screen.queryByTestId('unsynced-count')).not.toBeInTheDocument();
+  });
+});
+
+describe('stopping a timer with no signal', () => {
+  /** A sleep that has been running for two hours, as the summary reports it. */
+  function running(): { id: string; version: number } {
+    const event = api.add({ typeId: 'sleep', active: true, startedAt: earlierToday(2 * HOUR) });
+    return { id: event.id, version: event.version };
+  }
+
+  it('keeps the moment the button was pressed, and sends nothing', async () => {
+    const sleep = running();
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    const before = Date.now();
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+    const after = Date.now();
+
+    // Ended here, and visibly not yet a record. Refusing outright is what
+    // makes the sleep half an hour too long (spec 7.2).
+    expect(await screen.findByTestId('timer-drafted-sleep')).toBeInTheDocument();
+    expect(patches()).toHaveLength(0);
+    expect(api.find(sleep.id)?.active).toBe(true);
+
+    // And the list says the same thing rather than still claiming it is
+    // running.
+    expect(screen.getByTestId('event-row-sleep')).toHaveTextContent(zhTW.stopDraft.badge);
+    expect(screen.getByTestId('event-row-sleep')).not.toHaveTextContent(zhTW.event.inProgress);
+
+    // The moment itself survives a reload, because it is the only thing
+    // here that cannot be worked out again later.
+    closeApp();
+    openSignedIn(`/stop/${sleep.id}`);
+    setOnline(true);
+    // The instant, as the app renders instants. What matters is that it is
+    // the one from the press and not one worked out afterwards.
+    const pressed = await screen.findByTestId('pressed-at');
+    expect(pressed).toHaveTextContent(formatClock(before, BABY.timezone));
+    expect(after - before).toBeLessThan(60_000);
+  });
+
+  it('sends the time it was pressed, not the time it was confirmed', async () => {
+    const sleep = running();
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    const before = Date.now();
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+    const after = Date.now();
+    await screen.findByTestId('timer-drafted-sleep');
+
+    comeBack();
+    // Long enough that confirming with "now" would be plainly different
+    // from pressing with "now".
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    await user.click(screen.getByTestId('timer-drafted-sleep'));
+    await user.click(await screen.findByTestId('submit'));
+
+    await waitFor(() => expect(api.find(sleep.id)?.active).toBe(false));
+
+    const sent = api.lastRequest(`/events/${sleep.id}`)?.body as Record<string, unknown>;
+    expect(Number(sent['endedAt'])).toBeGreaterThanOrEqual(before);
+    expect(Number(sent['endedAt'])).toBeLessThanOrEqual(after);
+
+    // And it stops being something to confirm. A moment left behind after
+    // it has been sent would keep asking to be dealt with for ever.
+    await waitForHome();
+    await waitFor(() => expect(screen.queryByTestId('stop-drafts')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('timer-drafted-sleep')).not.toBeInTheDocument();
+  });
+
+  it('carries the version the server holds now, not the one from before', async () => {
+    const sleep = running();
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+    await screen.findByTestId('timer-drafted-sleep');
+
+    // The other parent corrects the start time while this phone has no
+    // signal. Sending the version from before would collect a 409 for
+    // something that is not a conflict at all (spec 6.3).
+    const event = api.find(sleep.id);
+    if (event) Object.assign(event, { version: event.version + 1, rev: api.nextRev() });
+
+    comeBack();
+    await user.click(screen.getByTestId('timer-drafted-sleep'));
+
+    // And it says so, because that is the reason this is confirmed by a
+    // person rather than sent automatically (spec 7.2).
+    expect(await screen.findByTestId('changed-since')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('submit'));
+    await waitFor(() => expect(api.find(sleep.id)?.active).toBe(false));
+
+    const sent = api.lastRequest(`/events/${sleep.id}`)?.body as Record<string, unknown>;
+    expect(sent['version']).toBe(sleep.version + 1);
+  });
+
+  it('says when the other parent has already ended it, and offers to keep theirs', async () => {
+    const sleep = running();
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+    await screen.findByTestId('timer-drafted-sleep');
+
+    const theirEnd = Date.now();
+    const event = api.find(sleep.id);
+    if (event) {
+      Object.assign(event, {
+        endedAt: theirEnd, active: false, version: event.version + 1, rev: api.nextRev(),
+      });
+    }
+
+    comeBack();
+    await user.click(screen.getByTestId('timer-drafted-sleep'));
+
+    expect(await screen.findByTestId('already-ended')).toBeInTheDocument();
+
+    // Keeping theirs throws away this device's moment and sends nothing:
+    // there is nothing to undo, because the server never heard about it.
+    await user.click(screen.getByTestId('discard'));
+    await user.click(screen.getByTestId('discard-confirm'));
+
+    await waitForHome();
+    expect(patches()).toHaveLength(0);
+    expect(api.find(sleep.id)?.endedAt).toBe(theirEnd);
+    expect(screen.queryByTestId('stop-drafts')).not.toBeInTheDocument();
+  });
+
+  it('cannot be confirmed while there is still no signal', async () => {
+    const sleep = running();
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+    await user.click(await screen.findByTestId('timer-drafted-sleep'));
+
+    // Confirming means reading what the server holds now, and there is no
+    // way to do that. What must not happen is the moment being lost for
+    // trying.
+    expect(await screen.findByTestId('confirm-blocked')).toHaveTextContent(zhTW.stopDraft.offline);
+    expect(screen.getByTestId('pressed-at')).toBeInTheDocument();
+    expect(patches()).toHaveLength(0);
+
+    closeApp();
+    setOnline(true);
+    openSignedIn();
+    await waitForHome();
+    expect(await screen.findByTestId('timer-drafted-sleep')).toBeInTheDocument();
+    expect(api.find(sleep.id)?.active).toBe(true);
+  });
+
+  it('leaves the timer running when the moment is thrown away', async () => {
+    const sleep = running();
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+    await screen.findByTestId('timer-drafted-sleep');
+
+    comeBack();
+    await user.click(screen.getByTestId('timer-drafted-sleep'));
+    await user.click(await screen.findByTestId('discard'));
+    await user.click(screen.getByTestId('discard-confirm'));
+
+    await waitForHome();
+    // Back to a timer with a stop button, and the server never heard a
+    // thing about any of it.
+    expect(await screen.findByRole('button', { name: zhTW.timer.stop })).toBeInTheDocument();
+    expect(patches()).toHaveLength(0);
+    expect(api.find(sleep.id)?.active).toBe(true);
+  });
+
+  it('is not offered to a different account on the same phone', async () => {
+    running();
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+    await screen.findByTestId('timer-drafted-sleep');
+
+    closeApp();
+    setOnline(true);
+    server.resetHandlers();
+    signedInAs('the-other-parent');
+    openSignedIn();
+    await waitForHome();
+
+    // Their phone, their account: this timer is still running as far as
+    // they are concerned, and somebody else's unsent moment is not theirs
+    // to confirm (spec 6.1).
+    expect(screen.queryByTestId('timer-drafted-sleep')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('stop-drafts')).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: zhTW.timer.stop })).toBeInTheDocument();
+  });
+
+  it('still refuses an ordinary edit, which has no moment worth keeping', async () => {
+    const event = api.add({ typeId: 'bottle', value: 140 });
+    const user = openSignedIn(`/event/${event.id}`);
+
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    await user.clear(amount);
+    await user.type(amount, '160');
+
+    goOffline();
+    await user.click(screen.getByTestId('submit'));
+
+    // The draft exists for one thing only: the instant a timer was
+    // stopped, which cannot be reconstructed later. An amount can
+    // (spec 7.2).
+    expect(await screen.findByTestId('form-error')).toHaveTextContent(zhTW.error.needsConnection);
+    expect(api.find(event.id)?.value).toBe(140);
   });
 });

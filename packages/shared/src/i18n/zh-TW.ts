@@ -136,6 +136,7 @@ export const zhTW = {
     syncedHoursAgo: '{hours} 小時前同步',
     syncedDaysAgo: '{days} 天前同步',
     unsynced: '尚有 {count} 筆未同步',
+    stopDrafts: '尚有 {count} 筆計時待確認結束時間',
   },
 
   timer: {
@@ -184,6 +185,23 @@ export const zhTW = {
     retry: '重試送出',
     clearEnd: '清除',
     endedAtEmpty: '尚未填寫',
+  },
+
+  stopDraft: {
+    title: '確認結束時間',
+    badge: '已結束，待確認',
+    intro: '這筆計時是在沒有連線時按下結束的，還沒有送出。請確認結束時間。',
+    pressedAt: '你按下結束的時間',
+    offline: '需要連線才能確認結束時間。你按下的時間已經留著了。',
+    changed: '這筆在這段期間被改過，請再確認一次。',
+    alreadyEnded: '另一位家人已經把這筆結束在 {time}。',
+    keepTheirs: '保留他們填的',
+    confirm: '確認並送出',
+    discard: '放棄這個時間',
+    discardTitle: '放棄這個結束時間？',
+    discardBody: '這筆計時會繼續進行，你按下結束的那個時刻不會被保留。',
+    discardYes: '確定放棄',
+    gone: '這筆紀錄已經不在了。',
   },
 
   unsynced: {

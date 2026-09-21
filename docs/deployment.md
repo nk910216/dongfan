@@ -252,8 +252,8 @@ On every device:
 4. Send the kept items.
 
 All four are concrete now. The client keeps everything in IndexedDB, in the
-database `dongfan`: the `outbox` store is step 1 and must be kept, and the
-`events` and `meta` stores are step 2 and must be emptied. An absent `meta`
+database `dongfan`: the `outbox` and `drafts` stores are step 1 and must be
+kept, and the `events` and `meta` stores are step 2 and must be emptied. An absent `meta`
 row reads as a cursor of zero, which is step 3, and the queue then does
 step 4 by itself.
 

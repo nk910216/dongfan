@@ -182,8 +182,7 @@ the page is open it stays open, which is the situation the queue is for.
    - Tapping that strip lists them, with what each one contains.
 4. Open an existing event and try to save a change.
    - It is refused, and says a connection is needed (spec 6.1). Stopping a
-     timer offline is the case this genuinely loses, and it gets a draft of
-     its own in the next stage (spec 7.2).
+     timer is the one exception; see below.
 5. Turn Wi-Fi back on.
    - Within a few seconds the strip disappears, the dimmed row becomes a
      normal one, and the count of today's events does not change.
@@ -199,10 +198,43 @@ One row for the nappy, with the same id the phone generated. Two rows with
 different ids would mean the id was regenerated on the retry, which is the
 one mistake the whole mechanism exists to prevent (spec 3.8, 5.8).
 
+### Stopping a timer with no signal
+
+The queue takes creations only, so stopping a timer has nowhere to go. But
+refusing outright is what ruins the data: press stop at 03:10, get a signal
+back at 03:40, and the sleep is recorded half an hour too long. Sleep
+length is what this app is for, so the moment is written down instead
+(spec 7.2).
+
+1. Start a sleep timer from the home screen, with the network on.
+2. Turn off Wi-Fi and mobile data. **Do not reload.**
+3. Press the stop button on the sleep card, and note the time.
+   - The card changes: no stop button, a dashed border, a badge reading
+     "ended, waiting to be confirmed", and the elapsed figure frozen at
+     the moment you pressed.
+   - The row in today's list carries that badge instead of "in progress".
+   - A strip above the shortcuts says how many are waiting to be confirmed.
+4. Tap the card.
+   - It says a connection is needed, and says the moment you pressed is
+     still held. Nothing has been sent.
+5. Turn Wi-Fi back on.
+   - The screen reloads the event by itself and offers the time you
+     pressed, with the duration that follows from it.
+6. Press the confirm button at the bottom.
+   - The sleep now ends at the time you pressed, **not** the time you
+     confirmed. That is the whole point; check the two are different by
+     waiting a minute before confirming.
+
+It is never sent automatically. The other parent may have stopped or
+edited the same timer while you had no signal, and the screen says so —
+try it by stopping the same sleep from a second browser before confirming,
+and the screen offers to keep theirs instead.
+
 ### What the queue will not do
 
 - It takes creations only. Edits and deletions are refused while offline
-  rather than queued (spec 6.1).
+  rather than queued (spec 6.1); stopping a timer is handled by the draft
+  above, not by the queue.
 - It stops after ten counted attempts and waits for a person. A record that
   has stopped is still in the list, with its content intact.
 - "Give up" stops this phone trying. It does not mean the server does not

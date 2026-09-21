@@ -10,12 +10,14 @@ import { EventIconBadge, FALLBACK_COLOR } from '../components/EventIcon.js';
 import { QuickActions } from '../components/QuickActions.js';
 import type { QueuedCreate } from '../lib/db.js';
 import { formatClock, formatDuration, relativeTime, syncedAgo } from '../lib/format.js';
-import { typeSummary, useStore } from '../lib/store.js';
+import { draftFor, typeSummary, useStore } from '../lib/store.js';
 import { describeQueued } from './Unsynced.js';
 import { useSession } from '../lib/session.js';
 
 export function Home(): React.JSX.Element {
-  const { baby, summary, events, now, stale, syncing, syncedAt, refresh, unsynced } = useStore();
+  const {
+    baby, summary, events, now, stale, syncing, syncedAt, refresh, unsynced, stopDrafts,
+  } = useStore();
   const { signOut } = useSession();
 
   /**
@@ -151,6 +153,19 @@ export function Home(): React.JSX.Element {
         </Link>
       ) : null}
 
+      {/* Separate from the count above, because they are different
+          problems: one is waiting to be sent, this one is waiting for
+          somebody to say what time it actually was (spec 7.2). */}
+      {stopDrafts.length > 0 ? (
+        <Link
+          to={`/stop/${stopDrafts[0]?.eventId ?? ''}`}
+          data-testid="stop-drafts"
+          className="mx-3.5 mb-3 flex shrink-0 items-center gap-2 rounded-xl border border-warn/50 bg-warn/10 px-3.5 py-2.5 text-[13px] text-warn-soft"
+        >
+          {interpolate(zhTW.home.stopDrafts, { count: stopDrafts.length })}
+        </Link>
+      ) : null}
+
       <QuickActions />
 
       <div className="flex shrink-0 items-baseline justify-between px-4.5 pb-2">
@@ -172,7 +187,14 @@ export function Home(): React.JSX.Element {
             {waiting.map((entry) => (
               <WaitingRow key={entry.eventId} entry={entry} timezone={baby.timezone} />
             ))}
-            {events.map((event) => <EventRow key={event.id} event={event} timezone={baby.timezone} />)}
+            {events.map((event) => (
+              <EventRow
+                key={event.id}
+                event={event}
+                timezone={baby.timezone}
+                drafted={draftFor(stopDrafts, event.id) !== null}
+              />
+            ))}
           </>
         )}
       </div>
@@ -255,7 +277,12 @@ function WaitingRow({ entry, timezone }: { entry: QueuedCreate; timezone: string
   );
 }
 
-function EventRow({ event, timezone }: { event: EventDto; timezone: string }): React.JSX.Element {
+function EventRow({ event, timezone, drafted }: {
+  event: EventDto;
+  timezone: string;
+  /** Stopped on this device, with nobody having confirmed when yet. */
+  drafted: boolean;
+}): React.JSX.Element {
   const type = getEventType(event.typeId);
   const color = type?.color ?? FALLBACK_COLOR;
   const spec = type?.value ?? null;
@@ -282,7 +309,14 @@ function EventRow({ event, timezone }: { event: EventDto; timezone: string }): R
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="text-[15px] font-medium">{eventTypeName(event.typeId)}</span>
-          {event.active ? (
+          {/* "Still running" and "stopped, but only here" have to look
+              different. A parent who cannot tell them apart either stops
+              it a second time or leaves it running all night (spec 7.2). */}
+          {drafted ? (
+            <span className="rounded border border-dashed border-warn/70 px-1.5 py-px text-[10px] text-warn-soft">
+              {zhTW.stopDraft.badge}
+            </span>
+          ) : event.active ? (
             <span className="rounded border px-1.5 py-px text-[10px]" style={{ color, borderColor: `${color}66` }}>
               {zhTW.event.inProgress}
             </span>

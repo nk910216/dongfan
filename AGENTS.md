@@ -95,8 +95,8 @@ first.
 |---|---|---|
 | 1 | IndexedDB as the persistent copy, and incremental sync into it | **done** |
 | 2 | The offline queue: POST only, backoff, retry cap, `outcome_unknown`, a list of what failed, "N unsynced" | **done** |
-| 3 | The offline stop-timer draft (spec 7.2) | next |
-| 4 | PWA: manifest, service worker, update flow, the iOS add-to-home prompt | |
+| 3 | The offline stop-timer draft (spec 7.2) | **done** |
+| 4 | PWA: manifest, service worker, update flow, the iOS add-to-home prompt | next |
 | 5 | Members and invite codes (spec 6.5) | |
 
 The queue lives in `packages/web/src/lib/outbox.ts`, with its storage in
@@ -109,16 +109,21 @@ holding is migrated into the queue on the first load after the upgrade,
 under the account that wrote it, and marked as being in doubt — which is
 the state it was always in.
 
-What stage 3 inherits:
+Stopping a timer offline is the one edit that is not simply refused. The
+instant the button was pressed is written to the `drafts` store and
+offered back for confirmation once there is a connection — never sent
+automatically, because the other parent may have stopped or edited the
+same timer meanwhile (spec 7.2, 6.3). Every other edit and deletion is
+still refused outright.
 
-- Stopping a timer offline is still refused, like any other edit. That is
-  the one refusal that genuinely loses data, and spec 7.2 answers it with a
-  local draft of the moment the button was pressed rather than with a
-  general offline edit queue. `updateEvent` in `store.tsx` is where the
-  refusal is, and where the draft has to be taken instead.
-- The summary is still the server's, so a feed recorded offline does not
-  move "last feed" until it is sent. That is deliberate (spec 6.2) and the
-  waiting row in the list is the mitigation.
+What stage 4 inherits:
+
+- The summary is the server's, so a feed recorded offline does not move
+  "last feed" until it is sent. That is deliberate (spec 6.2); the waiting
+  row in today's list is the mitigation.
+- A genuine cold start with no network still cannot be tested, because
+  that needs a service worker, which needs HTTPS. Everything offline so
+  far is tested with the page already open.
 
 Stage 4 needs HTTPS, which a local network address is not. Use
 `cloudflared tunnel --url http://localhost:5180` (spec 10.1, option two).
@@ -351,13 +356,16 @@ perfectly healthy and silently never syncs again (spec 12.2).
 All four are now concrete, and all four are in IndexedDB under the database
 `dongfan`:
 
-1. The `outbox` store holds what is waiting. **Keep it.**
+1. The `outbox` and `drafts` stores hold what has not reached the server:
+   adds waiting to be sent, and the moment a timer was stopped. **Keep
+   both.**
 2. Empty the `events` and `meta` stores. `meta.cursor` is the one that
    matters; `events` goes with it because the rows it holds are ahead of
    the restored server.
 3. Opening the app then syncs from `since=0`, because an absent `meta` row
    reads as a cursor of zero.
-4. The queue sends what was kept, under the ids it already had.
+4. The queue sends what was kept, under the ids it already had, and the
+   drafts are offered for confirmation as usual.
 
 **There is no button for this.** Clearing site data from the browser would
 do steps 2 and 3 and destroy step 1 with them, so it is the wrong tool. A

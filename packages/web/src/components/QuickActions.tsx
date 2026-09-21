@@ -8,7 +8,7 @@ import { ApiFailure } from '../lib/api.js';
 import { describeFailure } from './FieldErrors.js';
 import { EventIcon, EventIconBadge } from './EventIcon.js';
 import { formatStopwatch, relativeTime } from '../lib/format.js';
-import { typeSummary, useStore } from '../lib/store.js';
+import { draftFor, typeSummary, useStore } from '../lib/store.js';
 
 /**
  * The strip of one-tap shortcuts.
@@ -18,7 +18,7 @@ import { typeSummary, useStore } from '../lib/store.js';
  * button within thumb reach instead of at the top of the screen.
  */
 export function QuickActions(): React.JSX.Element {
-  const { summary, now, stopTimer, refresh } = useStore();
+  const { summary, now, stopTimer, refresh, stopDrafts } = useStore();
   const [stopping, setStopping] = useState<string | null>(null);
   const [failure, setFailure] = useState<unknown>(null);
 
@@ -34,6 +34,7 @@ export function QuickActions(): React.JSX.Element {
     const id = entry.activeEventId;
     const version = entry.activeVersion;
     if (id === null || version === null) return;
+
 
     setStopping(id);
     setFailure(null);
@@ -69,6 +70,37 @@ export function QuickActions(): React.JSX.Element {
 
           if (entry && entry.activeEventId !== null && startedAt !== null) {
             const elapsed = now - startedAt;
+            const draft = draftFor(stopDrafts, entry.activeEventId);
+
+            // Stopped, but only on this device. Spec 7.2 asks for this to
+            // be tellable apart from a timer that is still running and
+            // from one that has been recorded: the clock stops at the
+            // moment the button was pressed, there is no stop button to
+            // press again, and what it offers instead is the confirmation
+            // that will actually send it.
+            if (draft) {
+              return (
+                <Link
+                  key={type.id}
+                  to={`/stop/${entry.activeEventId}`}
+                  className="flex w-[132px] shrink-0 flex-col gap-1.5 rounded-2xl border-[1.5px] border-dashed border-warn bg-warn/10 p-3"
+                  data-testid={`timer-drafted-${type.id}`}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <EventIcon icon={type.icon} color="#E8925C" size={16} />
+                    <span className="text-[12px] leading-tight text-warn-soft">
+                      {zhTW.stopDraft.badge}
+                    </span>
+                  </div>
+                  <span className="font-numeric text-[20px] font-semibold tracking-tight tabular-nums text-warn">
+                    {formatStopwatch(Math.max(0, draft.endedAt - startedAt))}
+                  </span>
+                  <span className="flex min-h-11 items-center justify-center rounded-lg bg-warn px-2 text-center text-[12px] font-bold leading-tight text-ground">
+                    {zhTW.stopDraft.confirm}
+                  </span>
+                </Link>
+              );
+            }
 
             // Past a day the API will refuse any end time, because that
             // ceiling is what keeps an event to at most one midnight

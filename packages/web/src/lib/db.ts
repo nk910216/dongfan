@@ -21,7 +21,7 @@ import type { EventDto, EventIntent, SummaryDto } from '@dongfan/shared';
  */
 
 const DB_NAME = 'dongfan';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 /**
  * One account, one baby.
@@ -132,6 +132,36 @@ export type QueuedCreate = {
   queuedAt: number;
 };
 
+/**
+ * The moment a timer was actually stopped, kept until somebody confirms it.
+ *
+ * The queue takes creations only, so pressing stop with no signal has
+ * nowhere to go. Refusing outright and asking the parent to remember the
+ * time is what destroys the data: somebody presses stop at 03:10, the
+ * signal comes back at 03:40, and the sleep is recorded half an hour long
+ * -- and sleep length is what this app is for (spec 7.2).
+ *
+ * So the real instant is written down here, and offered back for
+ * confirmation once there is a connection. Not submitted automatically:
+ * the other parent may have stopped or edited the same timer in the
+ * meantime, and only a person can decide what to do about that.
+ */
+export type StopDraft = {
+  scope: Scope;
+  eventId: string;
+  /** The real moment the button was pressed, not when it is sent. */
+  endedAt: number;
+  /**
+   * The version the event carried when the button was pressed.
+   *
+   * Never sent: the update has to carry whatever version the server holds
+   * when it is finally confirmed. It is here so the confirmation screen
+   * can say that somebody else has touched this event since (spec 6.3).
+   */
+  version: number;
+  createdAt: number;
+};
+
 export type SyncMeta = {
   scope: Scope;
   /**
@@ -182,6 +212,13 @@ interface DongfanDb extends DBSchema {
       'by-scope': Scope;
     };
   };
+  drafts: {
+    key: [Scope, string];
+    value: StopDraft;
+    indexes: {
+      'by-scope': Scope;
+    };
+  };
 }
 
 let handle: Promise<IDBPDatabase<DongfanDb>> | null = null;
@@ -212,6 +249,11 @@ export function db(): Promise<IDBPDatabase<DongfanDb>> {
         // Everything the queue does is per account and baby: what it sends,
         // what it counts and what it shows (spec 6.1).
         outbox.createIndex('by-scope', 'scope');
+      }
+
+      if (!database.objectStoreNames.contains('drafts')) {
+        const drafts = database.createObjectStore('drafts', { keyPath: ['scope', 'eventId'] });
+        drafts.createIndex('by-scope', 'scope');
       }
     },
   });
@@ -614,4 +656,43 @@ export async function queueIfAbsent(entry: QueuedCreate): Promise<boolean> {
   if (!existing) await tx.store.put(entry);
   await tx.done;
   return !existing;
+}
+
+/**
+ * Every unconfirmed stop for one account and baby, oldest first.
+ *
+ * At most one per event, because a second press of the same stop button
+ * means the same thing as the first and must not become a second record of
+ * when it happened.
+ */
+export async function listDrafts(scope: Scope): Promise<StopDraft[]> {
+  const rows = await (await db()).getAllFromIndex('drafts', 'by-scope', scope);
+  return rows.sort((a, b) => a.createdAt - b.createdAt || (a.eventId < b.eventId ? -1 : 1));
+}
+
+export async function getDraft(scope: Scope, eventId: string): Promise<StopDraft | null> {
+  return (await (await db()).get('drafts', [scope, eventId])) ?? null;
+}
+
+/**
+ * Writes down when a timer was stopped, unless that is already recorded.
+ *
+ * The first press is the one that counts. Pressing again five minutes
+ * later, having watched nothing happen, must not move the recorded moment
+ * five minutes later with it -- the whole point is to keep the instant the
+ * parent acted (spec 7.2).
+ */
+export async function keepDraft(draft: StopDraft): Promise<StopDraft> {
+  const database = await db();
+  const tx = database.transaction('drafts', 'readwrite');
+  const existing = await tx.store.get([draft.scope, draft.eventId]);
+
+  const kept = existing ?? draft;
+  if (!existing) await tx.store.put(draft);
+  await tx.done;
+  return kept;
+}
+
+export async function removeDraft(scope: Scope, eventId: string): Promise<void> {
+  await (await db()).delete('drafts', [scope, eventId]);
 }

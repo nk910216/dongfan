@@ -9,6 +9,7 @@ import { EditEvent } from './routes/EditEvent.js';
 import { EventForm } from './routes/EventForm.js';
 import { Home } from './routes/Home.js';
 import { Login } from './routes/Login.js';
+import { ConfirmStop } from './routes/ConfirmStop.js';
 import { CorrectUnsynced, Unsynced } from './routes/Unsynced.js';
 
 export function App(): React.JSX.Element {
@@ -51,6 +52,7 @@ function Shell(): React.JSX.Element {
         <Route path="/add" element={<AddEvent />} />
         <Route path="/add/:typeId" element={<EventForm />} />
         <Route path="/event/:eventId" element={<EditEvent />} />
+        <Route path="/stop/:eventId" element={<ConfirmStop />} />
         <Route path="/unsynced" element={<Unsynced />} />
         <Route path="/unsynced/:eventId" element={<CorrectUnsynced />} />
       </Routes>
