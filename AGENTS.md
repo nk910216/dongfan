@@ -80,6 +80,38 @@ carry them out.
 `npm run dev:all` starts both halves against the local database and prints
 the address for a phone. `docs/running-locally.md` covers the rest.
 
+### Milestones
+
+**M1 is done** apart from the acceptance above. The app records, edits and
+deletes events, runs timers, and has been used from a phone over the local
+network.
+
+**M2 is in progress**, in stages, each one reviewed before the next begins.
+The order follows the dependencies rather than the list in spec 12: the
+queue and the drafts both need somewhere to live, so the local store comes
+first.
+
+| | | |
+|---|---|---|
+| 1 | IndexedDB as the persistent copy, and incremental sync into it | **done** |
+| 2 | The offline queue: POST only, backoff, retry cap, `outcome_unknown`, a list of what failed, "N unsynced" | next |
+| 3 | The offline stop-timer draft (spec 7.2) | |
+| 4 | PWA: manifest, service worker, update flow, the iOS add-to-home prompt | |
+| 5 | Members and invite codes (spec 6.5) | |
+
+Two things are carried into stage 2 and must not be dropped:
+
+- The unresolved adds already in `dongfan.pending-creates` have to be taken
+  over by the queue. Somebody's phone may be holding one, and an upgrade
+  that loses it, sends it twice, or sends it as the wrong account is the
+  failure the queue exists to prevent.
+- `spec 12.1`'s M2 criterion is the whole point: record in flight mode,
+  reconnect, and confirm it synced exactly once.
+
+Stage 4 needs HTTPS, which a local network address is not. Use
+`cloudflared tunnel --url http://localhost:5180` (spec 10.1, option two).
+Deploying to get HTTPS is not on the table.
+
 ## Before you call something done
 
 ```sh
@@ -199,6 +231,29 @@ Priority order, highest value first (spec 11):
 4. **A few end-to-end paths**, not a suite.
 
 Do not chase a global coverage number. Layer 1 is where the bugs are.
+
+### A test that has never failed has not been tested
+
+After writing a test for something that matters, **break the thing it
+covers and watch it fail.** This has caught a run of tests in this
+repository that passed for the wrong reason: an assertion written the wrong
+way round, an event fired before the listener existed, a "did not happen"
+assertion that released its gate before the thing had a chance to happen.
+All three looked fine and all three were worthless.
+
+When a guard turns out to be unreachable — a second check behind a first
+that already makes it impossible — say so rather than implying coverage.
+Structure it as the correct thing to do ("check what you are sending")
+rather than as a conditional that pretends to be covered ("skip the check
+when resending").
+
+### Never build "today" out of a relative offset
+
+`Date.now() - 2 * HOUR` is a different local day for a few minutes every
+night, and it is 2am feeds this app exists for. A fixture that has to land
+on today's date is anchored to the start of the local day, not to an offset
+from now. Tests that pass all day and fail just after midnight are worse
+than no tests.
 
 Cross-cutting scenarios that must have tests (spec 11.2) — these are the ones
 that are invisible to the eye:
