@@ -54,6 +54,17 @@ describe('an instant earlier today', () => {
     expect(toLocalDate(started, TZ)).toBe('2026-09-22');
   });
 
+  it('collapses different offsets onto the start of the day, rather than inverting them', () => {
+    const now = at('2026-09-22', '00:00:30');
+    const earlier = earlierToday(2 * HOUR, TZ, now);
+    const later = earlierToday(HOUR, TZ, now);
+
+    // Equal, not the wrong way round. Anything that needs two distinct
+    // instants has to name them rather than ask for two offsets.
+    expect(earlier).toBe(later);
+    expect(earlier).toBeLessThanOrEqual(later);
+  });
+
   it('holds for every minute of the day', () => {
     const dayStart = at('2026-09-22', '00:00:00');
 
@@ -64,6 +75,9 @@ describe('an instant earlier today', () => {
       expect(started).toBeLessThanOrEqual(now);
       expect(started).toBeGreaterThanOrEqual(dayStart);
       expect(toLocalDate(started, TZ)).toBe('2026-09-22');
+
+      // A larger offset is never later than a smaller one, at any hour.
+      expect(earlierToday(6 * HOUR, TZ, now)).toBeLessThanOrEqual(earlierToday(HOUR, TZ, now));
     }
   });
 });

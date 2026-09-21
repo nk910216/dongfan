@@ -15,6 +15,12 @@ import { startOfLocalDay, toLocalDate } from '@dongfan/shared';
  * fixture that answered with a *future* instant made every end time invalid.
  * A timer started then and stopped at the current moment ends before it
  * began, and the suite failed for one minute a day.
+ *
+ * One consequence, which is a property and not a bug: close to midnight
+ * several different offsets collapse onto the start of the day and come
+ * back equal. A fixture that needs two *distinct* instants, or that
+ * asserts an interval between them, cannot be built out of this and has to
+ * name its instants outright.
  */
 export function earlierToday(msAgo: number, timeZone: string, now: number = Date.now()): number {
   const dayStart = startOfLocalDay(toLocalDate(now, timeZone), timeZone);
