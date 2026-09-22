@@ -27,6 +27,16 @@ export function EditEvent(): React.JSX.Element {
 
   const [event, setEvent] = useState<EventDto | null>(null);
   const [draft, setDraft] = useState<EventDraft | null>(null);
+  /**
+   * The version every write from this screen carries.
+   *
+   * Normally the one that was just fetched. After a restored draft it is
+   * the one those changes were made on top of, which is the point: the
+   * fields on screen belong to that version, and handing the server a
+   * newer number would let them overwrite whatever happened in between
+   * without the conflict ever being reported (spec 6.3).
+   */
+  const [version, setVersion] = useState<number | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [failure, setFailure] = useState<unknown>(null);
   const [conflict, setConflict] = useState(false);
@@ -60,6 +70,7 @@ export function EditEvent(): React.JSX.Element {
         // much before it happens.
         const saved = reloads === 0 ? readForm(formId) : null;
         if (reloads > 0) clearForm(formId);
+
         setDraft(saved?.draft ?? {
           startedAt: found.startedAt,
           endedAt: found.endedAt,
@@ -67,6 +78,11 @@ export function EditEvent(): React.JSX.Element {
           note: found.note,
           metadata: { ...found.metadata },
         });
+        // A restored draft keeps the version it was written against. If
+        // somebody else has saved since, the server refuses it and the
+        // dialog below asks what to do -- rather than the change going
+        // through and taking theirs with it.
+        setVersion(saved?.baseVersion ?? found.version);
       })
       .catch((error: unknown) => {
         if (!cancelled) setLoadError(error);
@@ -78,7 +94,7 @@ export function EditEvent(): React.JSX.Element {
   }, [eventId, findEvent, reloads, formId]);
 
   if (loadError !== null) return <Message text={zhTW.error.NOT_FOUND} />;
-  if (!event || !draft || !type) return <Message text={zhTW.app.loading} />;
+  if (!event || !draft || !type || version === null) return <Message text={zhTW.app.loading} />;
 
   const save = async (): Promise<void> => {
     setFailure(null);
@@ -99,7 +115,7 @@ export function EditEvent(): React.JSX.Element {
 
     setBusy(true);
     try {
-      await updateEvent(event.id, event.version, {
+      await updateEvent(event.id, version, {
         startedAt: draft.startedAt,
         endedAt: checked.endedAt,
         ...(checked.value === undefined ? {} : { value: checked.value }),
@@ -118,7 +134,7 @@ export function EditEvent(): React.JSX.Element {
   const remove = async (): Promise<void> => {
     setBusy(true);
     try {
-      await removeEvent(event.id, event.version);
+      await removeEvent(event.id, version);
       clearForm(formId);
       navigate('/');
     } catch (error) {
@@ -151,7 +167,14 @@ export function EditEvent(): React.JSX.Element {
           // A running timer has no end time yet, but supplying one here is
           // exactly how it is stopped, so the field stays available.
           showEnd
-          onChange={(next) => { setDraft(next); setFailure(null); saveForm(formId, intentOf(event, next), next); }}
+          onChange={(next) => {
+            setDraft(next);
+            setFailure(null);
+            // Written down with the version it is a change to, because
+            // without that it cannot be told apart from a change to
+            // whatever the event looks like later.
+            saveForm(formId, intentOf(event, next), next, { baseVersion: version });
+          }}
         />
 
         <ErrorLine failure={failure} />

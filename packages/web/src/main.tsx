@@ -4,7 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { zhTW } from '@dongfan/shared';
 import { registerSW } from 'virtual:pwa-register';
 import { App } from './App.js';
-import { offerUpdate } from './lib/update.js';
+import { offerUpdate, setWorkerCheck } from './lib/update.js';
 import './index.css';
 
 // Set here rather than in index.html so every Chinese string stays in the
@@ -29,7 +29,14 @@ if (!container) throw new Error('Missing #root');
  */
 const updateSW = registerSW({
   onNeedRefresh() {
-    offerUpdate(() => void updateSW(true));
+    offerUpdate(() => void updateSW(true), 'worker');
+  },
+  onRegisteredSW(_url, registration) {
+    // How the version check asks the worker to go and look. Without it,
+    // an app that learns from the API that it is behind can only reload --
+    // and a reload while this worker is still in control is served from
+    // its cache and comes back just as old.
+    if (registration) setWorkerCheck(() => void registration.update());
   },
 });
 

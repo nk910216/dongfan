@@ -17,20 +17,53 @@ import { useCallback, useSyncExternalStore } from 'react';
 
 type Apply = () => void;
 
-let pending: Apply | null = null;
+/**
+ * Where an offer came from, which decides what it is worth.
+ *
+ * `worker` means a new build has installed and is waiting to take over;
+ * taking it activates that worker and reloads onto the new bundle.
+ *
+ * `version` means the API reported a build this one is not, and nothing
+ * more -- so all it can do is reload. While an old worker still controls
+ * the page, a reload is served from its cache and comes back to the same
+ * old bundle, which is why this one is the weaker of the two.
+ */
+type Source = 'worker' | 'version';
+
+let pending: { apply: Apply; source: Source } | null = null;
+let askWorker: (() => void) | null = null;
 const listeners = new Set<() => void>();
 
 /**
- * Says a newer build is ready, and how to switch to it.
+ * How to make the service worker go and look for a new build.
  *
- * Called by the service worker registration when a new one is waiting, and
- * by the version check when the API reports a build this one is not. The
- * first offer wins: a second signal about the same release would otherwise
- * replace a working switch with another one for no reason.
+ * Supplied by the registration. Absent where there is no worker at all --
+ * a LAN address over plain HTTP, or a test -- and then nothing calls it.
  */
-export function offerUpdate(apply: Apply): void {
-  if (pending) return;
-  pending = apply;
+export function setWorkerCheck(check: () => void): void {
+  askWorker = check;
+}
+
+/**
+ * Says a newer build exists, and how to switch to it.
+ *
+ * A worker offer replaces a version offer, and never the other way round.
+ * Keeping whichever arrived first would leave a plain reload standing in
+ * for an activation: the old worker is still in control, the reload is
+ * served from its cache, and the app comes back exactly as old with the
+ * new one still waiting. Pressing the strip would do nothing, for ever.
+ *
+ * A version offer also sets the worker looking, so that in the ordinary
+ * case the stronger offer has arrived by the time anybody presses
+ * anything.
+ */
+export function offerUpdate(apply: Apply, source: Source = 'worker'): void {
+  if (source === 'version') askWorker?.();
+
+  const replaces = pending === null || (pending.source === 'version' && source === 'worker');
+  if (!replaces) return;
+
+  pending = { apply, source };
   for (const listener of listeners) listener();
 }
 
@@ -51,7 +84,7 @@ export function useUpdate(): { available: boolean; apply: () => void } {
     // Nothing is saved here on the way out. What a parent has typed is
     // written down as they type it, because the reload that loses it is
     // just as likely to come from the browser as from this button.
-    pending?.();
+    pending?.apply();
   }, []);
 
   return { available, apply };
@@ -60,6 +93,7 @@ export function useUpdate(): { available: boolean; apply: () => void } {
 /** For tests, so one file's offer cannot leak into the next. */
 export function resetUpdate(): void {
   pending = null;
+  askWorker = null;
   for (const listener of listeners) listener();
   listeners.clear();
 }

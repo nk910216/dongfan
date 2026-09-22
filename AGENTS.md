@@ -326,6 +326,14 @@ instant makes every end time invalid. `test/fixtures/clock.ts` does both,
 and `test/clock.test.ts` pins the boundary at fixed times so that the rest
 of the suite does not have to wait for the clock to come round to find out.
 
+It applies to the API tests too, and it caught one there at one in the
+morning: two events an hour apart landed on different local dates, so the
+one the assertion expected first was not in the day's page at all. A test
+about a calendar day names its day rather than counting backwards from
+now. The rule is for anything the server buckets by `local_date` — the
+day endpoint and the `today` figures in the summary — not for durations,
+which do not care what day it is.
+
 Freezing the clock for the whole suite is not the answer. At least one test
 depends on time passing between a page opening and a button being tapped,
 and a frozen clock makes it pass without testing anything.

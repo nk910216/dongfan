@@ -42,6 +42,15 @@ export type SubmitResult =
   | { kind: 'failed' };
 
 export type CreateEvent = {
+  /**
+   * The id this add will be sent under, fixed for the life of the screen.
+   *
+   * Exposed so that a form draft can be stamped with it at the moment the
+   * content is handed over: once the queue has it under this id, the
+   * draft has become a second copy, and restoring it later is how one
+   * feed turns into two (spec 3.8).
+   */
+  eventId: string;
   busy: boolean;
   /** True when an attempt ended without the server saying anything. */
   outcomeUnknown: boolean;
@@ -162,5 +171,5 @@ export function useCreateEvent(typeId: string, eventId?: string): CreateEvent {
     return submit(entry.input);
   }, [entry, id, submit]);
 
-  return { busy, outcomeUnknown, pending: resumed?.input ?? null, failure, submit, retry };
+  return { eventId: id, busy, outcomeUnknown, pending: resumed?.input ?? null, failure, submit, retry };
 }

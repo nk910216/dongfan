@@ -10,7 +10,7 @@ import {
 import { App } from '../src/App.js';
 import { BABY, TOKEN, api, server } from './server.js';
 import { resetLanes } from '../src/lib/lane.js';
-import { offerUpdate } from '../src/lib/update.js';
+import { offerUpdate, setWorkerCheck } from '../src/lib/update.js';
 import { earlierToday as atEarlierToday } from './fixtures/clock.js';
 import { formatClock } from '../src/lib/format.js';
 import { breakStorage, setOnline } from './setup.js';
@@ -2282,6 +2282,58 @@ describe('taking a new version', () => {
     expect(screen.queryByTestId('update-available')).not.toBeInTheDocument();
   });
 
+  it('waits for the worker rather than reloading into the same old bundle', async () => {
+    const user = openSignedIn();
+    await waitForHome();
+
+    let reloaded = 0;
+    let activated = 0;
+
+    // The API says this build is behind before the worker has found
+    // anything. All that offer can do is reload.
+    offerUpdate(() => { reloaded += 1; }, 'version');
+    await screen.findByTestId('update-available');
+
+    // Then the worker finishes installing the new build.
+    offerUpdate(() => { activated += 1; }, 'worker');
+    await user.click(screen.getByTestId('update-available'));
+
+    // A reload while the old worker is still in control is served from
+    // its cache and comes back exactly as old, with the new one still
+    // waiting -- so the strip would reappear and pressing it would go on
+    // doing nothing.
+    expect(activated).toBe(1);
+    expect(reloaded).toBe(0);
+  });
+
+  it('does not let a later version signal take the worker’s place', async () => {
+    const user = openSignedIn();
+    await waitForHome();
+
+    let reloaded = 0;
+    let activated = 0;
+    offerUpdate(() => { activated += 1; }, 'worker');
+    offerUpdate(() => { reloaded += 1; }, 'version');
+
+    await user.click(await screen.findByTestId('update-available'));
+
+    expect(activated).toBe(1);
+    expect(reloaded).toBe(0);
+  });
+
+  it('sets the worker looking when the API says the build is behind', async () => {
+    let checks = 0;
+    setWorkerCheck(() => { checks += 1; });
+
+    api.serverVersion = 'something-newer';
+    openSignedIn();
+    await waitForHome();
+
+    // So that by the time anybody presses the strip, the offer behind it
+    // is usually one that can actually activate the new build.
+    await waitFor(() => expect(checks).toBeGreaterThan(0));
+  });
+
   it('says nothing when it cannot ask', async () => {
     server.use(http.get('/api/version', () => HttpResponse.error()));
     openSignedIn();
@@ -2345,6 +2397,85 @@ describe('a reload, whoever asked for it', () => {
 
     expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('160');
     expect(api.find(event.id)?.value).toBe(140);
+  });
+
+  it('does not offer the form back once the queue has the content', async () => {
+    const user = openSignedIn('/add/bottle');
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.type(screen.getByLabelText(zhTW.addEvent.note), USER_CONTENT.note);
+
+    // The update is taken while the save is still in the air: the queue
+    // holds the content and that request will never answer, because a
+    // reload takes the whole page with it. It is deliberately never
+    // released -- letting it finish would run the code from the screen
+    // that no longer exists, and that code clears the draft, so the test
+    // would pass whether or not any of this works.
+    api.holdNextWrite();
+    void user.click(screen.getByTestId('submit'));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    closeApp();
+
+    // Back on the home screen, the queue resends what it is holding and
+    // gets an answer this time.
+    const next = openSignedIn('/');
+    await waitForHome();
+    await waitFor(() => expect(api.events).toHaveLength(1));
+
+    // Now the form is opened again. There is no queued entry left to take
+    // over, so anything offered here would go out under a *new* id -- a
+    // second copy of a feed that has already been recorded, and one that
+    // nothing could deduplicate (spec 3.8).
+    await next.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await next.click(await screen.findByRole('link', {
+      name: eventTypeName('bottle'),
+    }));
+    await screen.findByLabelText(valueLabel('bottle'));
+    expect(screen.getByLabelText(zhTW.addEvent.note)).toHaveValue('');
+    expect(api.events).toHaveLength(1);
+  });
+
+  it('does not let a restored edit overwrite what somebody else saved', async () => {
+    const event = api.add({ typeId: 'bottle', value: 140 });
+    const user = openSignedIn(`/event/${event.id}`);
+
+    // This phone is part way through changing the note, on version one.
+    await screen.findByLabelText(valueLabel('bottle'));
+    await user.type(screen.getByLabelText(zhTW.addEvent.note), USER_CONTENT.note);
+
+    // The other one changes the amount and saves. Version two.
+    const stored = api.find(event.id);
+    if (stored) {
+      Object.assign(stored, { value: 150, version: stored.version + 1, rev: api.nextRev() });
+    }
+
+    closeApp();
+    const next = openSignedIn(`/event/${event.id}`);
+    await screen.findByLabelText(valueLabel('bottle'));
+    await next.click(screen.getByTestId('submit'));
+
+    // The restored fields are the ones from version one, including an
+    // amount of 140. Sending them against version two would put 140 back
+    // over the 150 and the server would accept it, because the number it
+    // was handed was current (spec 6.3).
+    expect(await screen.findByText(zhTW.error.VERSION_CONFLICT)).toBeInTheDocument();
+    expect(api.find(event.id)?.value).toBe(150);
+  });
+
+  it('saves a restored edit normally when nobody else touched it', async () => {
+    const event = api.add({ typeId: 'bottle', value: 140 });
+    const user = openSignedIn(`/event/${event.id}`);
+
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    await user.clear(amount);
+    await user.type(amount, '160');
+
+    closeApp();
+    const next = openSignedIn(`/event/${event.id}`);
+    await screen.findByLabelText(valueLabel('bottle'));
+    await next.click(screen.getByTestId('submit'));
+
+    await waitForHome();
+    expect(api.find(event.id)?.value).toBe(160);
   });
 
   it('forgets it once it has been saved', async () => {

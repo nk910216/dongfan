@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { DEFAULT_TIMEZONE, startOfLocalDay } from '@dongfan/shared';
 import {
   createBaby, createEvent, deleteEvent, json, patchEvent, request, signedInUser,
 } from './helpers.js';
@@ -14,6 +15,9 @@ import type { StoredEvent } from './helpers.js';
  */
 
 const HOUR = 3_600_000;
+
+/** What the baby is created with, since nothing here overrides it. */
+const TZ = DEFAULT_TIMEZONE;
 
 let token: string;
 let babyId: string;
@@ -144,11 +148,17 @@ describe('the sync feed', () => {
 
 describe('one calendar day', () => {
   it('returns that day in the baby timezone, newest first', async () => {
-    const now = Date.now();
-    const early = await createEvent(token, babyId, { typeId: 'bottle', value: 100, startedAt: now - 3 * HOUR });
-    const late = await createEvent(token, babyId, { typeId: 'bottle', value: 110, startedAt: now - HOUR });
+    // A named day rather than an offset from now. "Three hours ago" is
+    // yesterday for three hours every night -- and this endpoint buckets
+    // by local date, so the two events land on different days and the one
+    // that is supposed to be first is not in the answer at all. The suite
+    // passed all day and failed at one in the morning.
+    const date = '2026-05-10';
+    const dayStart = startOfLocalDay(date, TZ);
 
-    const date = late.localDate;
+    const early = await createEvent(token, babyId, { typeId: 'bottle', value: 100, startedAt: dayStart + 8 * HOUR });
+    const late = await createEvent(token, babyId, { typeId: 'bottle', value: 110, startedAt: dayStart + 9 * HOUR });
+
     const body = await json<{ date: string; events: StoredEvent[] }>(
       await request(`/api/babies/${babyId}/events/day/${date}`, {}, token),
     );

@@ -32,7 +32,11 @@ export function UpdateBanner(): React.JSX.Element | null {
         // strings, and "not what the server is serving" is the thing worth
         // saying either way.
         if (!cancelled && body.version !== APP_VERSION) {
-          offerUpdate(() => window.location.reload());
+          // The weaker of the two signals, and it says so. All it can do
+          // by itself is reload; offering it as `version` also sets the
+          // service worker looking, so that the offer is usually replaced
+          // by one that can actually activate the new build.
+          offerUpdate(() => window.location.reload(), 'version');
         }
       } catch {
         // Being unable to ask says nothing about whether there is a new

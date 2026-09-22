@@ -40,10 +40,26 @@ export function EventForm({ typeId: given, entryId }: {
   // because all three can have a form open at once (spec 2.1).
   const formId = formKey(scope, `add:${typeId}:${entryId ?? ''}`);
 
-  // Read once, at mount. Not offered while the outcome is unknown: the
-  // content then belongs to the queue, and a half-typed correction must
-  // not be able to stand in for what was actually sent (spec 6.1).
-  const [saved] = useState(() => (create.outcomeUnknown ? null : readForm(formId)));
+  /**
+   * Read once, at mount, and only if it is still a draft.
+   *
+   * Two reasons it might not be. While the outcome is unknown the content
+   * belongs to the queue, and a half-typed correction must not stand in
+   * for what was actually sent (spec 6.1). And once it has been handed
+   * over -- which is what the stamped id means -- the queue or the server
+   * holds it, so bringing it back would be a second copy of a feed that
+   * has already been recorded, under a new id, with nothing to
+   * deduplicate it against (spec 3.8).
+   *
+   * The stamp is written just before the hand-over rather than just
+   * after, so the gap it does not cover is the one between two writes
+   * with nothing in between.
+   */
+  const [saved] = useState(() => {
+    if (create.outcomeUnknown) return null;
+    const held = readForm(formId);
+    return held?.eventId === undefined ? held : null;
+  });
 
   const [intent, setIntent] = useState<EventIntent>(
     // A resumed add keeps the intent it was sent with, or a timer would
@@ -128,6 +144,7 @@ export function EventForm({ typeId: given, entryId }: {
     // draft that no longer passes would leave no way forward and no way
     // back (spec 6.1).
     if (create.outcomeUnknown) {
+      saveForm(formId, intent, draft, { eventId: create.eventId });
       finish(await create.retry());
       return;
     }
@@ -141,6 +158,11 @@ export function EventForm({ typeId: given, entryId }: {
       setLocalError(checked.message);
       return;
     }
+
+    // Stamped before it goes, not after it comes back. A reload while the
+    // request is still in the air would otherwise leave a draft that
+    // looks untouched beside an entry the queue is already sending.
+    saveForm(formId, intent, draft, { eventId: create.eventId });
 
     finish(await create.submit({
       typeId: type.id,

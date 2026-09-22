@@ -36,6 +36,29 @@ export type SavedForm = {
   intent: EventIntent;
   draft: EventDraft;
   savedAt: number;
+  /**
+   * The version of the event these changes were made on top of.
+   *
+   * Only on an edit, and the reason it exists is the optimistic lock. The
+   * fields here are the ones from *that* version, so saving them against
+   * whatever version turns up after a reload would write this device's
+   * idea of every field over somebody else's change -- and the server
+   * would accept it, because the version it was handed was current. The
+   * conflict that should have been reported never happens (spec 6.3).
+   *
+   * Carried back out and sent, so a stale draft collects the 409 it
+   * deserves and the parent is told, instead of being told nothing.
+   */
+  baseVersion?: number;
+  /**
+   * The id this content was handed to the queue under.
+   *
+   * Only on an add, and its presence is the whole signal: once the queue
+   * has the content, the queue is the durable copy and this is no longer
+   * a draft. Restoring it afterwards is how the same feed gets recorded
+   * twice under two different ids (spec 3.8).
+   */
+  eventId?: string;
 };
 
 /**
@@ -82,9 +105,14 @@ function writeAll(forms: SavedForm[]): void {
   }
 }
 
-export function saveForm(key: string, intent: EventIntent, draft: EventDraft): void {
+export function saveForm(
+  key: string,
+  intent: EventIntent,
+  draft: EventDraft,
+  marks: { baseVersion?: number; eventId?: string } = {},
+): void {
   const others = readAll().filter((form) => form.key !== key);
-  writeAll([...others, { key, intent, draft, savedAt: Date.now() }]);
+  writeAll([...others, { key, intent, draft, savedAt: Date.now(), ...marks }]);
 }
 
 /** What was being typed into that form, if it is still worth offering. */
