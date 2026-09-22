@@ -109,12 +109,24 @@ holding is migrated into the queue on the first load after the upgrade,
 under the account that wrote it, and marked as being in doubt — which is
 the state it was always in.
 
-Stopping a timer offline is the one edit that is not simply refused. The
-instant the button was pressed is written to the `drafts` store and
-offered back for confirmation once there is a connection — never sent
-automatically, because the other parent may have stopped or edited the
-same timer meanwhile (spec 7.2, 6.3). Every other edit and deletion is
-still refused outright.
+Stopping a timer is the one edit that is not simply refused. The instant
+the button was pressed is written to the `drafts` store **before any
+attempt is made to send it**, and offered back for confirmation once the
+server can be reached — never sent automatically, because the other parent
+may have stopped or edited the same timer meanwhile (spec 7.2, 6.3). Every
+other edit and deletion is still refused outright.
+
+`navigator.onLine` is not the condition. It says an interface is up, not
+that the server answers: a stopped worker, a captive portal and a lost
+response all look like a healthy phone, and they are the same situation
+for the parent. The draft is kept on every failure and removed only by a
+definite success, by the confirmation, or by the event coming back already
+ending at exactly the instant held here — which is how a stop whose answer
+was lost stops asking to be confirmed.
+
+Clearing it on *any* successful update is wrong and was a bug: correcting
+a note on an event whose timer is still running would throw the moment
+away and leave the timer with nothing to end it by.
 
 What stage 4 inherits:
 

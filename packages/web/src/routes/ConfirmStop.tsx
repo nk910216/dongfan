@@ -114,6 +114,10 @@ export function ConfirmStop(): React.JSX.Element {
       // and sending the other fields back would write this device's idea
       // of them over whatever the other parent changed (spec 6.3).
       await updateEvent(event.id, event.version, { endedAt: checked.endedAt });
+      // Cleared here rather than by the update itself. An update only
+      // answers this draft when it is *this* one -- a note corrected
+      // elsewhere must leave the moment alone (spec 7.2).
+      await discardStop(eventId);
       navigate('/');
     } catch (error) {
       setBusy(false);

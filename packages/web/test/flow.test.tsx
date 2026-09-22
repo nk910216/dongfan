@@ -1980,6 +1980,38 @@ describe('stopping a timer with no signal', () => {
     expect(sent['version']).toBe(sleep.version + 1);
   });
 
+  it('stops asking once it has been confirmed at a time that was adjusted', async () => {
+    const sleep = running();
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+    await screen.findByTestId('timer-drafted-sleep');
+
+    comeBack();
+    await user.click(screen.getByTestId('timer-drafted-sleep'));
+
+    // Confirming does not mean accepting: the screen is there to be
+    // corrected. A minute earlier than the press, still after the start.
+    const adjusted = Date.now() - 60_000;
+    fireEvent.change(await screen.findByTestId('ended-at'), {
+      target: { value: toLocalInput(adjusted, BABY.timezone) },
+    });
+    await user.click(screen.getByTestId('submit'));
+
+    await waitFor(() => expect(api.find(sleep.id)?.active).toBe(false));
+    expect(api.find(sleep.id)?.endedAt).toBe(fromLocalInput(
+      toLocalInput(adjusted, BABY.timezone), BABY.timezone,
+    ));
+
+    // And it is done with. The moment on the device no longer matches what
+    // the server holds, so nothing else would have cleared it.
+    await waitForHome();
+    await waitFor(() => expect(screen.queryByTestId('stop-drafts')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('timer-drafted-sleep')).not.toBeInTheDocument();
+  });
+
   it('says when the other parent has already ended it, and offers to keep theirs', async () => {
     const sleep = running();
     const user = openSignedIn();
@@ -2081,6 +2113,106 @@ describe('stopping a timer with no signal', () => {
     expect(screen.queryByTestId('timer-drafted-sleep')).not.toBeInTheDocument();
     expect(screen.queryByTestId('stop-drafts')).not.toBeInTheDocument();
     expect(await screen.findByRole('button', { name: zhTW.timer.stop })).toBeInTheDocument();
+  });
+
+  it('keeps the moment when the phone has a signal but the server does not answer', async () => {
+    const sleep = running();
+    const user = openSignedIn();
+    await waitForHome();
+
+    // Wi-Fi is up and `navigator.onLine` says so. The worker has stopped,
+    // or there is a captive portal, or the reply is lost on the way back:
+    // from here they all look like a healthy phone, and every one of them
+    // is the three-in-the-morning case spec 7.2 is about.
+    server.use(http.patch('/api/events/:eventId', () => HttpResponse.error()));
+    const before = Date.now();
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+    const after = Date.now();
+
+    expect(await screen.findByTestId('timer-error')).toBeInTheDocument();
+    expect(await screen.findByTestId('timer-drafted-sleep')).toBeInTheDocument();
+
+    // And it is the moment that was pressed, not one worked out when the
+    // server came back.
+    server.resetHandlers();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await user.click(screen.getByTestId('timer-drafted-sleep'));
+    await user.click(await screen.findByTestId('submit'));
+
+    await waitFor(() => expect(api.find(sleep.id)?.active).toBe(false));
+    const sent = api.lastRequest(`/events/${sleep.id}`)?.body as Record<string, unknown>;
+    expect(Number(sent['endedAt'])).toBeGreaterThanOrEqual(before);
+    expect(Number(sent['endedAt'])).toBeLessThanOrEqual(after);
+  });
+
+  it('does not resend the stop by itself once the server answers again', async () => {
+    running();
+    const user = openSignedIn();
+    await waitForHome();
+
+    server.use(http.patch('/api/events/:eventId', () => HttpResponse.error()));
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+    await screen.findByTestId('timer-drafted-sleep');
+
+    const tried = patches().length;
+    comeBack();
+    await waitFor(() => expect(api.requests.some((e) => e.path.endsWith('/summary'))).toBe(true));
+
+    // The other parent may have touched the timer while this phone could
+    // not reach anything, so it waits to be confirmed rather than firing
+    // the same update again (spec 7.2, 6.3).
+    expect(patches()).toHaveLength(tried);
+    expect(screen.getByTestId('timer-drafted-sleep')).toBeInTheDocument();
+  });
+
+  it('stops asking when the stop reached the server but the answer was lost', async () => {
+    const sleep = running();
+    const user = openSignedIn();
+    await waitForHome();
+
+    // Recorded, and the client never hears so.
+    api.loseNextResponse = true;
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+
+    await screen.findByTestId('timer-error');
+    expect(api.find(sleep.id)?.active).toBe(false);
+
+    // The next pull brings back an event already ending at exactly the
+    // instant this phone is holding. Nobody else produces that to the
+    // millisecond, so it was this press: there is nothing left to confirm,
+    // and saying another family member did it would be a plain untruth.
+    await waitFor(() => expect(screen.queryByTestId('timer-drafted-sleep')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByTestId('stop-drafts')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('already-ended')).not.toBeInTheDocument();
+  });
+
+  it('is left alone by an edit that has nothing to do with it', async () => {
+    const sleep = running();
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+    await screen.findByTestId('timer-drafted-sleep');
+
+    comeBack();
+
+    // The timer is still running as far as the server is concerned. Going
+    // into the event to correct its note says nothing about when it ended,
+    // and answering the draft with it would throw the moment away and
+    // leave the timer running with nothing left to end it by.
+    await user.click(screen.getByRole('link', {
+      name: interpolate(zhTW.event.open, { name: eventTypeName('sleep') }),
+    }));
+    const note = await screen.findByLabelText(zhTW.addEvent.note);
+    await user.type(note, USER_CONTENT.note);
+    await user.click(screen.getByTestId('submit'));
+
+    await waitForHome();
+    expect(api.find(sleep.id)?.note).toBe(USER_CONTENT.note);
+    expect(api.find(sleep.id)?.active).toBe(true);
+    expect(await screen.findByTestId('timer-drafted-sleep')).toBeInTheDocument();
+    expect(screen.getByTestId('stop-drafts')).toBeInTheDocument();
   });
 
   it('still refuses an ordinary edit, which has no moment worth keeping', async () => {

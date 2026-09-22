@@ -696,3 +696,40 @@ export async function keepDraft(draft: StopDraft): Promise<StopDraft> {
 export async function removeDraft(scope: Scope, eventId: string): Promise<void> {
   await (await db()).delete('drafts', [scope, eventId]);
 }
+
+/**
+ * Drops the drafts that no longer have anything to ask.
+ *
+ * Two ways that happens, and the first is the one that matters. A stop can
+ * reach the server and lose its response on the way back: the update
+ * landed, this device never heard so, and the moment is still sitting here
+ * waiting to be confirmed. The next pull brings the event back carrying
+ * exactly the instant this draft holds, which no one else would have
+ * produced to the millisecond -- so it was ours, and there is nothing left
+ * to confirm.
+ *
+ * Without this the parent is told another family member ended it, at the
+ * very time they pressed the button themselves.
+ *
+ * The second is a deleted event: there is no timer left to end.
+ *
+ * An event that has not been pulled yet is left alone. Absent is not the
+ * same as answered.
+ */
+export async function reconcileDrafts(scope: Scope): Promise<StopDraft[]> {
+  const database = await db();
+  const tx = database.transaction(['drafts', 'events'], 'readwrite');
+  const drafts = tx.objectStore('drafts');
+  const events = tx.objectStore('events');
+
+  for (const draft of await drafts.index('by-scope').getAll(scope)) {
+    const row = await events.get([scope, draft.eventId]);
+    if (!row) continue;
+    if (row.event.deletedAt !== null || row.event.endedAt === draft.endedAt) {
+      await drafts.delete([scope, draft.eventId]);
+    }
+  }
+
+  await tx.done;
+  return listDrafts(scope);
+}

@@ -407,6 +407,14 @@ export const server = setupServer(
       version: event.version + 1,
     });
     event.localDate = toLocalDate(event.startedAt, TZ);
+
+    if (api.loseNextResponse) {
+      api.loseNextResponse = false;
+      // Applied, but the client will never hear so. For a stop, that
+      // leaves the phone holding a moment the server has already recorded
+      // (spec 7.2).
+      return HttpResponse.error();
+    }
     return HttpResponse.json(event);
   }),
 

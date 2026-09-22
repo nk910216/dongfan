@@ -5,7 +5,9 @@ import { Message } from '../components/Message.js';
 import type { BabyDto, EventDto, SummaryDto, TypeSummaryDto } from '@dongfan/shared';
 import { ApiFailure, OfflineError, apiRequest, isOffline } from './api.js';
 import * as local from './db.js';
-import { getQueued, keepDraft, listDrafts, listQueued, removeDraft, scopeOf } from './db.js';
+import {
+  getQueued, keepDraft, listDrafts, listQueued, reconcileDrafts, removeDraft, scopeOf,
+} from './db.js';
 import type { NewEventInput, QueuedCreate, StopDraft } from './db.js';
 import { runExclusive, runSerial } from './lane.js';
 import {
@@ -202,7 +204,7 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
       local.eventsOnDate(scope, today),
       local.readMeta(scope),
       listQueued(scope),
-      listDrafts(scope),
+      reconcileDrafts(scope),
     ]);
     setEvents(allDayFirst(day));
     setSyncedAt(meta.syncedAt);
@@ -234,7 +236,7 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     const meta = await local.readMeta(scope);
     setEvents(allDayFirst(await local.eventsOnDate(scope, today)));
     setUnsynced(await listQueued(scope));
-    setStopDrafts(await listDrafts(scope));
+    setStopDrafts(await reconcileDrafts(scope));
     if (meta.summary) setSummary(meta.summary);
     setSyncedAt(meta.syncedAt);
   }, [call, readLocal, scope, baby.id, today]);
@@ -510,12 +512,11 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
         body: { version, ...patch },
       });
       await local.applyOne(scope, updated);
-      // Whatever this update was, the event has now been changed with a
-      // version the server accepted, so an unconfirmed stop for it is
-      // answered. Leaving it would keep offering a moment that has already
-      // been dealt with.
-      await removeDraft(scope, eventId);
-      setStopDrafts(await listDrafts(scope));
+      // Deliberately not touching the stop draft. "Any successful update
+      // answers it" looked safe and is not: correcting a note on an event
+      // whose timer is still running would throw away the moment somebody
+      // pressed stop at, and the timer would go on running with nothing
+      // left to say when it should have ended.
       await settle();
       return updated;
     },
@@ -537,15 +538,50 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
    */
   const stopTimer = useCallback(
     async (eventId: string, version: number, endedAt: number): Promise<EventDto | null> => {
-      if (isOffline()) {
-        await keepDraft({ scope, eventId, endedAt, version, createdAt: Date.now() });
-        setStopDrafts(await listDrafts(scope));
-        return null;
+      // Written down before anything is attempted, whatever the device
+      // thinks of its connection. `navigator.onLine` says an interface is
+      // up, not that the server can be reached: a worker that has stopped,
+      // a tunnel, a captive portal and a lost response all look like a
+      // healthy phone from here, and every one of them used to lose the
+      // moment the button was pressed at.
+      const kept = await keepDraft({ scope, eventId, endedAt, version, createdAt: Date.now() });
+      setStopDrafts(await listDrafts(scope));
+
+      if (isOffline()) return null;
+
+      // The stored moment, not the one just handed in.
+      //
+      // The two are the same today, because after the first press the card
+      // stops being a button and there is no second press to make. This is
+      // written as "send what is stored" rather than "send what you were
+      // given" because the stored one is the answer either way: it is what
+      // `keepDraft` refuses to move, and what the confirmation screen will
+      // offer if this attempt fails.
+      let updated: EventDto;
+      try {
+        updated = await updateEvent(eventId, version, { endedAt: kept.endedAt });
+      } catch (error) {
+        // A failed stop leaves the same doubt a failed add does: it may
+        // have been applied and lost its answer on the way back. Pulling
+        // settles that on its own -- an event that comes back already
+        // ending at this exact instant was this press -- and if the pull
+        // fails too, nothing is lost and the usual triggers try again.
+        //
+        // What does not happen is the update being sent a second time.
+        // The other parent may have touched the timer meanwhile, and that
+        // is a question for a person (spec 7.2, 6.3).
+        void settle();
+        throw error;
       }
 
-      return updateEvent(eventId, version, { endedAt });
+      // Only a definite success clears it here. Everything else leaves the
+      // moment to be confirmed against whatever the server turns out to
+      // hold.
+      await removeDraft(scope, eventId);
+      setStopDrafts(await listDrafts(scope));
+      return updated;
     },
-    [scope, updateEvent],
+    [scope, updateEvent, settle],
   );
 
   const discardStop = useCallback(
