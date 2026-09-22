@@ -70,6 +70,8 @@ export default tseslint.config(
         process: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
+        // Node's, for the scripts that write binary files.
+        Buffer: 'readonly',
       },
     },
   },

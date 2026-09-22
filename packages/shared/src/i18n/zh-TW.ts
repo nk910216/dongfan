@@ -187,6 +187,19 @@ export const zhTW = {
     endedAtEmpty: '尚未填寫',
   },
 
+  update: {
+    available: '有新版本，點此更新',
+    applying: '更新中…',
+    keepsDraft: '你正在填的內容會留著。',
+  },
+
+  install: {
+    title: '請把東凡加到主畫面',
+    body: 'iOS 在 Safari 分頁裡只保留 7 天，還沒送出的紀錄可能被清掉。加到主畫面就不會。',
+    how: '點下方的分享圖示，選「加入主畫面」。',
+    dismiss: '知道了',
+  },
+
   stopDraft: {
     title: '確認結束時間',
     badge: '已結束，待確認',

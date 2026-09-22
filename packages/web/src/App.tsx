@@ -1,6 +1,7 @@
 import { Route, Routes } from 'react-router-dom';
 import { zhTW } from '@dongfan/shared';
 import { Message } from './components/Message.js';
+import { UpdateBanner } from './components/UpdateBanner.js';
 import { CreateBaby } from './routes/CreateBaby.js';
 import { SessionProvider, useSession } from './lib/session.js';
 import { StoreProvider } from './lib/store.js';
@@ -16,6 +17,10 @@ export function App(): React.JSX.Element {
   return (
     <SessionProvider>
       <div className="relative mx-auto flex h-full max-w-md flex-col overflow-hidden">
+        {/* Above everything, on every screen: a build that is behind the
+            API is behind it whatever the parent happens to be looking at
+            (spec 2.1). */}
+        <UpdateBanner />
         <main className="relative min-h-0 flex-1">
           <Shell />
         </main>

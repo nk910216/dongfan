@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
 import { eventTypeName, getEventType, zhTW } from '@dongfan/shared';
-import type { EventDto } from '@dongfan/shared';
+import type { EventDto, EventIntent } from '@dongfan/shared';
 import { ApiFailure } from '../lib/api.js';
 import { EventIcon } from '../components/EventIcon.js';
 import { EventFields, checkDraft, draftForValue } from '../components/EventFields.js';
 import type { EventDraft } from '../components/EventFields.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { Message } from '../components/Message.js';
+import { clearForm, formKey, readForm, saveForm } from '../lib/form-draft.js';
 import { useStore } from '../lib/store.js';
 
 /**
@@ -22,7 +23,7 @@ import { useStore } from '../lib/store.js';
 export function EditEvent(): React.JSX.Element {
   const { eventId = '' } = useParams();
   const navigate = useNavigate();
-  const { baby, findEvent, updateEvent, removeEvent } = useStore();
+  const { baby, scope, findEvent, updateEvent, removeEvent } = useStore();
 
   const [event, setEvent] = useState<EventDto | null>(null);
   const [draft, setDraft] = useState<EventDraft | null>(null);
@@ -35,6 +36,11 @@ export function EditEvent(): React.JSX.Element {
 
   const type = event ? getEventType(event.typeId) : undefined;
 
+  // Same as the add form: a reload must not lose what is being typed
+  // (spec 2.1). The event itself is re-fetched, so only the changes on top
+  // of it are at stake -- which is all of what the parent did.
+  const formId = formKey(scope, `edit:${eventId}`);
+
   useEffect(() => {
     let cancelled = false;
     setLoadError(null);
@@ -46,7 +52,15 @@ export function EditEvent(): React.JSX.Element {
       .then((found) => {
         if (cancelled) return;
         setEvent(found);
-        setDraft({
+        // What was being typed, if there is any -- but only on the first
+        // load. A reload after a conflict is deliberate: the point of it
+        // is to show what the other parent actually saved so this one can
+        // decide again, and putting the stale draft back would hide the
+        // very change they were told about (spec 6.3). The dialog says as
+        // much before it happens.
+        const saved = reloads === 0 ? readForm(formId) : null;
+        if (reloads > 0) clearForm(formId);
+        setDraft(saved?.draft ?? {
           startedAt: found.startedAt,
           endedAt: found.endedAt,
           displayValue: draftForValue(getEventType(found.typeId)?.value ?? null, found.value),
@@ -61,7 +75,7 @@ export function EditEvent(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [eventId, findEvent, reloads]);
+  }, [eventId, findEvent, reloads, formId]);
 
   if (loadError !== null) return <Message text={zhTW.error.NOT_FOUND} />;
   if (!event || !draft || !type) return <Message text={zhTW.app.loading} />;
@@ -72,7 +86,7 @@ export function EditEvent(): React.JSX.Element {
     // A running timer is still running unless an end time was supplied, so
     // the intent it is checked against has to match what the server will
     // decide from the same two facts (spec 3.5).
-    const intent = event.active && draft.endedAt === null ? 'start_timer' : 'record';
+    const intent = intentOf(event, draft);
     const checked = checkDraft(type, draft, intent, {
       now: Date.now(),
       timeZone: baby.timezone,
@@ -92,6 +106,7 @@ export function EditEvent(): React.JSX.Element {
         note: draft.note,
         metadata: draft.metadata,
       });
+      clearForm(formId);
       navigate('/');
     } catch (error) {
       if (error instanceof ApiFailure && error.code === 'VERSION_CONFLICT') setConflict(true);
@@ -104,6 +119,7 @@ export function EditEvent(): React.JSX.Element {
     setBusy(true);
     try {
       await removeEvent(event.id, event.version);
+      clearForm(formId);
       navigate('/');
     } catch (error) {
       if (error instanceof ApiFailure && error.code === 'VERSION_CONFLICT') setConflict(true);
@@ -135,7 +151,7 @@ export function EditEvent(): React.JSX.Element {
           // A running timer has no end time yet, but supplying one here is
           // exactly how it is stopped, so the field stays available.
           showEnd
-          onChange={(next) => { setDraft(next); setFailure(null); }}
+          onChange={(next) => { setDraft(next); setFailure(null); saveForm(formId, intentOf(event, next), next); }}
         />
 
         <ErrorLine failure={failure} />
@@ -197,6 +213,11 @@ export function EditEvent(): React.JSX.Element {
       ) : null}
     </div>
   );
+}
+
+/** The one rule for reading an intent off an event and a draft (spec 3.5). */
+function intentOf(event: EventDto, draft: EventDraft): EventIntent {
+  return event.active && draft.endedAt === null ? 'start_timer' : 'record';
 }
 
 /**

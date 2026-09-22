@@ -7,6 +7,7 @@ import { api, server } from './server.js';
 import { closeDb } from '../src/lib/db.js';
 import { resetLanes } from '../src/lib/lane.js';
 import { resetMigration } from '../src/lib/outbox.js';
+import { resetUpdate } from '../src/lib/update.js';
 
 /**
  * A working Storage for the tests.
@@ -74,6 +75,30 @@ export function setOnline(online: boolean): void {
   Object.defineProperty(navigator, 'onLine', { value: online, configurable: true });
 }
 
+/**
+ * jsdom does not implement `matchMedia`, and every browser does.
+ *
+ * Supplied rather than guarded around, so the screens run the same code
+ * here as on a phone. Nothing under test asks it anything but whether the
+ * app is running from the home screen, which in a test it is not.
+ */
+function installMatchMedia(): void {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }),
+  });
+}
+
+installMatchMedia();
 installStorage();
 
 /**
@@ -128,6 +153,8 @@ afterEach(async () => {
   // The move out of the old store runs once per load. Without this, one
   // test's migration would count as the next one's.
   resetMigration();
+  // A build offered in one test must not still be on offer in the next.
+  resetUpdate();
   setOnline(true);
   closeDb();
   globalThis.indexedDB = new IDBFactory();

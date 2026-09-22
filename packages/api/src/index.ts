@@ -1,5 +1,6 @@
 import { drizzle } from 'drizzle-orm/d1';
 import { Hono } from 'hono';
+import { APP_VERSION } from '@dongfan/shared';
 import { fail } from './lib/errors.js';
 import { requireSession } from './middleware/auth.js';
 import { authRoutes } from './routes/auth.js';
@@ -16,7 +17,10 @@ app.use('/api/*', async (c, next) => {
   await next();
 });
 
-app.get('/api/version', (c) => c.json({ version: '0.0.0' }));
+// What the client compares its own build against. A published app can be
+// older than the API it is talking to for as long as it stays open, so it
+// has to be able to ask (spec 2.1).
+app.get('/api/version', (c) => c.json({ version: APP_VERSION }));
 
 app.route('/api/auth', authRoutes);
 

@@ -703,10 +703,14 @@ export async function removeDraft(scope: Scope, eventId: string): Promise<void> 
  * Two ways that happens, and the first is the one that matters. A stop can
  * reach the server and lose its response on the way back: the update
  * landed, this device never heard so, and the moment is still sitting here
- * waiting to be confirmed. The next pull brings the event back carrying
- * exactly the instant this draft holds, which no one else would have
- * produced to the millisecond -- so it was ours, and there is nothing left
- * to confirm.
+ * waiting to be confirmed. The next pull brings the event back already
+ * ending at exactly the instant this draft holds -- the server's state is
+ * what the draft was asking for, so there is nothing left to ask.
+ *
+ * The test is on the state, not on who produced it. Whether this device's
+ * request arrived or somebody else set the same instant, the answer to
+ * "should this timer end here?" is already yes, and offering it again
+ * would ask a question that has been settled.
  *
  * Without this the parent is told another family member ended it, at the
  * very time they pressed the button themselves.

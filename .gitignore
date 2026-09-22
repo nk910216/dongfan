@@ -35,6 +35,11 @@ coverage/
 *.jpg
 *.png
 !docs/**/*.png
+# Except the home screen icons, which are part of the app rather than
+# illustrations of it. Drawn by scripts/make-icons.mjs and committed:
+# without them the manifest is incomplete, no install prompt appears, and
+# iOS falls back to a screenshot of the page (spec 9.6).
+!packages/web/public/*.png
 
 # Editors and OS
 .DS_Store

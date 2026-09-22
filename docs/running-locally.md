@@ -244,6 +244,77 @@ and the screen offers to keep theirs instead.
   been sent, because what changes when an event moves is not something a
   phone can work out (spec 6.2).
 
+## The PWA: installing, offline cold start, and updates
+
+None of this works over the LAN address. A service worker needs a secure
+context, which the specification defines as HTTPS **or localhost** — and
+that is decided by the URL, not by the device, so `http://192.168.x.x` is
+not one (spec 10.1). The worker is also switched off in `vite dev`, where
+a cached bundle would turn every edit into a puzzle.
+
+So this is tested against a real build, served by the Worker, through a
+temporary HTTPS address:
+
+```sh
+npm run dev:api                              # terminal one: builds web, serves it on 8787
+npx cloudflared tunnel --url http://localhost:8787   # terminal two
+```
+
+The tunnel prints a `https://<something>.trycloudflare.com` address. Open
+**that** on the phone. It is a throwaway address that disappears when you
+press Ctrl-C; nothing is deployed and the database is still the local one.
+
+### Installing it
+
+1. Open the tunnel address on the phone and sign in.
+2. On iOS, the home screen shows a strip asking you to add the app. Do what
+   it says: share icon → Add to Home Screen.
+3. Open it from the home screen. There is no Safari chrome, and the icon is
+   the sprout rather than a screenshot.
+
+This is not decoration. iOS clears storage for a site that has not been
+opened in seven days, taking the session, the local records, the queue of
+unsent adds and any unconfirmed stop with it. A PWA on the home screen is
+exempt (spec 9.6).
+
+### A cold start with no network
+
+Only possible now that there is a service worker, and it is the thing the
+earlier offline checks could not cover.
+
+1. Open the app from the home screen at least once, with the network on.
+2. Turn off Wi-Fi and mobile data.
+3. **Close the app entirely** — swipe it away — and open it again.
+   - It starts. Today's records are there, from the device.
+   - The indicator says the sync failed rather than claiming it just
+     succeeded.
+   - Recording a nappy still works and joins the queue.
+4. Turn the network back on and the queue drains as before.
+
+### Taking an update
+
+1. With the app open on the phone, change something visible — a string in
+   `packages/shared/src/i18n/zh-TW.ts` will do — and bump `APP_VERSION` in
+   `packages/shared/src/version.ts`.
+2. `npm run dev:api` rebuilds and serves it.
+3. On the phone, **start filling in a bottle**: type an amount and a note,
+   and do not save.
+4. Bring the app to the front, or wait for it to check.
+   - A strip appears at the top: there is a new version.
+   - Nothing has reloaded. The form is exactly as you left it.
+5. Tap the strip.
+   - The page reloads onto the new build.
+   - **The amount and the note are still there.** That is the check
+     (spec 2.1); anything else means a parent loses what they were typing
+     every time a release lands.
+6. Anything in the queue, and any unconfirmed stop, are also still there —
+   they live in IndexedDB, which a reload does not touch.
+
+Two signals can raise that strip and either is enough: the service worker
+finding new assets, and `GET /api/version` reporting a build the running
+one is not. The second is what catches a phone that has been open since
+Tuesday.
+
 ### A restore drill
 
 ```sh
@@ -261,8 +332,7 @@ the checks are exercised here against synthetic data.
 | Login CPU under the 10 ms limit | Local runs enforce no CPU limit at all (spec 9.3) |
 | Backup of the deployed database | There is no deployed database |
 | The scheduled backup workflow | It runs on GitHub against a deployed database |
-| Installing to the home screen | No manifest yet; this belongs to stage 4 of M2 |
-| A cold start with no network | Needs a service worker, which needs HTTPS; stage 4 |
+| Anything needing a deployed build | Everything above runs against the local Worker |
 
 These stay outstanding. [`deployment.md`](deployment.md) is what to do when
 deploying becomes the plan; none of it has been done.

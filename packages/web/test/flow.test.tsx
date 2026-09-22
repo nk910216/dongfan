@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -10,6 +10,7 @@ import {
 import { App } from '../src/App.js';
 import { BABY, TOKEN, api, server } from './server.js';
 import { resetLanes } from '../src/lib/lane.js';
+import { offerUpdate } from '../src/lib/update.js';
 import { earlierToday as atEarlierToday } from './fixtures/clock.js';
 import { formatClock } from '../src/lib/format.js';
 import { breakStorage, setOnline } from './setup.js';
@@ -2178,9 +2179,9 @@ describe('stopping a timer with no signal', () => {
     expect(api.find(sleep.id)?.active).toBe(false);
 
     // The next pull brings back an event already ending at exactly the
-    // instant this phone is holding. Nobody else produces that to the
-    // millisecond, so it was this press: there is nothing left to confirm,
-    // and saying another family member did it would be a plain untruth.
+    // instant this phone is holding. The server's state is what the draft
+    // was asking for, so there is nothing left to ask -- and saying
+    // another family member did it would be a plain untruth.
     await waitFor(() => expect(screen.queryByTestId('timer-drafted-sleep')).not.toBeInTheDocument());
     await waitFor(() => expect(screen.queryByTestId('stop-drafts')).not.toBeInTheDocument());
     expect(screen.queryByTestId('already-ended')).not.toBeInTheDocument();
@@ -2231,5 +2232,239 @@ describe('stopping a timer with no signal', () => {
     // (spec 7.2).
     expect(await screen.findByTestId('form-error')).toHaveTextContent(zhTW.error.needsConnection);
     expect(api.find(event.id)?.value).toBe(140);
+  });
+});
+
+describe('taking a new version', () => {
+  it('offers it rather than reloading under whoever is holding the phone', async () => {
+    openSignedIn();
+    await waitForHome();
+
+    // What the service worker reports when a new build has installed and
+    // is waiting. Nothing has happened to the screen.
+    let applied = 0;
+    offerUpdate(() => { applied += 1; });
+
+    const strip = await screen.findByTestId('update-available');
+    expect(strip).toHaveTextContent(zhTW.update.available);
+    expect(applied).toBe(0);
+    expect(screen.getByText(zhTW.home.lastFeed)).toBeInTheDocument();
+  });
+
+  it('takes it when asked', async () => {
+    const user = openSignedIn();
+    await waitForHome();
+
+    let applied = 0;
+    offerUpdate(() => { applied += 1; });
+    await user.click(await screen.findByTestId('update-available'));
+
+    expect(applied).toBe(1);
+  });
+
+  it('notices a build the service worker has not gone looking for', async () => {
+    // A phone that has been open since Tuesday: the worker has no reason
+    // to check, and the API is now serving something else (spec 2.1).
+    api.serverVersion = 'something-newer';
+    openSignedIn();
+    await waitForHome();
+
+    expect(await screen.findByTestId('update-available')).toBeInTheDocument();
+  });
+
+  it('says nothing when the API is serving the build that is running', async () => {
+    openSignedIn();
+    await waitForHome();
+    await waitFor(() =>
+      expect(api.requests.some((entry) => entry.path === '/api/version')).toBe(true),
+    );
+
+    expect(screen.queryByTestId('update-available')).not.toBeInTheDocument();
+  });
+
+  it('says nothing when it cannot ask', async () => {
+    server.use(http.get('/api/version', () => HttpResponse.error()));
+    openSignedIn();
+    await waitForHome();
+
+    // Being unable to reach the server says nothing about new builds, and
+    // a strip that appeared every time the signal dropped would be noise.
+    expect(screen.queryByTestId('update-available')).not.toBeInTheDocument();
+  });
+});
+
+describe('a reload, whoever asked for it', () => {
+  /** Closes the app and opens it again, which is what taking an update does. */
+  async function reload(path = '/'): Promise<ReturnType<typeof userEvent.setup>> {
+    closeApp();
+    const next = openSignedIn(path);
+    await waitForHome();
+    return next;
+  }
+
+  it('keeps what was being typed into the add form', async () => {
+    const user = openSignedIn('/add/bottle');
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.type(screen.getByLabelText(zhTW.addEvent.note), USER_CONTENT.note);
+
+    // Spec 2.1 names this one outright: an update arrives while somebody
+    // is filling in a feed, and taking it must not empty the form.
+    closeApp();
+    openSignedIn('/add/bottle');
+
+    expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('150');
+    expect(screen.getByLabelText(zhTW.addEvent.note)).toHaveValue(USER_CONTENT.note);
+  });
+
+  it('keeps the timer or record choice with it', async () => {
+    const user = openSignedIn('/add/sleep');
+    await user.click(await screen.findByRole('button', { name: zhTW.addEvent.record }));
+
+    closeApp();
+    openSignedIn('/add/sleep');
+
+    // The intent decides whether this occupies the type's single running
+    // slot, so coming back as the other one is a different record
+    // (spec 3.5).
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: zhTW.addEvent.record }))
+        .toHaveStyle({ fontWeight: '700' }),
+    );
+  });
+
+  it('keeps what was being typed into an edit', async () => {
+    const event = api.add({ typeId: 'bottle', value: 140 });
+    const user = openSignedIn(`/event/${event.id}`);
+
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    await user.clear(amount);
+    await user.type(amount, '160');
+
+    closeApp();
+    openSignedIn(`/event/${event.id}`);
+
+    expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('160');
+    expect(api.find(event.id)?.value).toBe(140);
+  });
+
+  it('forgets it once it has been saved', async () => {
+    const user = openSignedIn('/add/bottle');
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.type(screen.getByLabelText(zhTW.addEvent.note), USER_CONTENT.note);
+    await user.click(screen.getByTestId('submit'));
+    await waitForHome();
+
+    closeApp();
+    openSignedIn('/add/bottle');
+
+    // The note, not the amount: the form offers the last amount back on
+    // purpose, so a restored draft and a fresh form look the same there.
+    // It is a record now, and offering the note again would invite a
+    // second bottle carrying the same words.
+    await screen.findByLabelText(valueLabel('bottle'));
+    expect(screen.getByLabelText(zhTW.addEvent.note)).toHaveValue('');
+  });
+
+  it('keeps the queue of records that have not been sent', async () => {
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'pee') }));
+    await waitForHome();
+    expect(await screen.findByTestId('unsynced-count')).toBeInTheDocument();
+
+    // The queue is in IndexedDB rather than in the page, which is what
+    // makes an update survivable at all (spec 6.2).
+    setOnline(true);
+    server.resetHandlers();
+    await reload();
+
+    expect(await screen.findByTestId('unsynced-count')).toBeInTheDocument();
+    await waitFor(() => expect(api.events).toHaveLength(1));
+  });
+
+  it('keeps the moment a timer was stopped at', async () => {
+    const sleep = api.add({ typeId: 'sleep', active: true, startedAt: earlierToday(2 * HOUR) });
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    const before = Date.now();
+    await user.click(screen.getByRole('button', { name: zhTW.timer.stop }));
+    const after = Date.now();
+    await screen.findByTestId('timer-drafted-sleep');
+
+    setOnline(true);
+    server.resetHandlers();
+    const next = await reload();
+
+    expect(await screen.findByTestId('timer-drafted-sleep')).toBeInTheDocument();
+    await next.click(screen.getByTestId('timer-drafted-sleep'));
+    await next.click(await screen.findByTestId('submit'));
+
+    await waitFor(() => expect(api.find(sleep.id)?.active).toBe(false));
+    const sent = api.lastRequest(`/events/${sleep.id}`)?.body as Record<string, unknown>;
+    expect(Number(sent['endedAt'])).toBeGreaterThanOrEqual(before);
+    expect(Number(sent['endedAt'])).toBeLessThanOrEqual(after);
+  });
+});
+
+describe('an iPhone used from a Safari tab', () => {
+  const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15';
+  const REAL_AGENT = navigator.userAgent;
+
+  function pretendIPhone(standalone: boolean): void {
+    Object.defineProperty(navigator, 'userAgent', { value: IPHONE, configurable: true });
+    Object.defineProperty(navigator, 'standalone', { value: standalone, configurable: true });
+  }
+
+  // Both are defined on the navigator itself and outlive the test that
+  // set them. Left in place, the last iPhone case decides what the next
+  // test is running on -- which is how "leaves every other phone alone"
+  // came to pass while looking at an iPhone already on its home screen.
+  afterEach(() => {
+    Object.defineProperty(navigator, 'userAgent', { value: REAL_AGENT, configurable: true });
+    Object.defineProperty(navigator, 'standalone', { value: undefined, configurable: true });
+  });
+
+  it('is asked to put the app on the home screen', async () => {
+    pretendIPhone(false);
+    openSignedIn();
+    await waitForHome();
+
+    // Seven days in a tab and the storage goes, taking unsent records with
+    // it. On the home screen it is exempt (spec 9.6).
+    expect(screen.getByTestId('install-hint')).toBeInTheDocument();
+  });
+
+  it('is not asked twice', async () => {
+    pretendIPhone(false);
+    const user = openSignedIn();
+    await waitForHome();
+
+    await user.click(screen.getByTestId('install-hint-dismiss'));
+    expect(screen.queryByTestId('install-hint')).not.toBeInTheDocument();
+
+    closeApp();
+    openSignedIn();
+    await waitForHome();
+    expect(screen.queryByTestId('install-hint')).not.toBeInTheDocument();
+  });
+
+  it('is not asked once it is already on the home screen', async () => {
+    pretendIPhone(true);
+    openSignedIn();
+    await waitForHome();
+
+    expect(screen.queryByTestId('install-hint')).not.toBeInTheDocument();
+  });
+
+  it('leaves every other phone alone', async () => {
+    openSignedIn();
+    await waitForHome();
+
+    expect(screen.queryByTestId('install-hint')).not.toBeInTheDocument();
   });
 });

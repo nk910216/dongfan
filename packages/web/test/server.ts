@@ -1,6 +1,6 @@
 import { HttpResponse, http } from 'msw';
 import { setupServer } from 'msw/node';
-import { getEventType, toLocalDate } from '@dongfan/shared';
+import { APP_VERSION, getEventType, toLocalDate } from '@dongfan/shared';
 import type {
   BabyDto, EventDto, MeDto, SummaryDto, TypeSummaryDto,
 } from '@dongfan/shared';
@@ -131,12 +131,22 @@ class Api {
     }
   }
 
+  /**
+   * The build the API says it is.
+   *
+   * The same as the client's by default: a test that wants the update
+   * strip sets it to something else, which is what a deploy looks like
+   * from a phone that has been open since Tuesday.
+   */
+  serverVersion: string = APP_VERSION;
+
   /** A freshly deployed database: an account, and nothing else. */
   startWithNoBaby(): void {
     ME.babies = [];
   }
 
   reset(): void {
+    this.serverVersion = APP_VERSION;
     this.accounts += 1;
     ME.user = { id: `user-${this.accounts}`, username: 'parent' };
     ME.babies = [BABY];
@@ -276,6 +286,13 @@ export const server = setupServer(
   }),
 
   http.post('/api/auth/logout', () => new HttpResponse(null, { status: 204 })),
+
+  // What the running build compares itself against, so a page left open
+  // can find out it is behind (spec 2.1).
+  http.get('/api/version', async ({ request }) => {
+    await record(request);
+    return HttpResponse.json({ version: api.serverVersion });
+  }),
 
   http.get('/api/me', ({ request }) => {
     const header = request.headers.get('Authorization');

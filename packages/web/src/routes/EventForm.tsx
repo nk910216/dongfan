@@ -9,6 +9,7 @@ import type { EventDraft } from '../components/EventFields.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { useCreateEvent } from '../lib/create-event.js';
 import type { SubmitResult } from '../lib/create-event.js';
+import { clearForm, formKey, readForm, saveForm } from '../lib/form-draft.js';
 import { typeSummary, useStore } from '../lib/store.js';
 
 /**
@@ -30,16 +31,31 @@ export function EventForm({ typeId: given, entryId }: {
   const params = useParams();
   const typeId = given ?? params['typeId'] ?? '';
   const navigate = useNavigate();
-  const { baby, summary } = useStore();
+  const { baby, scope, summary } = useStore();
   const create = useCreateEvent(typeId, entryId);
   const type = getEventType(typeId);
+
+  // Where what is being typed is kept, so that a reload does not throw it
+  // away. Named by the account, the type, and which entry it is correcting,
+  // because all three can have a form open at once (spec 2.1).
+  const formId = formKey(scope, `add:${typeId}:${entryId ?? ''}`);
+
+  // Read once, at mount. Not offered while the outcome is unknown: the
+  // content then belongs to the queue, and a half-typed correction must
+  // not be able to stand in for what was actually sent (spec 6.1).
+  const [saved] = useState(() => (create.outcomeUnknown ? null : readForm(formId)));
 
   const [intent, setIntent] = useState<EventIntent>(
     // A resumed add keeps the intent it was sent with, or a timer would
     // come back as a back-filled record and vice versa.
-    create.pending?.intent ?? (type?.timerEnabled ? 'start_timer' : 'record'),
+    saved?.intent ?? create.pending?.intent ?? (type?.timerEnabled ? 'start_timer' : 'record'),
   );
   const [draft, setDraft] = useState<EventDraft>(() => {
+    // What was being typed when the page went away wins over everything
+    // below: it is the most recent thing the parent did, and the whole
+    // reason it was written down.
+    if (saved) return saved.draft;
+
     // An add whose result is unknown comes back as it was sent, not as an
     // empty form: the screen has to show what is actually in doubt, and
     // nothing new can be started until it is settled (spec 6.1).
@@ -95,6 +111,9 @@ export function EventForm({ typeId: given, entryId }: {
    */
   const finish = (result: SubmitResult): void => {
     if (result.kind === 'failed') return;
+    // It is a record now, or an entry in the queue. Either way what was
+    // typed here has become something durable and is no longer a draft.
+    clearForm(formId);
     // The queue sent the original while this screen was open, so what is
     // typed here is now an edit to a stored event and has to carry a
     // version. That is the edit screen's job (spec 6.3).
@@ -154,7 +173,10 @@ export function EventForm({ typeId: given, entryId }: {
                 <button
                   key={option}
                   type="button"
-                  onClick={() => setIntent(option)}
+                  onClick={() => {
+                    setIntent(option);
+                    saveForm(formId, option, draft);
+                  }}
                   className="min-h-11 flex-1 rounded-lg py-2.5 text-sm font-medium transition-colors"
                   style={
                     intent === option
@@ -180,7 +202,10 @@ export function EventForm({ typeId: given, entryId }: {
             draft={draft}
             timeZone={baby.timezone}
             showEnd={!isTimer}
-            onChange={(next) => { setDraft(next); setLocalError(null); }}
+            // Written down as it is typed. Saving on the way out would
+            // miss the reload this exists for: the browser reclaiming a
+            // background tab does not ask first (spec 2.1).
+            onChange={(next) => { setDraft(next); setLocalError(null); saveForm(formId, intent, next); }}
           />
         </fieldset>
 

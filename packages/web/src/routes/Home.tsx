@@ -7,6 +7,7 @@ import {
 } from '@dongfan/shared';
 import type { EventDto } from '@dongfan/shared';
 import { EventIconBadge, FALLBACK_COLOR } from '../components/EventIcon.js';
+import { InstallHint } from '../components/InstallHint.js';
 import { QuickActions } from '../components/QuickActions.js';
 import type { QueuedCreate } from '../lib/db.js';
 import { formatClock, formatDuration, relativeTime, syncedAgo } from '../lib/format.js';
@@ -139,6 +140,8 @@ export function Home(): React.JSX.Element {
           {summary.today.diaper.total}
         </SummaryCell>
       </section>
+
+      <InstallHint />
 
       {/* Never implied. Storage here can be cleared by the browser without
           warning, so a parent has to be told outright how many of their

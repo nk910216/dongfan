@@ -96,8 +96,8 @@ first.
 | 1 | IndexedDB as the persistent copy, and incremental sync into it | **done** |
 | 2 | The offline queue: POST only, backoff, retry cap, `outcome_unknown`, a list of what failed, "N unsynced" | **done** |
 | 3 | The offline stop-timer draft (spec 7.2) | **done** |
-| 4 | PWA: manifest, service worker, update flow, the iOS add-to-home prompt | next |
-| 5 | Members and invite codes (spec 6.5) | |
+| 4 | PWA: manifest, service worker, update flow, the iOS add-to-home prompt | **done** |
+| 5 | Members and invite codes (spec 6.5) | next |
 
 The queue lives in `packages/web/src/lib/outbox.ts`, with its storage in
 `db.ts` under `outbox`. An entry is put in doubt by `beginSend` *before*
@@ -121,21 +121,40 @@ that the server answers: a stopped worker, a captive portal and a lost
 response all look like a healthy phone, and they are the same situation
 for the parent. The draft is kept on every failure and removed only by a
 definite success, by the confirmation, or by the event coming back already
-ending at exactly the instant held here — which is how a stop whose answer
-was lost stops asking to be confirmed.
+ending at exactly the instant held here, which means the server's state is
+already what the draft was asking for. That is how a stop whose answer was
+lost stops asking to be confirmed, and it is a test on the state rather
+than a guess about who made it.
 
 Clearing it on *any* successful update is wrong and was a bug: correcting
 a note on an event whose timer is still running would throw the moment
 away and leave the timer with nothing to end it by.
 
-What stage 4 inherits:
+The service worker never takes over by itself. A new build waits, a strip
+offers it, and the page reloads only when somebody presses it — because
+taking an update reloads the page and they may be part way through a feed
+(spec 2.1). Two things can raise that strip: the worker finding new
+assets, and `GET /api/version` differing from `APP_VERSION`, which is the
+one that catches an app left open for days.
+
+**A reload must not lose what is being typed.** `form-draft.ts` writes the
+add and edit forms to `localStorage` as they are typed, not on the way
+out: the browser reclaiming a background tab does not ask first. The queue
+and the stop drafts are already in IndexedDB and survive on their own.
+
+The worker is off in `vite dev` and only exists in a real build, so it is
+tested through `cloudflared` against the Worker on 8787, never by
+deploying. `docs/running-locally.md` has the steps.
+
+What stage 5 inherits:
 
 - The summary is the server's, so a feed recorded offline does not move
   "last feed" until it is sent. That is deliberate (spec 6.2); the waiting
   row in today's list is the mitigation.
-- A genuine cold start with no network still cannot be tested, because
-  that needs a service worker, which needs HTTPS. Everything offline so
-  far is tested with the page already open.
+- `APP_VERSION` in `packages/shared/src/version.ts` is bumped by hand.
+  Both halves read it from there, so they cannot disagree about what they
+  are, but a release without a bump leaves only the service worker to
+  notice.
 
 Stage 4 needs HTTPS, which a local network address is not. Use
 `cloudflared tunnel --url http://localhost:5180` (spec 10.1, option two).

@@ -6,7 +6,7 @@
     "outDir": "./dist-types",
     "rootDir": ".",
     "noEmit": false,
-    "types": ["vite/client"]
+    "types": ["vite/client", "vite-plugin-pwa/client"]
   },
   // Tests are included on purpose. Left out, a screen test can drift from the
   // response contract and only say so when it runs, which is exactly the

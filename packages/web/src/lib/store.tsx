@@ -57,6 +57,15 @@ export type EventPatch = {
 
 export type Store = {
   baby: BabyDto;
+  /**
+   * This account and this baby, as one string.
+   *
+   * Exposed so that anything keeping its own local state can be scoped the
+   * same way everything else is. Switching either rebuilds this provider,
+   * so a screen holding it cannot end up showing one family's data under
+   * another's name (spec 6.2).
+   */
+  scope: string;
   /** Today's events in the baby timezone, all-day first then newest first. */
   events: EventDto[];
   summary: SummaryDto;
@@ -657,11 +666,11 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
 
   const value = useMemo<Store>(
     () => ({
-      baby, events, summary: summary as SummaryDto, now, loading, stale, syncing, syncedAt,
+      baby, scope, events, summary: summary as SummaryDto, now, loading, stale, syncing, syncedAt,
       unsynced, stopDrafts, refresh: settle, findEvent, addEvent, updateEvent, stopTimer,
       discardStop, removeEvent, retryUnsynced, correctUnsynced, abandonUnsynced,
     }),
-    [baby, events, summary, now, loading, stale, syncing, syncedAt, unsynced, stopDrafts, settle,
+    [baby, scope, events, summary, now, loading, stale, syncing, syncedAt, unsynced, stopDrafts, settle,
       findEvent, addEvent, updateEvent, stopTimer, discardStop, removeEvent, retryUnsynced,
       correctUnsynced, abandonUnsynced],
   );
