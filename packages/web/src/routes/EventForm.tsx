@@ -32,7 +32,6 @@ export function EventForm({ typeId: given, entryId }: {
   const typeId = given ?? params['typeId'] ?? '';
   const navigate = useNavigate();
   const { baby, scope, summary } = useStore();
-  const create = useCreateEvent(typeId, entryId);
   const type = getEventType(typeId);
 
   // Where what is being typed is kept, so that a reload does not throw it
@@ -41,36 +40,34 @@ export function EventForm({ typeId: given, entryId }: {
   const formId = formKey(scope, `add:${typeId}:${entryId ?? ''}`);
 
   /**
-   * Read once, at mount, and only if it is still a draft.
+   * Read once, at mount, and already settled.
    *
-   * Two reasons it might not be. While the outcome is unknown the content
-   * belongs to the queue, and a half-typed correction must not stand in
-   * for what was actually sent (spec 6.1). And once it has been handed
-   * over -- which is what the stamped id means -- the queue or the server
-   * holds it, so bringing it back would be a second copy of a feed that
-   * has already been recorded, under a new id, with nothing to
-   * deduplicate it against (spec 3.8).
-   *
-   * The stamp is written just before the hand-over rather than just
-   * after, so the gap it does not cover is the one between two writes
-   * with nothing in between.
+   * Anything whose content reached the queue or the server has been
+   * dropped by `reconcileForms` before this screen existed, so whatever
+   * is here is still a draft. If it was part way through being handed
+   * over it keeps the id it was going out as, and this screen carries on
+   * under that id rather than inventing a new one -- which is what stops
+   * the same feed becoming two records (spec 3.8).
    */
-  const [saved] = useState(() => {
-    if (create.outcomeUnknown) return null;
-    const held = readForm(formId);
-    return held?.eventId === undefined ? held : null;
-  });
+  const [saved] = useState(() => readForm(formId));
+
+  const create = useCreateEvent(typeId, entryId ?? saved?.eventId);
+
+  // Not offered while the outcome is unknown: the content then belongs to
+  // the queue, and a half-typed correction must not be able to stand in
+  // for what was actually sent (spec 6.1).
+  const restored = create.outcomeUnknown ? null : saved;
 
   const [intent, setIntent] = useState<EventIntent>(
     // A resumed add keeps the intent it was sent with, or a timer would
     // come back as a back-filled record and vice versa.
-    saved?.intent ?? create.pending?.intent ?? (type?.timerEnabled ? 'start_timer' : 'record'),
+    restored?.intent ?? create.pending?.intent ?? (type?.timerEnabled ? 'start_timer' : 'record'),
   );
   const [draft, setDraft] = useState<EventDraft>(() => {
     // What was being typed when the page went away wins over everything
     // below: it is the most recent thing the parent did, and the whole
     // reason it was written down.
-    if (saved) return saved.draft;
+    if (restored) return restored.draft;
 
     // An add whose result is unknown comes back as it was sent, not as an
     // empty form: the screen has to show what is actually in doubt, and

@@ -11,6 +11,8 @@ import { App } from '../src/App.js';
 import { BABY, TOKEN, api, server } from './server.js';
 import { resetLanes } from '../src/lib/lane.js';
 import { offerUpdate, setWorkerCheck } from '../src/lib/update.js';
+import { formKey, readForm, saveForm } from '../src/lib/form-draft.js';
+import { scopeOf } from '../src/lib/db.js';
 import { earlierToday as atEarlierToday } from './fixtures/clock.js';
 import { formatClock } from '../src/lib/format.js';
 import { breakStorage, setOnline } from './setup.js';
@@ -2434,6 +2436,60 @@ describe('a reload, whoever asked for it', () => {
     expect(api.events).toHaveLength(1);
   });
 
+  it('keeps what was typed when the hand-over to the queue fails', async () => {
+    const user = openSignedIn('/add/bottle');
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.type(screen.getByLabelText(zhTW.addEvent.note), USER_CONTENT.note);
+
+    // The queue write itself fails -- storage refused, or the tab went
+    // away before the transaction committed. The draft was marked as
+    // being handed over a moment earlier, and nothing anywhere holds the
+    // content.
+    const broken = new Error('IndexedDB is unavailable');
+    const put = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function refuse(): never { throw broken; };
+    try {
+      await user.click(screen.getByTestId('submit'));
+      await screen.findByTestId('form-error');
+    } finally {
+      IDBObjectStore.prototype.put = put;
+    }
+
+    expect(posts()).toHaveLength(0);
+
+    // Opening it again must hand the typing back. Treating "was being
+    // handed over" as "has been handed over" left it in neither the queue
+    // nor the form, which is the record simply gone.
+    closeApp();
+    openSignedIn('/add/bottle');
+    await screen.findByLabelText(valueLabel('bottle'));
+    expect(screen.getByLabelText(zhTW.addEvent.note)).toHaveValue(USER_CONTENT.note);
+  });
+
+  it('sends a recovered draft under the id it was going out as', async () => {
+    const user = openSignedIn('/add/bottle');
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+
+    // Marked as being handed over, and then nothing: the same state the
+    // tab closing mid-transaction leaves behind.
+    const scope = scopeOf(api.userId, BABY.id);
+    const key = formKey(scope, 'add:bottle:');
+    const held = readForm(key);
+    saveForm(key, held?.intent ?? 'record', held!.draft, { eventId: 'half-sent-id' });
+
+    closeApp();
+    const next = openSignedIn('/add/bottle');
+    await screen.findByLabelText(valueLabel('bottle'));
+    await next.click(screen.getByTestId('submit'));
+    await waitForHome();
+
+    // Under the id it was already going out as. Inventing a new one here
+    // is how a hand-over that did land, somewhere this device could not
+    // see, becomes two records (spec 3.8).
+    const sent = posts()[0]?.body as Record<string, unknown>;
+    expect(sent['id']).toBe('half-sent-id');
+  });
+
   it('does not let a restored edit overwrite what somebody else saved', async () => {
     const event = api.add({ typeId: 'bottle', value: 140 });
     const user = openSignedIn(`/event/${event.id}`);
@@ -2458,6 +2514,38 @@ describe('a reload, whoever asked for it', () => {
     // over the 150 and the server would accept it, because the number it
     // was handed was current (spec 6.3).
     expect(await screen.findByText(zhTW.error.VERSION_CONFLICT)).toBeInTheDocument();
+    expect(api.find(event.id)?.value).toBe(150);
+  });
+
+  it('drops an edit draft that cannot say which version it was written on', async () => {
+    const event = api.add({ typeId: 'bottle', value: 140 });
+
+    // What the build before this one left behind: fields, no base
+    // version. Applied against whatever the event looks like now, it puts
+    // its own amount over anything saved since (spec 6.3).
+    const scope = scopeOf(api.userId, BABY.id);
+    saveForm(formKey(scope, `edit:${event.id}`), 'record', {
+      startedAt: event.startedAt,
+      endedAt: null,
+      displayValue: '140',
+      note: USER_CONTENT.note,
+      metadata: {},
+    });
+
+    const stored = api.find(event.id);
+    if (stored) {
+      Object.assign(stored, { value: 150, version: stored.version + 1, rev: api.nextRev() });
+    }
+
+    const user = openSignedIn(`/event/${event.id}`);
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+
+    // The stored event, not the draft.
+    expect(amount).toHaveValue('150');
+    expect(screen.getByLabelText(zhTW.addEvent.note)).toHaveValue('');
+
+    await user.click(screen.getByTestId('submit'));
+    await waitForHome();
     expect(api.find(event.id)?.value).toBe(150);
   });
 

@@ -142,6 +142,23 @@ add and edit forms to `localStorage` as they are typed, not on the way
 out: the browser reclaiming a background tab does not ask first. The queue
 and the stop drafts are already in IndexedDB and survive on their own.
 
+Two things about those drafts fail silently and both have already been
+got wrong:
+
+- A draft marked with the id it is being sent under says *handing over*,
+  not *handed over*. The write that puts it in the queue can still fail,
+  and the page can still go before it commits. `reconcileForms` settles
+  it at startup against the only two places the content could have
+  reached — the queue and the local events — and a draft that reached
+  neither is still a draft, kept with its id so resending it cannot
+  become a second record.
+- An edit draft carries the version it was written against, and is sent
+  with it. Pairing old fields with a freshly fetched version puts this
+  device's idea of every field over whatever happened in between, and the
+  server accepts it because the number it was handed is current — the
+  conflict that exists to stop that is never reported. A draft that
+  cannot say what it was written on is dropped rather than guessed at.
+
 The worker is off in `vite dev` and only exists in a real build, so it is
 tested through `cloudflared` against the Worker on 8787, never by
 deploying. `docs/running-locally.md` has the steps.

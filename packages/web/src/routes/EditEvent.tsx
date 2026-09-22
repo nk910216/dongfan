@@ -68,8 +68,28 @@ export function EditEvent(): React.JSX.Element {
         // decide again, and putting the stale draft back would hide the
         // very change they were told about (spec 6.3). The dialog says as
         // much before it happens.
-        const saved = reloads === 0 ? readForm(formId) : null;
-        if (reloads > 0) clearForm(formId);
+        const held = reloads === 0 ? readForm(formId) : null;
+
+        /**
+         * A draft is only usable if it says which version it was written
+         * against.
+         *
+         * One without it comes from a build that did not record one, and
+         * there is no version it can safely be applied to: paired with
+         * whatever the event looks like now, it puts its own idea of every
+         * field over anything that has happened since, and the server
+         * accepts it because the number it was handed is current
+         * (spec 6.3). That is the failure this whole field exists to stop,
+         * and it does not stop being that failure because the draft is
+         * old.
+         *
+         * So it is dropped, and the stored event is shown instead. It
+         * costs the typing in one draft, once, on the upgrade that
+         * introduced the field -- against silently overwriting what the
+         * other parent saved.
+         */
+        const saved = held?.baseVersion === undefined ? null : held;
+        if (reloads > 0 || (held !== null && saved === null)) clearForm(formId);
 
         setDraft(saved?.draft ?? {
           startedAt: found.startedAt,

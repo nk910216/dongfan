@@ -408,6 +408,18 @@ export async function applyOne(scope: Scope, event: EventDto): Promise<void> {
   await tx.done;
 }
 
+/**
+ * Whether this device holds a row for that id at all.
+ *
+ * Tombstones count. The question is whether the server ever took the
+ * record, and a deleted one was taken and then removed -- offering its
+ * content back to be created again would resurrect something somebody
+ * deliberately got rid of.
+ */
+export async function hasEvent(scope: Scope, id: string): Promise<boolean> {
+  return (await (await db()).getKey('events', [scope, id])) !== undefined;
+}
+
 export async function findEvent(scope: Scope, id: string): Promise<EventDto | null> {
   const found = await (await db()).get('events', [scope, id]);
   if (!found || found.event.deletedAt !== null) return null;

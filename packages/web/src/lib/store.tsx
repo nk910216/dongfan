@@ -9,6 +9,7 @@ import {
   getQueued, keepDraft, listDrafts, listQueued, reconcileDrafts, removeDraft, scopeOf,
 } from './db.js';
 import type { NewEventInput, QueuedCreate, StopDraft } from './db.js';
+import { reconcileForms } from './form-draft.js';
 import { runExclusive, runSerial } from './lane.js';
 import {
   EntryGone, abandonQueued, attemptQueued, correctQueued, ensureMigrated, queueAdd, retryQueued,
@@ -209,6 +210,12 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
 
   /** Shows whatever is already here, without asking the network. */
   const readLocal = useCallback(async () => {
+    // Before anything reads a form draft. Whether the content a screen was
+    // part way through handing over ever reached the queue is not a
+    // question `localStorage` can answer, and a screen that guessed would
+    // either lose the typing or offer it back twice (spec 2.1, 3.8).
+    await reconcileForms(scope);
+
     const [day, meta, queued, drafts] = await Promise.all([
       local.eventsOnDate(scope, today),
       local.readMeta(scope),

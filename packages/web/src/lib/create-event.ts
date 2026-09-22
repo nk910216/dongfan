@@ -94,6 +94,12 @@ function resumable(
   );
 }
 
+/**
+ * @param eventId The id this screen is working under, when it already has
+ * one: the entry the failure list sent it to correct, or the id a
+ * restored draft was part way through being handed over as. Keeping it is
+ * what stops a second attempt becoming a second record (spec 3.8).
+ */
 export function useCreateEvent(typeId: string, eventId?: string): CreateEvent {
   const { addEvent, retryUnsynced, correctUnsynced, unsynced } = useStore();
 
@@ -102,7 +108,11 @@ export function useCreateEvent(typeId: string, eventId?: string): CreateEvent {
   // fingers when a background retry happened to land.
   const [resumed] = useState(() => resumable(unsynced, typeId, eventId));
 
-  const [id] = useState(() => resumed?.eventId ?? newClientId());
+  // The queue's id if it has one, otherwise the caller's, and only then a
+  // new one. A draft that was part way through being handed over comes
+  // back under the id it was going out as, so however that race turned
+  // out the server sees the same key.
+  const [id] = useState(() => resumed?.eventId ?? eventId ?? newClientId());
   const [failure, setFailure] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 

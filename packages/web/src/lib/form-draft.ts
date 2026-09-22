@@ -1,5 +1,6 @@
 import type { EventIntent } from '@dongfan/shared';
 import type { EventDraft } from '../components/EventFields.js';
+import { getQueued, hasEvent } from './db.js';
 
 /**
  * What somebody is part way through typing.
@@ -51,12 +52,20 @@ export type SavedForm = {
    */
   baseVersion?: number;
   /**
-   * The id this content was handed to the queue under.
+   * The id this content was being handed to the queue under.
    *
-   * Only on an add, and its presence is the whole signal: once the queue
-   * has the content, the queue is the durable copy and this is no longer
-   * a draft. Restoring it afterwards is how the same feed gets recorded
-   * twice under two different ids (spec 3.8).
+   * Written just before the hand-over, which means it says *handing
+   * over*, not *handed over*: the write that puts it in the queue can
+   * still fail, and the page can still go away before that write commits.
+   * Treating it as done would exclude the draft from ever being offered
+   * back while nothing anywhere held the content -- the typing simply
+   * gone.
+   *
+   * So it is settled afterwards, by `reconcileForms`, against the only
+   * two places the content could have got to. What it buys in the
+   * meantime is the id itself: a draft offered back keeps it, so
+   * resending cannot become a second record however the race turned out
+   * (spec 3.8).
    */
   eventId?: string;
 };
@@ -133,4 +142,35 @@ export function clearForm(key: string): void {
   const before = readAll();
   const after = before.filter((form) => form.key !== key);
   if (after.length !== before.length) writeAll(after);
+}
+
+/**
+ * Settles every draft that was part way through being handed over.
+ *
+ * Run before any screen reads one, because the question it answers cannot
+ * be answered from `localStorage`: did the content reach the queue?
+ *
+ * - In the queue: the queue is the durable copy now, and offering the
+ *   draft back would be a second one. Dropped.
+ * - Known to this device as an event: it was sent, or sent and deleted.
+ *   Dropped, for the same reason.
+ * - Neither: the hand-over never completed -- the write failed, or the
+ *   page went away before it committed. It is still a draft, and it keeps
+ *   its id so that sending it cannot duplicate anything.
+ *
+ * The third case is the one this exists for. It was previously treated as
+ * the first, and the typing was gone.
+ */
+export async function reconcileForms(scope: string): Promise<void> {
+  const prefix = `${scope}\u0000`;
+  const pending = readAll().filter(
+    (form) => form.eventId !== undefined && form.key.startsWith(prefix),
+  );
+
+  for (const form of pending) {
+    const eventId = form.eventId as string;
+    if ((await getQueued(scope, eventId)) || (await hasEvent(scope, eventId))) {
+      clearForm(form.key);
+    }
+  }
 }
