@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { EventDto } from '@dongfan/shared';
 import { EntryGone } from './outbox.js';
 import type { QueuedCreate } from './db.js';
@@ -121,29 +121,43 @@ export function useCreateEvent(typeId: string, eventId?: string): CreateEvent {
   const outcomeUnknown = entry?.outcomeUnknown ?? false;
 
   /**
-   * Whether this screen has ever had an entry of its own.
+   * Whether the queue has ever actually held this id.
    *
-   * True from the start when it took one over, and true from the first
-   * submit otherwise. It is not the same question as "is there one now",
-   * and answering with that one loses corrections: the queue can send the
-   * entry in the background while this form is still open, and a screen
-   * that only looked at the present would see no entry, call `addEvent`,
-   * and post the amended content under an id the server already holds.
-   * The server answers with what it stored, and the correction is gone
-   * while the screen says it was saved (spec 6.1).
+   * Not "has this screen tried to send", which is a different question
+   * and the wrong one. Trying is not the same as landing: the write that
+   * puts an entry in the queue can fail, and a screen that counted the
+   * attempt would then decide, on the very next press, that its content
+   * had been sent in the background -- and throw it away chasing an event
+   * that was never created.
+   *
+   * It matters because it *is* still needed. The queue can send an entry
+   * while this form is open, and a screen looking only at the present
+   * would see nothing, call `addEvent`, and post amended content under an
+   * id the server already holds; the server answers with what it stored
+   * and the correction is gone while the screen says it was saved
+   * (spec 6.1). So: ever held, observed rather than assumed.
    */
-  const owned = useRef(resumed !== null);
+  const everQueued = useRef(resumed !== null);
+
+  /**
+   * Every route that reaches this screen with an entry already queued
+   * takes it over at mount, so today the line above answers on its own
+   * and nothing in the tests reaches this. It is here because the
+   * question is "has the queue ever held this", and a screen that
+   * acquired an entry after mounting would be a different answer -- not
+   * as a second guard behind a first.
+   */
+  useEffect(() => {
+    if (entry !== null) everQueued.current = true;
+  }, [entry]);
 
   const submit = useCallback(
     async (input: NewEventInput): Promise<SubmitResult> => {
-      // Read before this attempt makes the screen an owner.
-      const hadEntry = owned.current;
-      owned.current = true;
-
-      // Gone, and it was ours: the queue sent it while this screen was
-      // open. The server holds the original, so anything typed here is a
-      // change to a stored event and has to go out as one.
-      if (hadEntry && entry === null) return { kind: 'gone', eventId: id };
+      // Gone, and it was ours: the queue held it and no longer does, so
+      // it sent it while this screen was open. The server has the
+      // original, and anything typed here is a change to a stored event
+      // that has to go out as one.
+      if (everQueued.current && entry === null) return { kind: 'gone', eventId: id };
 
       setBusy(true);
       setFailure(null);

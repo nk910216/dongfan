@@ -187,6 +187,13 @@ export const zhTW = {
     endedAtEmpty: '尚未填寫',
   },
 
+  staleDraft: {
+    title: '有一份沒存到的草稿',
+    body: '它是舊版本留下的，沒有記錄當時是根據哪一版寫的。直接套用會蓋掉別人後來存的內容，所以只能放在這裡讓你自己取用。',
+    dismiss: '丟棄這份草稿',
+    empty: '（沒有填任何內容）',
+  },
+
   update: {
     available: '有新版本，點此更新',
     applying: '更新中…',

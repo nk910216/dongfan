@@ -1,12 +1,16 @@
 import { useEffect, useState } from 'react';
+import { formatClock } from '../lib/format.js';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
-import { eventTypeName, getEventType, zhTW } from '@dongfan/shared';
-import type { EventDto, EventIntent } from '@dongfan/shared';
+import {
+  eventTypeName, getEventType, metadataOptionLabel, valueLabel, zhTW,
+} from '@dongfan/shared';
+import type { EventDto, EventIntent, EventTypeConfig } from '@dongfan/shared';
 import { ApiFailure } from '../lib/api.js';
 import { EventIcon } from '../components/EventIcon.js';
 import { EventFields, checkDraft, draftForValue } from '../components/EventFields.js';
 import type { EventDraft } from '../components/EventFields.js';
+import type { SavedForm } from '../lib/form-draft.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { Message } from '../components/Message.js';
 import { clearForm, formKey, readForm, saveForm } from '../lib/form-draft.js';
@@ -43,6 +47,11 @@ export function EditEvent(): React.JSX.Element {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [reloads, setReloads] = useState(0);
+  /**
+   * A draft from a build that did not record what version it was written
+   * on, held to be read rather than applied. See below.
+   */
+  const [stale, setStale] = useState<SavedForm | null>(null);
 
   const type = event ? getEventType(event.typeId) : undefined;
 
@@ -71,25 +80,26 @@ export function EditEvent(): React.JSX.Element {
         const held = reloads === 0 ? readForm(formId) : null;
 
         /**
-         * A draft is only usable if it says which version it was written
-         * against.
+         * A draft can only be applied if it says which version it was
+         * written against.
          *
          * One without it comes from a build that did not record one, and
-         * there is no version it can safely be applied to: paired with
+         * there is no version it is safe to apply it to: paired with
          * whatever the event looks like now, it puts its own idea of every
          * field over anything that has happened since, and the server
          * accepts it because the number it was handed is current
-         * (spec 6.3). That is the failure this whole field exists to stop,
-         * and it does not stop being that failure because the draft is
-         * old.
+         * (spec 6.3). That is the failure the field exists to stop, and it
+         * does not stop being that failure because the draft is old.
          *
-         * So it is dropped, and the stored event is shown instead. It
-         * costs the typing in one draft, once, on the upgrade that
-         * introduced the field -- against silently overwriting what the
-         * other parent saved.
+         * So it is not applied -- and not thrown away either, which would
+         * be the other half of spec 2.1 broken to fix the first. It is
+         * shown, unapplied, for whoever wrote it to take what they want
+         * from and dismiss.
          */
-        const saved = held?.baseVersion === undefined ? null : held;
-        if (reloads > 0 || (held !== null && saved === null)) clearForm(formId);
+        const usable = held?.baseVersion !== undefined ? held : null;
+        if (held !== null && usable === null) setStale(held);
+        const saved = usable;
+        if (reloads > 0) clearForm(formId);
 
         setDraft(saved?.draft ?? {
           startedAt: found.startedAt,
@@ -180,6 +190,18 @@ export function EditEvent(): React.JSX.Element {
       <div className="min-h-0 flex-1 overflow-y-auto px-4.5 pt-4">
         <p className="mb-4 text-xs text-ink-dim">{zhTW.event.edit}</p>
 
+        {stale ? (
+          <StaleDraft
+            saved={stale}
+            type={type}
+            timeZone={baby.timezone}
+            onDismiss={() => {
+              clearForm(formId);
+              setStale(null);
+            }}
+          />
+        ) : null}
+
         <EventFields
           type={type}
           draft={draft}
@@ -254,6 +276,60 @@ export function EditEvent(): React.JSX.Element {
           onCancel={() => navigate('/')}
         />
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * A draft that cannot be applied, laid out to be read.
+ *
+ * Deliberately not fields. Anything typeable here would be a second form
+ * competing with the real one, and anything with a "use this" button
+ * would be the overwrite this is avoiding. It is what they wrote, and a
+ * way to say they are done with it.
+ */
+function StaleDraft({ saved, type, timeZone, onDismiss }: {
+  saved: SavedForm;
+  type: EventTypeConfig;
+  timeZone: string;
+  onDismiss: () => void;
+}): React.JSX.Element {
+  const lines: string[] = [];
+  const { draft } = saved;
+
+  lines.push(`${zhTW.addEvent.startedAt}: ${formatClock(draft.startedAt, timeZone)}`);
+  if (draft.endedAt !== null) {
+    lines.push(`${zhTW.addEvent.endedAt}: ${formatClock(draft.endedAt, timeZone)}`);
+  }
+  if (type.value && draft.displayValue.trim() !== '') {
+    lines.push(`${valueLabel(type.id)}: ${draft.displayValue} ${type.value.unit}`);
+  }
+  for (const [key, value] of Object.entries(draft.metadata)) {
+    if (value !== '') lines.push(metadataOptionLabel(key, value));
+  }
+  if (draft.note !== '') lines.push(`${zhTW.addEvent.note}: ${draft.note}`);
+
+  return (
+    <div className="mb-5 rounded-2xl border border-warn/50 bg-warn/10 p-3.5" data-testid="stale-draft">
+      <p className="text-[13px] font-medium text-warn-soft">{zhTW.staleDraft.title}</p>
+      <p className="mt-1 mb-2.5 text-[11px] leading-relaxed text-ink-muted">{zhTW.staleDraft.body}</p>
+      <ul className="mb-3 flex flex-col gap-0.5">
+        {lines.length === 0 ? (
+          <li className="text-[13px] text-ink-faint">{zhTW.staleDraft.empty}</li>
+        ) : (
+          lines.map((line) => (
+            <li key={line} className="text-[13px] break-words text-ink-muted">{line}</li>
+          ))
+        )}
+      </ul>
+      <button
+        type="button"
+        onClick={onDismiss}
+        data-testid="stale-draft-dismiss"
+        className="min-h-11 text-[12px] text-ink-dim"
+      >
+        {zhTW.staleDraft.dismiss}
+      </button>
     </div>
   );
 }

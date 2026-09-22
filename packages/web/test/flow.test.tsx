@@ -2466,6 +2466,34 @@ describe('a reload, whoever asked for it', () => {
     expect(screen.getByLabelText(zhTW.addEvent.note)).toHaveValue(USER_CONTENT.note);
   });
 
+  it('lets the next press try again when the hand-over failed', async () => {
+    const user = openSignedIn('/add/bottle');
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.type(screen.getByLabelText(zhTW.addEvent.note), USER_CONTENT.note);
+
+    const put = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function refuse(): never {
+      throw new Error('IndexedDB is unavailable');
+    };
+    try {
+      await user.click(screen.getByTestId('submit'));
+      await screen.findByTestId('form-error');
+    } finally {
+      IDBObjectStore.prototype.put = put;
+    }
+
+    // Straight back at it, without reloading. Having *tried* to hand the
+    // content over is not the same as the queue having taken it, and a
+    // screen that counted the attempt would decide this had been sent in
+    // the background -- clearing the form and walking off to an event
+    // that was never created.
+    await user.click(screen.getByTestId('submit'));
+
+    await waitForHome();
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    expect(api.events[0]?.note).toBe(USER_CONTENT.note);
+  });
+
   it('sends a recovered draft under the id it was going out as', async () => {
     const user = openSignedIn('/add/bottle');
     await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
@@ -2517,20 +2545,20 @@ describe('a reload, whoever asked for it', () => {
     expect(api.find(event.id)?.value).toBe(150);
   });
 
-  it('drops an edit draft that cannot say which version it was written on', async () => {
-    const event = api.add({ typeId: 'bottle', value: 140 });
-
-    // What the build before this one left behind: fields, no base
-    // version. Applied against whatever the event looks like now, it puts
-    // its own amount over anything saved since (spec 6.3).
-    const scope = scopeOf(api.userId, BABY.id);
-    saveForm(formKey(scope, `edit:${event.id}`), 'record', {
+  /** What the build before this one left behind: fields, no base version. */
+  function leaveStaleDraft(event: { id: string; startedAt: number }): void {
+    saveForm(formKey(scopeOf(api.userId, BABY.id), `edit:${event.id}`), 'record', {
       startedAt: event.startedAt,
       endedAt: null,
       displayValue: '140',
       note: USER_CONTENT.note,
       metadata: {},
     });
+  }
+
+  it('does not apply an edit draft that cannot say which version it was written on', async () => {
+    const event = api.add({ typeId: 'bottle', value: 140 });
+    leaveStaleDraft(event);
 
     const stored = api.find(event.id);
     if (stored) {
@@ -2540,13 +2568,42 @@ describe('a reload, whoever asked for it', () => {
     const user = openSignedIn(`/event/${event.id}`);
     const amount = await screen.findByLabelText(valueLabel('bottle'));
 
-    // The stored event, not the draft.
+    // The stored event fills the fields, not the draft: applied against
+    // this version it would put 140 back over the 150 and be accepted
+    // (spec 6.3).
     expect(amount).toHaveValue('150');
     expect(screen.getByLabelText(zhTW.addEvent.note)).toHaveValue('');
 
     await user.click(screen.getByTestId('submit'));
     await waitForHome();
     expect(api.find(event.id)?.value).toBe(150);
+  });
+
+  it('shows it instead of throwing it away', async () => {
+    const event = api.add({ typeId: 'bottle', value: 140 });
+    leaveStaleDraft(event);
+
+    openSignedIn(`/event/${event.id}`);
+
+    // Refusing to apply it is one half of spec 2.1; deleting it without a
+    // word would be the other half broken to fix the first.
+    const panel = await screen.findByTestId('stale-draft');
+    expect(panel).toHaveTextContent(USER_CONTENT.note);
+    expect(panel).toHaveTextContent('140');
+  });
+
+  it('forgets it when the parent says they are done with it', async () => {
+    const event = api.add({ typeId: 'bottle', value: 140 });
+    leaveStaleDraft(event);
+
+    const user = openSignedIn(`/event/${event.id}`);
+    await user.click(await screen.findByTestId('stale-draft-dismiss'));
+    expect(screen.queryByTestId('stale-draft')).not.toBeInTheDocument();
+
+    closeApp();
+    openSignedIn(`/event/${event.id}`);
+    await screen.findByLabelText(valueLabel('bottle'));
+    expect(screen.queryByTestId('stale-draft')).not.toBeInTheDocument();
   });
 
   it('saves a restored edit normally when nobody else touched it', async () => {

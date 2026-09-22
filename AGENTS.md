@@ -157,7 +157,16 @@ got wrong:
   device's idea of every field over whatever happened in between, and the
   server accepts it because the number it was handed is current — the
   conflict that exists to stop that is never reported. A draft that
-  cannot say what it was written on is dropped rather than guessed at.
+  cannot say what it was written on is shown unapplied rather than
+  guessed at, and rather than deleted: refusing to apply it and throwing
+  it away are two different halves of spec 2.1, and fixing one by
+  breaking the other is not fixing it.
+
+Both of those turn on the same distinction, and it has now been got wrong
+three times in three places: **having tried is not having landed.** A
+mark written before a write says what was attempted. Only the store can
+say what happened, so ask it — the queue for an entry, the local events
+for a record, the draft itself for the version it was written on.
 
 The worker is off in `vite dev` and only exists in a real build, so it is
 tested through `cloudflared` against the Worker on 8787, never by
