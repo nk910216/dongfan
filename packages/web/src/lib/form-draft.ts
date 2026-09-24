@@ -132,6 +132,30 @@ export function readForm(key: string, now: number = Date.now()): SavedForm | nul
 }
 
 /**
+ * Moves a draft to another key, keeping everything about it.
+ *
+ * For a draft that has to be held on to but must not sit where the live
+ * form writes: the two are different things and sharing a key makes every
+ * keystroke overwrite one of them, and any clearing of one delete the
+ * other. `savedAt` travels with it, so being moved does not make an old
+ * draft young again.
+ *
+ * Refuses to write over something already parked there. The first one is
+ * the one somebody wrote; a second move would be this screen opening
+ * twice.
+ */
+export function moveForm(from: string, to: string): void {
+  const forms = readAll();
+  const found = forms.find((form) => form.key === from);
+  if (!found || forms.some((form) => form.key === to)) return;
+
+  writeAll([
+    ...forms.filter((form) => form.key !== from && form.key !== to),
+    { ...found, key: to },
+  ]);
+}
+
+/**
  * Forgets one form.
  *
  * Called when its contents have become something else -- a record on the

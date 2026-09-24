@@ -2592,6 +2592,47 @@ describe('a reload, whoever asked for it', () => {
     expect(panel).toHaveTextContent('140');
   });
 
+  it('is not disturbed by typing into the form below it', async () => {
+    const event = api.add({ typeId: 'bottle', value: 140 });
+    leaveStaleDraft(event);
+
+    const user = openSignedIn(`/event/${event.id}`);
+    await screen.findByTestId('stale-draft');
+
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    await user.clear(amount);
+    await user.type(amount, '175');
+
+    // Two different things: one is being typed, the other is being read
+    // from. Sharing a place to keep them means every keystroke overwrites
+    // what is on display.
+    closeApp();
+    openSignedIn(`/event/${event.id}`);
+
+    expect(await screen.findByTestId('stale-draft')).toHaveTextContent(USER_CONTENT.note);
+    expect(screen.getByLabelText(valueLabel('bottle'))).toHaveValue('175');
+  });
+
+  it('does not take what is being typed with it when it is dismissed', async () => {
+    const event = api.add({ typeId: 'bottle', value: 140 });
+    leaveStaleDraft(event);
+
+    const user = openSignedIn(`/event/${event.id}`);
+    await screen.findByTestId('stale-draft');
+
+    const amount = await screen.findByLabelText(valueLabel('bottle'));
+    await user.clear(amount);
+    await user.type(amount, '175');
+    await user.click(screen.getByTestId('stale-draft-dismiss'));
+
+    // Being done with the old one says nothing about the new one.
+    closeApp();
+    openSignedIn(`/event/${event.id}`);
+
+    expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('175');
+    expect(screen.queryByTestId('stale-draft')).not.toBeInTheDocument();
+  });
+
   it('forgets it when the parent says they are done with it', async () => {
     const event = api.add({ typeId: 'bottle', value: 140 });
     leaveStaleDraft(event);

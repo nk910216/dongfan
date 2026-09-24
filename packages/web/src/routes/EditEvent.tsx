@@ -13,7 +13,7 @@ import type { EventDraft } from '../components/EventFields.js';
 import type { SavedForm } from '../lib/form-draft.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { Message } from '../components/Message.js';
-import { clearForm, formKey, readForm, saveForm } from '../lib/form-draft.js';
+import { clearForm, formKey, moveForm, readForm, saveForm } from '../lib/form-draft.js';
 import { useStore } from '../lib/store.js';
 
 /**
@@ -60,6 +60,16 @@ export function EditEvent(): React.JSX.Element {
   // of it are at stake -- which is all of what the parent did.
   const formId = formKey(scope, `edit:${eventId}`);
 
+  /**
+   * Where a draft that cannot be applied is parked.
+   *
+   * Its own key, not the live form's. They are two different things --
+   * one is being typed, the other is being read -- and sharing a key
+   * means every keystroke overwrites what is on display, and dismissing
+   * what is on display deletes what is being typed.
+   */
+  const staleId = formKey(scope, `stale-edit:${eventId}`);
+
   useEffect(() => {
     let cancelled = false;
     setLoadError(null);
@@ -77,6 +87,12 @@ export function EditEvent(): React.JSX.Element {
         // decide again, and putting the stale draft back would hide the
         // very change they were told about (spec 6.3). The dialog says as
         // much before it happens.
+        // Read whatever the last visit parked, whether or not this is a
+        // reload: a reload after a conflict replaces what is being typed,
+        // and says nothing about a draft still waiting to be read.
+        const parked = readForm(staleId);
+        if (parked) setStale(parked);
+
         const held = reloads === 0 ? readForm(formId) : null;
 
         /**
@@ -97,7 +113,12 @@ export function EditEvent(): React.JSX.Element {
          * from and dismiss.
          */
         const usable = held?.baseVersion !== undefined ? held : null;
-        if (held !== null && usable === null) setStale(held);
+        if (held !== null && usable === null) {
+          // Out of the live form's way first, so that typing below
+          // neither overwrites it nor is thrown away with it.
+          moveForm(formId, staleId);
+          setStale(held);
+        }
         const saved = usable;
         if (reloads > 0) clearForm(formId);
 
@@ -121,7 +142,7 @@ export function EditEvent(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [eventId, findEvent, reloads, formId]);
+  }, [eventId, findEvent, reloads, formId, staleId]);
 
   if (loadError !== null) return <Message text={zhTW.error.NOT_FOUND} />;
   if (!event || !draft || !type || version === null) return <Message text={zhTW.app.loading} />;
@@ -195,8 +216,10 @@ export function EditEvent(): React.JSX.Element {
             saved={stale}
             type={type}
             timeZone={baby.timezone}
+            // Only what is on display. What is being typed below lives
+            // under its own key and is none of this button's business.
             onDismiss={() => {
-              clearForm(formId);
+              clearForm(staleId);
               setStale(null);
             }}
           />

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { clearForm, formKey, readForm, saveForm } from '../src/lib/form-draft.js';
+import { clearForm, formKey, moveForm, readForm, saveForm } from '../src/lib/form-draft.js';
 import type { EventDraft } from '../src/components/EventFields.js';
 
 /**
@@ -89,6 +89,53 @@ describe('keeping what is being typed', () => {
     clearForm(bottle);
 
     expect(readForm(sleep)).not.toBeNull();
+  });
+});
+
+describe('parking one out of the way', () => {
+  const live = formKey(SCOPE, 'edit:event-1');
+  const parked = formKey(SCOPE, 'stale-edit:event-1');
+
+  it('takes the contents with it and leaves nothing behind', () => {
+    saveForm(live, 'record', draft({ note: 'half typed' }));
+    moveForm(live, parked);
+
+    expect(readForm(parked)?.draft.note).toBe('half typed');
+    expect(readForm(live)).toBeNull();
+  });
+
+  it('does not make an old draft young again', () => {
+    // Eleven hours old, so still worth offering back -- but only for
+    // another hour.
+    const written = Date.now() - 11 * 60 * 60 * 1000;
+    localStorage.setItem('dongfan.form-drafts', JSON.stringify([
+      { key: live, intent: 'record', draft: draft(), savedAt: written },
+    ]));
+
+    moveForm(live, parked);
+    expect(readForm(parked)).not.toBeNull();
+
+    // Two hours from now is thirteen hours after it was written, which is
+    // past the point where filling a form in from it is a kindness. Had
+    // the move restamped it, it would still be on offer -- and would go
+    // on being re-offered every time this screen was opened.
+    expect(readForm(parked, Date.now() + 2 * 60 * 60 * 1000)).toBeNull();
+  });
+
+  it('leaves alone whatever is already parked there', () => {
+    saveForm(parked, 'record', draft({ note: 'the first one' }));
+    saveForm(live, 'record', draft({ note: 'a later one' }));
+
+    moveForm(live, parked);
+
+    // The first is the one somebody wrote and has not dealt with. A
+    // second move is the screen being opened twice, not a new draft.
+    expect(readForm(parked)?.draft.note).toBe('the first one');
+  });
+
+  it('does nothing when there is nothing to move', () => {
+    moveForm(live, parked);
+    expect(readForm(parked)).toBeNull();
   });
 });
 
