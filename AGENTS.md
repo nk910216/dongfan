@@ -190,6 +190,17 @@ code, with no baby and therefore no settings page to reach. The join form
 is on both screens for that reason; offering only the one spec 7.1 names
 would make the feature unusable for what it exists for.
 
+Spending the code and reading the account back are two requests and fail
+separately. Joined together, a failed refresh looked exactly like a failed
+join — with the code already spent, so the button could only ever collect
+a 404 afterwards. And a join whose answer was lost asks the account
+whether it got in rather than reporting a failure, because it may well
+have (spec 6.1).
+
+Which baby the app is about is a choice, kept per account, not
+`babies[0]`. Joining a second one and then not being able to reach it is a
+dead end, and spec 7.10 asks for the name at the top to switch.
+
 ### Still outstanding
 
 The PWA acceptance on a real phone — installing to the home screen, a cold

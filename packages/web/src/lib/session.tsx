@@ -15,6 +15,35 @@ import type { BabyDto, LoginDto, MeDto } from '@dongfan/shared';
 
 const TOKEN_KEY = 'dongfan.session';
 const ME_KEY = 'dongfan.me';
+const BABY_KEY = 'dongfan.baby';
+
+/**
+ * Which baby the app is showing, for an account that has more than one.
+ *
+ * Stored with the account it was chosen by: the next person to sign in on
+ * this phone must not land on a child they have never heard of, and a
+ * stored id that is no longer theirs has to fall back rather than show
+ * nothing (spec 7.10).
+ */
+type ChosenBaby = { userId: string; babyId: string };
+
+function readChosen(): ChosenBaby | null {
+  try {
+    const raw = localStorage.getItem(BABY_KEY);
+    return raw === null ? null : (JSON.parse(raw) as ChosenBaby);
+  } catch {
+    return null;
+  }
+}
+
+function writeChosen(chosen: ChosenBaby | null): void {
+  try {
+    if (chosen === null) localStorage.removeItem(BABY_KEY);
+    else localStorage.setItem(BABY_KEY, JSON.stringify(chosen));
+  } catch {
+    // The choice lasts for this visit, which is most of what it is for.
+  }
+}
 
 /** Storage throws in a private window rather than returning null. */
 function readToken(): string | null {
@@ -86,16 +115,30 @@ export type SessionState = {
   offline: boolean;
   signIn: (username: string, password: string) => Promise<void>;
   signOut: () => void;
-  /** Refetches the account and its babies, after one has been created. */
-  reload: () => Promise<void>;
+  /**
+   * Refetches the account and its babies, after one has been created.
+   *
+   * Hands back what it read, so a caller can tell whether something it was
+   * not sure about actually landed.
+   */
+  reload: () => Promise<MeDto>;
   /**
    * Joins a baby somebody shared a code for.
    *
    * Here rather than in the store because what it changes is the account:
    * which babies this person can see at all. The store is built for one of
    * them and cannot be the thing that adds another (spec 6.5).
+   *
+   * Sends the code and nothing else. Reading the account again is a
+   * separate request that can fail on its own, and joining it to this one
+   * would mean a failed refresh looked like a failed join -- with the code
+   * already spent and the button now useless.
    */
   joinBaby: (code: string) => Promise<BabyDto>;
+  /** The baby every screen below is about. Null before /me has answered. */
+  activeBaby: BabyDto | null;
+  /** Switches to another of this account's babies (spec 7.10). */
+  selectBaby: (babyId: string) => void;
   /** Called when any request comes back unauthenticated. */
   expire: () => void;
 };
@@ -108,10 +151,13 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
   const [loading, setLoading] = useState(token !== null);
   const [offline, setOffline] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [chosenBaby, setChosenBaby] = useState<string | null>(() => readChosen()?.babyId ?? null);
 
   const expire = useCallback(() => {
     writeToken(null);
     writeMe(null, null);
+    writeChosen(null);
+    setChosenBaby(null);
     setToken(null);
     setMe(null);
     setOffline(false);
@@ -180,29 +226,47 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
    * return nothing, leaving the caller waiting for a refresh that never
    * happens (spec 9.6).
    */
-  const reload = useCallback(async (): Promise<void> => {
-    if (token === null) return;
+  const reload = useCallback(async (): Promise<MeDto> => {
+    if (token === null) throw new Error('Not signed in');
     const body = await apiRequest<MeDto>('/me', { token });
     writeMe(token, body);
     setMe(body);
     setOffline(false);
     setAttempt((n) => n + 1);
+    return body;
   }, [token]);
 
   const joinBaby = useCallback(
-    async (code: string): Promise<BabyDto> => {
-      const joined = await apiRequest<BabyDto>('/babies/join', {
+    (code: string): Promise<BabyDto> =>
+      apiRequest<BabyDto>('/babies/join', {
         method: 'POST',
         token: token ?? undefined,
         body: { code },
-      });
-      // The account's baby list is what decides what the app shows, so it
-      // has to be read again before any of this is visible.
-      await reload();
-      return joined;
-    },
-    [token, reload],
+      }),
+    [token],
   );
+
+  const selectBaby = useCallback(
+    (babyId: string): void => {
+      setChosenBaby(babyId);
+      if (me) writeChosen({ userId: me.user.id, babyId });
+    },
+    [me],
+  );
+
+  /**
+   * The one the app is about.
+   *
+   * A stored choice that is no longer in the account's list -- somebody
+   * was removed, or this is a different person on the same phone -- falls
+   * back to the first rather than showing nothing.
+   */
+  const activeBaby = useMemo<BabyDto | null>(() => {
+    if (!me) return null;
+    const stored = readChosen();
+    const wanted = chosenBaby ?? (stored?.userId === me.user.id ? stored.babyId : null);
+    return me.babies.find((baby) => baby.id === wanted) ?? me.babies[0] ?? null;
+  }, [me, chosenBaby]);
 
   const signIn = useCallback(async (username: string, password: string) => {
     const body = await apiRequest<LoginDto>('/auth/login', {
@@ -226,8 +290,11 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
   }, [expire]);
 
   const value = useMemo<SessionState>(
-    () => ({ token, me, loading, offline, signIn, signOut, expire, reload, joinBaby }),
-    [token, me, loading, offline, signIn, signOut, expire, reload, joinBaby],
+    () => ({
+      token, me, loading, offline, signIn, signOut, expire, reload, joinBaby,
+      activeBaby, selectBaby,
+    }),
+    [token, me, loading, offline, signIn, signOut, expire, reload, joinBaby, activeBaby, selectBaby],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Menu, Plus, Settings } from 'lucide-react';
 import {
@@ -13,6 +13,7 @@ import type { QueuedCreate } from '../lib/db.js';
 import { formatClock, formatDuration, relativeTime, syncedAgo } from '../lib/format.js';
 import { draftFor, typeSummary, useStore } from '../lib/store.js';
 import { describeQueued } from './Unsynced.js';
+import { useSession } from '../lib/session.js';
 
 export function Home(): React.JSX.Element {
   const {
@@ -88,7 +89,7 @@ export function Home(): React.JSX.Element {
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
-            <h1 className="text-[21px] font-bold tracking-wide">{baby.nickname}</h1>
+            <BabyName nickname={baby.nickname} />
             <span className="font-numeric text-sm text-ink-muted">
               {interpolate(zhTW.home.age, age)}
             </span>
@@ -207,6 +208,67 @@ export function Home(): React.JSX.Element {
         <Plus size={26} className="text-ground" strokeWidth={2.6} />
       </Link>
     </div>
+  );
+}
+
+/**
+ * The baby's name, and a way to another one.
+ *
+ * Only a button when there is somewhere to go. An account with one baby --
+ * which is almost all of them -- gets a heading, because a control that
+ * does nothing is worse than no control (spec 7.10).
+ */
+function BabyName({ nickname }: { nickname: string }): React.JSX.Element {
+  const { me, activeBaby, selectBaby } = useSession();
+  const [open, setOpen] = useState(false);
+
+  const babies = me?.babies ?? [];
+  if (babies.length < 2) {
+    return <h1 className="text-[21px] font-bold tracking-wide">{nickname}</h1>;
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label={zhTW.settings.switchBaby}
+        data-testid="switch-baby"
+        className="text-[21px] font-bold tracking-wide underline decoration-line decoration-2 underline-offset-4"
+      >
+        {nickname}
+      </button>
+
+      {open ? (
+        <div
+          className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 px-6"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setOpen(false)}
+        >
+          <div className="w-full rounded-2xl border border-line bg-surface-raised p-3">
+            <p className="mb-2 px-1 text-xs tracking-widest text-ink-faint">
+              {zhTW.settings.switchBaby}
+            </p>
+            {babies.map((other) => (
+              <button
+                key={other.id}
+                type="button"
+                data-testid={`choose-${other.id}`}
+                onClick={() => {
+                  selectBaby(other.id);
+                  setOpen(false);
+                }}
+                className="flex min-h-11 w-full items-center rounded-xl px-3 text-left text-[15px]"
+                style={other.id === activeBaby?.id ? { color: '#E8B15C' } : undefined}
+              >
+                {other.nickname}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 

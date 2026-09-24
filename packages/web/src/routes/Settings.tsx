@@ -172,7 +172,7 @@ function Invite(): React.JSX.Element | null {
   const [invite, setInvite] = useState<InviteDto | null>(null);
   const [failure, setFailure] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<'yes' | 'no' | null>(null);
 
   // Only the owner may make one, so only the owner is offered one
   // (spec 6.4). The server refuses either way.
@@ -181,7 +181,7 @@ function Invite(): React.JSX.Element | null {
   const generate = async (): Promise<void> => {
     setBusy(true);
     setFailure(null);
-    setCopied(false);
+    setCopied(null);
     try {
       setInvite(await createInvite());
     } catch (error) {
@@ -215,16 +215,29 @@ function Invite(): React.JSX.Element | null {
             type="button"
             data-testid="copy-invite"
             onClick={() => {
-              // Best effort: a clipboard needs a secure context and a
-              // permission, and neither is worth an error message when
-              // the code is right there to be read.
-              void navigator.clipboard?.writeText(invite.code).catch(() => undefined);
-              setCopied(true);
+              // A clipboard needs a secure context and a permission, and
+              // has neither on a LAN address over plain HTTP -- which is
+              // where this is being tested. Saying "copied" when nothing
+              // was copied sends somebody to paste an empty message.
+              const clipboard = navigator.clipboard as Clipboard | undefined;
+              if (!clipboard) {
+                setCopied('no');
+                return;
+              }
+              void clipboard
+                .writeText(invite.code)
+                .then(() => setCopied('yes'))
+                .catch(() => setCopied('no'));
             }}
             className="mt-2 min-h-11 text-[12px] text-ink-dim"
           >
-            {copied ? zhTW.settings.copied : zhTW.settings.copy}
+            {copied === 'yes' ? zhTW.settings.copied : zhTW.settings.copy}
           </button>
+          {copied === 'no' ? (
+            <p className="text-[11px] leading-relaxed text-warn-soft" data-testid="copy-failed">
+              {zhTW.settings.copyFailed}
+            </p>
+          ) : null}
         </div>
       ) : null}
 

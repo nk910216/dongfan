@@ -39,12 +39,14 @@ export function App(): React.JSX.Element {
  * a message telling them to ask someone else would be a dead end.
  */
 function Shell(): React.JSX.Element {
-  const { me, loading } = useSession();
+  const { me, loading, activeBaby } = useSession();
 
   if (loading) return <Message text={zhTW.app.loading} />;
   if (!me) return <Login />;
 
-  const baby = me.babies[0];
+  // Which one, rather than the first one: an account can have more than
+  // one and has to be able to reach the one it just joined (spec 7.10).
+  const baby = activeBaby;
   if (!baby) return <CreateBaby />;
 
   return (

@@ -1,10 +1,10 @@
 import { env } from 'cloudflare:test';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { hashToken, normaliseInviteCode } from '@dongfan/shared';
 import type { BabyDto, InviteDto, MembersDto } from '@dongfan/shared';
-import { inviteCodes } from '../src/db/schema.js';
+import { babyMembers, inviteCodes } from '../src/db/schema.js';
 import { resetThrottle } from '../src/lib/throttle.js';
 import { createBaby, json, request, signedInUser } from './helpers.js';
 
@@ -143,6 +143,23 @@ describe('using one', () => {
     expect(listed.members).toHaveLength(2);
   });
 
+  it('lets exactly one of two phones in when both send it at once', async () => {
+    const first = await signedInUser('first', 'a-sufficiently-long-password');
+    const second = await signedInUser('second', 'a-sufficiently-long-password');
+    const invite = await inviteTo(babyId, owner.token);
+
+    // The case the atomic check-and-write exists for. Reading the row to
+    // see whether it looks unused, and then writing, leaves a gap both
+    // requests fit through (spec 6.5).
+    const answers = await Promise.all([
+      join(invite.code, first.token),
+      join(invite.code, second.token),
+    ]);
+
+    expect(answers.map((r) => r.status).sort()).toEqual([201, 404]);
+    expect((await json<MembersDto>(await members(babyId, owner.token))).members).toHaveLength(2);
+  });
+
   it('is refused an hour after it was made', async () => {
     const other = await signedInUser('member', 'a-sufficiently-long-password');
     const invite = await inviteTo(babyId, owner.token);
@@ -264,6 +281,31 @@ describe('removing somebody', () => {
     );
     expect(response.status).toBe(403);
     expect((await json<MembersDto>(await members(babyId, owner.token))).members).toHaveLength(2);
+  });
+
+  it('keeps one owner when two try to leave at the same moment', async () => {
+    const second = await signedInUser('second-owner', 'a-sufficiently-long-password');
+    await join((await inviteTo(babyId, owner.token)).code, second.token);
+
+    // Made an owner directly: there is no endpoint for promoting somebody,
+    // and what is being tested is the guard, not how they got the role.
+    const db = drizzle(env.DB);
+    await db
+      .update(babyMembers)
+      .set({ role: 'owner' })
+      .where(and(eq(babyMembers.babyId, babyId), eq(babyMembers.userId, second.id)));
+
+    const answers = await Promise.all([
+      request(`/api/babies/${babyId}/members/${owner.id}`, { method: 'DELETE' }, owner.token),
+      request(`/api/babies/${babyId}/members/${second.id}`, { method: 'DELETE' }, second.token),
+    ]);
+
+    // Counting the owners first and then deleting leaves a gap both fit
+    // through, and a baby with nobody in charge can never be invited to
+    // again or corrected.
+    const left = (await json<MembersDto>(await members(babyId, answers[0].status === 204 ? second.token : owner.token))).members;
+    expect(left.filter((m) => m.role === 'owner').length).toBeGreaterThanOrEqual(1);
+    expect(answers.map((r) => r.status).sort()).toEqual([204, 403]);
   });
 
   it('refuses a stranger without saying whether the baby exists', async () => {

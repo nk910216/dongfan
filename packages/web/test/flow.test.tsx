@@ -2871,6 +2871,121 @@ describe('the settings page', () => {
     expect(sent['code']).toBe(code);
   });
 
+  it('goes to the baby that was just joined, not to whichever is first', async () => {
+    const theirs = { ...BABY, id: 'baby-9', nickname: 'Theirs', role: 'member' as const };
+    const code = 'ABCDE-FGHJK-MNPQR-STVWX-YZ234-56789';
+    api.invites.set(code, theirs.id);
+    api.joinsInto = theirs;
+
+    const user = await openSettings();
+    await user.type(screen.getByLabelText(zhTW.settings.joinPlaceholder), code);
+    await user.click(screen.getByTestId('join'));
+
+    // Landing on a different baby because it happens to be first in the
+    // list is not what they just asked for (spec 7.10).
+    await user.click(await screen.findByRole('link', { name: zhTW.a11y.back }));
+    expect(await screen.findByText('Theirs')).toBeInTheDocument();
+  });
+
+  it('does not spend the code again when only the refresh failed', async () => {
+    const code = 'ABCDE-FGHJK-MNPQR-STVWX-YZ234-56789';
+    api.invites.set(code, BABY.id);
+    const user = await openSettings();
+
+    // The code is spent; reading the account back is a separate request
+    // and it is the one that fails.
+    server.use(http.get('/api/me', () => HttpResponse.error()));
+    await user.type(screen.getByLabelText(zhTW.settings.joinPlaceholder), code);
+    await user.click(screen.getByTestId('join'));
+
+    expect(await screen.findByTestId('form-error'))
+      .toHaveTextContent(zhTW.settings.joinedNeedsRefresh);
+
+    // Pressing again must not send the code a second time: it has been
+    // used, by this very person, and the only answer left is a 404.
+    server.resetHandlers();
+    const spent = api.requests.filter((e) => e.path === '/api/babies/join').length;
+    await user.click(screen.getByTestId('join'));
+
+    await waitFor(() =>
+      expect(api.requests.filter((e) => e.path === '/api/babies/join')).toHaveLength(spent),
+    );
+  });
+
+  it('checks whether it got in when the answer was lost', async () => {
+    const code = 'ABCDE-FGHJK-MNPQR-STVWX-YZ234-56789';
+    const theirs = { ...BABY, id: 'baby-9', nickname: 'Theirs', role: 'member' as const };
+    api.invites.set(code, theirs.id);
+    api.joinsInto = theirs;
+
+    const user = await openSettings();
+
+    // Spent on the server, and the client never hears so. Telling them it
+    // failed while they are already a member is the wrong answer, and the
+    // code cannot be spent twice to find out (spec 6.1).
+    server.use(http.post('/api/babies/join', async ({ request }) => {
+      await request.json();
+      api.invites.delete(code);
+      api.joinsInto = theirs;
+      api.alsoHasBaby(theirs);
+      return HttpResponse.error();
+    }));
+
+    await user.type(screen.getByLabelText(zhTW.settings.joinPlaceholder), code);
+    await user.click(screen.getByTestId('join'));
+
+    // It asks the account instead of guessing.
+    await waitFor(() => expect(screen.queryByTestId('form-error')).not.toBeInTheDocument());
+    await user.click(await screen.findByRole('link', { name: zhTW.a11y.back }));
+    expect(await screen.findByText('Theirs')).toBeInTheDocument();
+  });
+
+  it('switches between babies from the name at the top', async () => {
+    api.alsoHasBaby({ ...BABY, id: 'baby-9', nickname: 'Theirs', role: 'member' });
+
+    const user = openSignedIn();
+    await waitForHome();
+
+    await user.click(await screen.findByTestId('switch-baby'));
+    await user.click(screen.getByTestId('choose-baby-9'));
+
+    expect(await screen.findByText('Theirs')).toBeInTheDocument();
+
+    // And it is still there after a reload: which one is being looked at
+    // is not something to have to choose again every time.
+    closeApp();
+    openSignedIn();
+    expect(await screen.findByText('Theirs')).toBeInTheDocument();
+  });
+
+  it('offers no switch to an account with one baby', async () => {
+    openSignedIn();
+    await waitForHome();
+
+    // A control that does nothing is worse than no control.
+    expect(screen.queryByTestId('switch-baby')).not.toBeInTheDocument();
+  });
+
+  it('says nothing was copied when nothing was', async () => {
+    const user = await openSettings();
+    await user.click(screen.getByTestId('generate-invite'));
+    await screen.findByTestId('invite-code');
+
+    // A clipboard needs a secure context, which a LAN address over plain
+    // HTTP is not -- and that is where this is being tested. The test
+    // harness installs a working one, so it is taken away again.
+    const clipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    try {
+      await user.click(screen.getByTestId('copy-invite'));
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', { value: clipboard, configurable: true });
+    }
+
+    expect(await screen.findByTestId('copy-failed')).toBeInTheDocument();
+    expect(screen.getByTestId('copy-invite')).toHaveTextContent(zhTW.settings.copy);
+  });
+
   it('says the same thing for a code that is wrong, used or expired', async () => {
     const user = await openSettings();
 

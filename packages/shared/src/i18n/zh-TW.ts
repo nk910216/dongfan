@@ -202,6 +202,7 @@ export const zhTW = {
     inviteExpired: '已失效，請重新產生',
     copy: '複製',
     copied: '已複製',
+    copyFailed: '無法自動複製，請長按選取上面的邀請碼。',
     inviteOnce: '這組碼只會顯示這一次。離開這頁就看不到了。',
 
     joinSection: '加入其他寶寶',
@@ -211,6 +212,9 @@ export const zhTW = {
     joining: '加入中…',
     joined: '已加入',
     joinFailed: '這組邀請碼無效、已經被使用，或是已經過期。',
+    joinedNeedsRefresh: '已經加入了，只是還沒讀回來。請再按一次加入，不要重新輸入邀請碼。',
+    joinUnknown: '送出後沒有收到回應，不確定有沒有加入。請再按一次加入，它會先去確認。',
+    switchBaby: '切換寶寶',
 
     membersSection: '家庭成員',
     roleOwner: '建立者',

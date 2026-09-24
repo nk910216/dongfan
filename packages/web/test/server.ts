@@ -163,6 +163,14 @@ class Api {
     ME.babies = [];
   }
 
+  /** A second baby on the account, for the switcher (spec 7.10). */
+  alsoHasBaby(baby: BabyDto): void {
+    ME.babies = [...ME.babies, baby];
+  }
+
+  /** What the next join answers with, when it is not this account's own. */
+  joinsInto: BabyDto | null = null;
+
   reset(): void {
     // The baby is a shared object the settings screen edits in place, so
     // one test's rename must not become the next one's fixture.
@@ -172,6 +180,7 @@ class Api {
     this.members = [{ userId: `user-${this.accounts + 1}`, username: 'parent', role: 'owner' }];
     this.invites = new Map();
     this.joinFails = false;
+    this.joinsInto = null;
     this.serverVersion = APP_VERSION;
     this.accounts += 1;
     ME.user = { id: `user-${this.accounts}`, username: 'parent' };
@@ -379,8 +388,9 @@ export const server = setupServer(
     if (api.joinFails || !api.invites.has(code)) return refuse({ status: 404, code: 'NOT_FOUND' });
 
     api.invites.delete(code);
-    ME.babies = [BABY];
-    return HttpResponse.json(BABY, { status: 201 });
+    const joined = api.joinsInto ?? BABY;
+    if (!ME.babies.some((baby) => baby.id === joined.id)) ME.babies = [...ME.babies, joined];
+    return HttpResponse.json(joined, { status: 201 });
   }),
 
   http.delete('/api/babies/:babyId/members/:userId', async ({ request, params }) => {
