@@ -213,13 +213,61 @@ Which baby the app is about is a choice, kept per account, not
 `babies[0]`. Joining a second one and then not being able to reach it is a
 dead end, and spec 7.10 asks for the name at the top to switch.
 
-### Still outstanding
+### The one control that must never be unreachable
 
-The PWA acceptance on a real phone — installing to the home screen, a cold
-start with no network, and taking an update without losing a half-typed
-form — has **not** been carried out. `docs/running-locally.md` has the
-steps, through `cloudflared` against the local Worker. Everything in
-spec 12.1 that needs a deployment is still outstanding as well.
+`viewport-fit=cover` and a translucent status bar are what make a home
+screen app fill the screen instead of sitting in a framed box, and they
+do it by drawing the page *under* the notch, the Dynamic Island and the
+home indicator. Nothing put it back, so on a real iPhone the top row —
+menu, sync state, settings — could not be pressed at all.
+
+The strip offering a new build is in that row. So the app could not be
+updated from the phone: the fix for the notch was behind the button the
+notch was covering. Taking it needed the app closed entirely, which is
+what lets a waiting worker activate — no clients left to reload under.
+
+`.safe-area` in `index.css` is applied once, to the shell in `App.tsx`,
+because nothing below positions itself against the viewport: every screen
+is a column of `shrink-0` chrome around one `min-h-0 flex-1
+overflow-y-auto` list. Padding there comes out of that list's height, so
+it scrolls rather than losing its last row.
+
+No test can say whether the padding is the right size — jsdom has no
+insets and `env()` resolves to nothing. The one in `flow.test.tsx`
+asserts only that the shell still carries the treatment, and says so,
+because that is how this would come back: silently, on the one device
+nobody develops on.
+
+### Where the phone acceptance got to
+
+Carried out on a real iPhone, over `cloudflared` against the local
+Worker on 8787. Confirmed against the server rather than against the
+screen, because the screen is what was being tested:
+
+- **An add made with no signal reaches the server exactly once.** Three
+  offline records, three `201`s, three distinct ids, no duplicates.
+- **A stop pressed offline keeps the moment it was pressed.** The
+  confirmed event ended at 22:58:14 and was written at 23:00:32 — 137
+  seconds apart (spec 7.2). A timer stopped online has the two equal.
+- **A record the server refused can be retried by hand.** A second timer
+  of the same type came back `409 ACTIVE_TIMER_EXISTS`, the queue gave up
+  and kept it, and retrying after the first timer was stopped landed it
+  once (spec 11.2).
+- **Installing to the home screen.**
+- **The safe area**, after the fix above. Reported fixed on the device;
+  the per-screen list — settings, the event form, the save button, the
+  bottom of a long list — was not gone through item by item.
+
+Still **not** carried out, and not to be described as passed:
+
+- **Taking an update by pressing the strip.** The strip was unreachable
+  for the reason above, so this round changed build by closing the app.
+- **A half-typed form, a queued add and a stop draft surviving an
+  update.** The queue and the draft had been cleared by the time the
+  build changed.
+- **A cold start with no network**, on the phone, was not reported back.
+
+Everything in spec 12.1 that needs a deployment is outstanding as well.
 
 What comes after M2:
 
@@ -232,8 +280,10 @@ What comes after M2:
   notice.
 
 Stage 4 needs HTTPS, which a local network address is not. Use
-`cloudflared tunnel --url http://localhost:5180` (spec 10.1, option two).
-Deploying to get HTTPS is not on the table.
+`cloudflared tunnel --url http://localhost:8787` (spec 10.1, option two),
+against `npm run dev:api` — the Worker serving the built assets, not the
+dev server, where the service worker is switched off. Deploying to get
+HTTPS is not on the table.
 
 ## Before you call something done
 

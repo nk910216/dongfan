@@ -17,7 +17,10 @@ import { CorrectUnsynced, Unsynced } from './routes/Unsynced.js';
 export function App(): React.JSX.Element {
   return (
     <SessionProvider>
-      <div className="relative mx-auto flex h-full max-w-md flex-col overflow-hidden">
+      {/* `safe-area` is defined in index.css, with the reasoning. It is
+          here, on the one element every screen is drawn inside, because
+          nothing below positions itself against the viewport. */}
+      <div className="safe-area relative mx-auto flex h-full max-w-md flex-col overflow-hidden">
         {/* Above everything, on every screen: a build that is behind the
             API is behind it whatever the parent happens to be looking at
             (spec 2.1). */}

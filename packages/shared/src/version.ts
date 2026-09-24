@@ -16,4 +16,4 @@
  * Bumped by hand when a build is released. Both halves read it from here,
  * so they cannot disagree about what they are.
  */
-export const APP_VERSION = '0.2.0';
+export const APP_VERSION = '0.2.1';

@@ -1081,6 +1081,35 @@ describe('touch targets', () => {
   });
 });
 
+describe('the notch and the home indicator', () => {
+  it('draws every screen inside the safe area', async () => {
+    openSignedIn();
+    await waitForHome();
+
+    // `viewport-fit=cover` puts the page under the island and the home
+    // indicator, and the top row of buttons with it.
+    //
+    // This cannot prove the padding is the right size: jsdom has no
+    // insets, `env()` resolves to nothing, and no browser on a desktop
+    // has a notch to be under. What it can do is fail if the treatment
+    // is taken off the shell, which is the way this would come back --
+    // silently, and only on the one device nobody tests on. Whether it
+    // is actually clear of the island is checked on a phone.
+    const shell = document.querySelector('.safe-area');
+    expect(shell).not.toBeNull();
+
+    // Named rather than assumed: the point is that the controls reported
+    // as unreachable are inside it, not that some element somewhere is.
+    for (const control of [
+      screen.getByRole('link', { name: zhTW.a11y.openSettings }),
+      screen.getByRole('button', { name: zhTW.a11y.openMenu }),
+      screen.getByRole('link', { name: zhTW.a11y.addEvent }),
+    ]) {
+      expect(shell?.contains(control)).toBe(true);
+    }
+  });
+});
+
 describe('saving again after a save that said nothing', () => {
   it('reaches the same event instead of adding a second one', async () => {
     // Stored on the server, but the reply never arrives. From the phone
