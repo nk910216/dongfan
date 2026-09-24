@@ -534,7 +534,10 @@ describe('when the API cannot be reached', () => {
     const user = openSignedIn();
     await waitForHome();
 
-    await user.click(screen.getByRole('button', { name: zhTW.auth.signOut }));
+    // Signing out lives on the settings page now, with the rest of what
+    // is about the family rather than about the records (spec 7.8).
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.openSettings }));
+    await user.click(await screen.findByTestId('sign-out'));
     expect(await screen.findByLabelText(zhTW.auth.username)).toBeInTheDocument();
 
     // Signing out has to take the remembered account with it, or the next
@@ -2783,5 +2786,148 @@ describe('an iPhone used from a Safari tab', () => {
     await waitForHome();
 
     expect(screen.queryByTestId('install-hint')).not.toBeInTheDocument();
+  });
+});
+
+describe('the settings page', () => {
+  async function openSettings(): Promise<ReturnType<typeof userEvent.setup>> {
+    const user = openSignedIn();
+    await waitForHome();
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.openSettings }));
+    await screen.findByText(zhTW.settings.membersSection);
+    return user;
+  }
+
+  it('changes the baby’s details and shows them', async () => {
+    const user = await openSettings();
+
+    const nickname = screen.getByLabelText(zhTW.baby.nickname);
+    await user.clear(nickname);
+    await user.type(nickname, USER_CONTENT.note);
+    await user.click(screen.getByTestId('save-baby'));
+
+    const sent = api.lastRequest('/api/babies/baby-1')?.body as Record<string, unknown>;
+    expect(sent['nickname']).toBe(USER_CONTENT.note);
+
+    // The name on the home screen comes from the account description, so
+    // it only changes once that has been read again.
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.back }));
+    expect(await screen.findByText(USER_CONTENT.note)).toBeInTheDocument();
+  });
+
+  it('lists who can see the baby, by name', async () => {
+    api.members = [
+      { userId: 'user-1', username: 'parent', role: 'owner' },
+      { userId: 'user-9', username: 'the-other-one', role: 'member' },
+    ];
+    await openSettings();
+
+    // A column of ids answers none of the questions somebody opens this
+    // screen with (spec 7.8).
+    expect(screen.getByTestId('member-parent')).toHaveTextContent(zhTW.settings.roleOwner);
+    expect(screen.getByTestId('member-the-other-one')).toHaveTextContent(zhTW.settings.roleMember);
+  });
+
+  it('hands out a code once, and says what it is worth', async () => {
+    const user = await openSettings();
+    await user.click(screen.getByTestId('generate-invite'));
+
+    const shown = await screen.findByTestId('invite');
+    expect(shown).toHaveTextContent(zhTW.settings.inviteOnce);
+    // Six groups of five: 150 bits, in symbols nobody misreads off a
+    // screen. Nothing stores it, so leaving the page really does lose it.
+    expect(screen.getByTestId('invite-code').textContent)
+      .toMatch(/^(?:[0-9A-HJKMNP-TV-Z]{5}-){5}[0-9A-HJKMNP-TV-Z]{5}$/);
+  });
+
+  it('does not offer a code to somebody who is not the owner', async () => {
+    Object.assign(BABY, { role: 'member' });
+    await openSettings();
+
+    // The server refuses either way; offering a button that can only fail
+    // is its own small lie (spec 6.4).
+    expect(screen.queryByTestId('generate-invite')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('save-baby')).not.toBeInTheDocument();
+    expect(screen.getByTestId('owner-only')).toBeInTheDocument();
+  });
+
+  it('lets the second parent in without making a baby of their own', async () => {
+    // Where they actually are: a code in a message, no baby, and nothing
+    // on the create screen that applies to them (spec 7.1).
+    const code = 'ABCDE-FGHJK-MNPQR-STVWX-YZ234-56789';
+    api.invites.set(code, BABY.id);
+    api.startWithNoBaby();
+
+    const user = openSignedIn();
+    await screen.findByText(zhTW.baby.createTitle);
+
+    await user.type(screen.getByLabelText(zhTW.settings.joinPlaceholder), code);
+    await user.click(screen.getByTestId('join'));
+
+    // Straight into the family's records, with nothing created.
+    await waitForHome();
+    expect(api.lastRequest('/api/babies')?.path).not.toBe('/api/babies');
+    const sent = api.lastRequest('/api/babies/join')?.body as Record<string, unknown>;
+    expect(sent['code']).toBe(code);
+  });
+
+  it('says the same thing for a code that is wrong, used or expired', async () => {
+    const user = await openSettings();
+
+    api.joinFails = true;
+    await user.type(screen.getByLabelText(zhTW.settings.joinPlaceholder), 'ZZZZZ-ZZZZZ');
+    await user.click(screen.getByTestId('join'));
+
+    // Which of the three it was is something only somebody guessing would
+    // want to know (spec 6.5).
+    expect(await screen.findByTestId('form-error')).toHaveTextContent(zhTW.settings.joinFailed);
+  });
+
+  it('asks before removing somebody, then removes them', async () => {
+    api.members = [
+      { userId: 'user-1', username: 'parent', role: 'owner' },
+      { userId: 'user-9', username: 'the-other-one', role: 'member' },
+    ];
+    const user = await openSettings();
+
+    await user.click(screen.getByTestId('remove-the-other-one'));
+    expect(screen.getByTestId('remove-confirm')).toHaveTextContent(
+      interpolate(zhTW.settings.removeTitle, { name: 'the-other-one' }),
+    );
+
+    await user.click(screen.getByTestId('remove-yes'));
+
+    await waitFor(() => expect(screen.queryByTestId('member-the-other-one')).not.toBeInTheDocument());
+    expect(api.requests.some((e) => e.method === 'DELETE' && e.path.endsWith('/members/user-9'))).toBe(true);
+  });
+
+  it('will not offer to remove the only owner', async () => {
+    await openSettings();
+
+    // A baby with nobody in charge can never be invited to again and its
+    // details can never be corrected.
+    expect(screen.queryByTestId('remove-parent')).not.toBeInTheDocument();
+    expect(screen.getByTestId('last-owner')).toBeInTheDocument();
+  });
+
+  it('lets a member leave, and takes the baby with them', async () => {
+    api.signInAs('user-9');
+    api.members = [
+      { userId: 'user-1', username: 'parent', role: 'owner' },
+      { userId: 'user-9', username: 'the-other-one', role: 'member' },
+    ];
+    Object.assign(BABY, { role: 'member' });
+
+    const user = openSignedIn();
+    await waitForHome();
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.openSettings }));
+
+    await user.click(await screen.findByTestId('remove-the-other-one'));
+    expect(screen.getByTestId('remove-confirm')).toHaveTextContent(zhTW.settings.leaveTitle);
+    await user.click(screen.getByTestId('remove-yes'));
+
+    // With no baby left, there is nothing for the app to show but the
+    // form to make one.
+    expect(await screen.findByText(zhTW.baby.createTitle)).toBeInTheDocument();
   });
 });

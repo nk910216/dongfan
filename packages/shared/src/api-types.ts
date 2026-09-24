@@ -89,4 +89,29 @@ export type UserDto = { id: string; username: string };
 
 export type MeDto = { user: UserDto; babies: BabyDto[] };
 
+/**
+ * One person with access to a baby.
+ *
+ * The username travels with it because the list is there to be read by a
+ * family: a column of opaque ids answers none of the questions somebody
+ * opens that screen with (spec 7.8).
+ */
+export type MemberDto = {
+  userId: string;
+  username: string;
+  role: 'owner' | 'member';
+  createdAt: number;
+};
+
+export type MembersDto = { members: MemberDto[] };
+
+/**
+ * A freshly made invitation.
+ *
+ * The code itself is returned exactly once, here. Only its digest is
+ * stored, so there is nowhere to read it back from afterwards -- which is
+ * the point of storing a digest (spec 6.5).
+ */
+export type InviteDto = { code: string; expiresAt: number };
+
 export type LoginDto = { token: string; user: UserDto };

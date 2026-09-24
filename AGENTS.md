@@ -97,7 +97,7 @@ first.
 | 2 | The offline queue: POST only, backoff, retry cap, `outcome_unknown`, a list of what failed, "N unsynced" | **done** |
 | 3 | The offline stop-timer draft (spec 7.2) | **done** |
 | 4 | PWA: manifest, service worker, update flow, the iOS add-to-home prompt | **done** |
-| 5 | Members and invite codes (spec 6.5) | next |
+| 5 | Members and invite codes (spec 6.5) | **done** |
 
 The queue lives in `packages/web/src/lib/outbox.ts`, with its storage in
 `db.ts` under `outbox`. An entry is put in doubt by `beginSend` *before*
@@ -172,7 +172,33 @@ The worker is off in `vite dev` and only exists in a real build, so it is
 tested through `cloudflared` against the Worker on 8787, never by
 deploying. `docs/running-locally.md` has the steps.
 
-What stage 5 inherits:
+An invitation is 150 bits, works once, and stops working an hour later.
+Spec 4.3 names three ways of writing that which look right: consuming the
+code before writing the member (nobody is added), guarding the insert on
+`used_by` (somebody removed can rejoin with the same code, expired or
+not), and taking the baby from the request rather than from the code (a
+valid code for one child lets you into another). All three have tests that
+fail when the guard is removed.
+
+The rate limit on joining counts in the isolate and writes nothing, as
+spec 9.4 settled for the whole project: a brake that spends the day's
+database allowance can be used to stop a parent recording a feed. It is
+not the defence — the 150 bits are.
+
+The second parent's first moment is the create-a-baby screen, holding a
+code, with no baby and therefore no settings page to reach. The join form
+is on both screens for that reason; offering only the one spec 7.1 names
+would make the feature unusable for what it exists for.
+
+### Still outstanding
+
+The PWA acceptance on a real phone — installing to the home screen, a cold
+start with no network, and taking an update without losing a half-typed
+form — has **not** been carried out. `docs/running-locally.md` has the
+steps, through `cloudflared` against the local Worker. Everything in
+spec 12.1 that needs a deployment is still outstanding as well.
+
+What comes after M2:
 
 - The summary is the server's, so a feed recorded offline does not move
   "last feed" until it is sent. That is deliberate (spec 6.2); the waiting

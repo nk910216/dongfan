@@ -140,12 +140,38 @@ class Api {
    */
   serverVersion: string = APP_VERSION;
 
+  /**
+   * Who can see the baby, and any code that has been handed out.
+   *
+   * Modelled only as far as the contract goes. Whether a code can be spent
+   * twice, or survives an hour, or lets somebody into a different baby, is
+   * decided by SQL and tested against a real D1 -- re-implementing those
+   * rules here would only prove this file agrees with itself (spec 11.3).
+   */
+  members: { userId: string; username: string; role: 'owner' | 'member' }[] = [
+    { userId: 'user-1', username: 'parent', role: 'owner' },
+  ];
+
+  /** Codes handed out and not yet spent, with the baby each opens. */
+  invites = new Map<string, string>();
+
+  /** Set when the next join should be refused, as an unknown code would be. */
+  joinFails = false;
+
   /** A freshly deployed database: an account, and nothing else. */
   startWithNoBaby(): void {
     ME.babies = [];
   }
 
   reset(): void {
+    // The baby is a shared object the settings screen edits in place, so
+    // one test's rename must not become the next one's fixture.
+    Object.assign(BABY, {
+      nickname: USER_CONTENT.nickname, gender: 'other', birthDate: '2026-03-08', role: 'owner',
+    });
+    this.members = [{ userId: `user-${this.accounts + 1}`, username: 'parent', role: 'owner' }];
+    this.invites = new Map();
+    this.joinFails = false;
     this.serverVersion = APP_VERSION;
     this.accounts += 1;
     ME.user = { id: `user-${this.accounts}`, username: 'parent' };
@@ -327,6 +353,56 @@ export const server = setupServer(
       return HttpResponse.error();
     }
     return HttpResponse.json(created, { status: 201 });
+  }),
+
+  http.get('/api/babies/:babyId/members', async ({ request }) => {
+    await record(request);
+    return HttpResponse.json({ members: api.members.map((m) => ({ ...m, createdAt: 0 })) });
+  }),
+
+  http.post('/api/babies/:babyId/invite', async ({ request, params }) => {
+    await record(request);
+    const failure = pending();
+    if (failure) return refuse(failure);
+
+    const code = `ABCDE-FGHJK-MNPQR-STVWX-YZ${api.invites.size}23-45678`;
+    api.invites.set(code, String(params['babyId']));
+    return HttpResponse.json({ code, expiresAt: Date.now() + 60 * 60 * 1000 }, { status: 201 });
+  }),
+
+  http.post('/api/babies/join', async ({ request }) => {
+    const body = (await record(request)) as Record<string, unknown>;
+    const failure = pending();
+    if (failure) return refuse(failure);
+
+    const code = String(body['code'] ?? '');
+    if (api.joinFails || !api.invites.has(code)) return refuse({ status: 404, code: 'NOT_FOUND' });
+
+    api.invites.delete(code);
+    ME.babies = [BABY];
+    return HttpResponse.json(BABY, { status: 201 });
+  }),
+
+  http.delete('/api/babies/:babyId/members/:userId', async ({ request, params }) => {
+    await record(request);
+    const failure = pending();
+    if (failure) return refuse(failure);
+
+    const target = String(params['userId']);
+    api.members = api.members.filter((member) => member.userId !== target);
+    if (target === ME.user.id) ME.babies = [];
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  http.patch('/api/babies/:babyId', async ({ request }) => {
+    const body = (await record(request)) as Record<string, unknown>;
+    const failure = pending();
+    if (failure) return refuse(failure);
+
+    if (body['nickname'] !== undefined) BABY.nickname = String(body['nickname']);
+    if (body['gender'] !== undefined) BABY.gender = String(body['gender']);
+    if (body['birthDate'] !== undefined) BABY.birthDate = String(body['birthDate']);
+    return HttpResponse.json(BABY);
   }),
 
   http.get('/api/babies/:babyId/events', async ({ request }) => {

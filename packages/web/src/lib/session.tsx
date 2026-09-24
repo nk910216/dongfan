@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react';
 import { apiRequest } from './api.js';
 import { ApiFailure } from './api.js';
-import type { LoginDto, MeDto } from '@dongfan/shared';
+import type { BabyDto, LoginDto, MeDto } from '@dongfan/shared';
 
 /**
  * Who is signed in.
@@ -88,6 +88,14 @@ export type SessionState = {
   signOut: () => void;
   /** Refetches the account and its babies, after one has been created. */
   reload: () => Promise<void>;
+  /**
+   * Joins a baby somebody shared a code for.
+   *
+   * Here rather than in the store because what it changes is the account:
+   * which babies this person can see at all. The store is built for one of
+   * them and cannot be the thing that adds another (spec 6.5).
+   */
+  joinBaby: (code: string) => Promise<BabyDto>;
   /** Called when any request comes back unauthenticated. */
   expire: () => void;
 };
@@ -181,6 +189,21 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
     setAttempt((n) => n + 1);
   }, [token]);
 
+  const joinBaby = useCallback(
+    async (code: string): Promise<BabyDto> => {
+      const joined = await apiRequest<BabyDto>('/babies/join', {
+        method: 'POST',
+        token: token ?? undefined,
+        body: { code },
+      });
+      // The account's baby list is what decides what the app shows, so it
+      // has to be read again before any of this is visible.
+      await reload();
+      return joined;
+    },
+    [token, reload],
+  );
+
   const signIn = useCallback(async (username: string, password: string) => {
     const body = await apiRequest<LoginDto>('/auth/login', {
       method: 'POST',
@@ -203,8 +226,8 @@ export function SessionProvider({ children }: { children: ReactNode }): React.JS
   }, [expire]);
 
   const value = useMemo<SessionState>(
-    () => ({ token, me, loading, offline, signIn, signOut, expire, reload }),
-    [token, me, loading, offline, signIn, signOut, expire, reload],
+    () => ({ token, me, loading, offline, signIn, signOut, expire, reload, joinBaby }),
+    [token, me, loading, offline, signIn, signOut, expire, reload, joinBaby],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

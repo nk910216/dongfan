@@ -13,13 +13,11 @@ import type { QueuedCreate } from '../lib/db.js';
 import { formatClock, formatDuration, relativeTime, syncedAgo } from '../lib/format.js';
 import { draftFor, typeSummary, useStore } from '../lib/store.js';
 import { describeQueued } from './Unsynced.js';
-import { useSession } from '../lib/session.js';
 
 export function Home(): React.JSX.Element {
   const {
     baby, summary, events, now, stale, syncing, syncedAt, refresh, unsynced, stopDrafts,
   } = useStore();
-  const { signOut } = useSession();
 
   /**
    * The waiting records that belong on today's list.
@@ -73,14 +71,13 @@ export function Home(): React.JSX.Element {
         >
           {syncing ? zhTW.home.syncing : stale ? zhTW.home.syncFailed : syncedAgo(syncedAt, now)}
         </button>
-        <button
-          type="button"
-          onClick={signOut}
-          aria-label={zhTW.auth.signOut}
+        <Link
+          to="/settings"
+          aria-label={zhTW.a11y.openSettings}
           className="flex size-11 items-center justify-center text-ink-muted"
         >
           <Settings size={22} />
-        </button>
+        </Link>
       </header>
 
       {/* Identity is one horizontal strip rather than a stacked block: it frees

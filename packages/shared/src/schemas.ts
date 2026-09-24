@@ -123,6 +123,16 @@ export const deleteEventRequest = z.object({ version: z.number().int().positive(
 export const createTagRequest = z.object({ name: boundedText(30, 1) });
 
 /**
+ * Joining a baby with a code somebody shared.
+ *
+ * Only bounded here. What the code has to look like is decided after it
+ * has been normalised, because the dashes and the capitals a person types
+ * are presentation and telling them off for either would be unkind
+ * (spec 6.5).
+ */
+export const joinBabyRequest = z.object({ code: boundedText(100, 1) });
+
+/**
  * The incremental sync cursor (spec 5.4).
  *
  * `since` is a rev the server issued, never a timestamp, and it arrives as a
@@ -140,4 +150,5 @@ export type CreateEventRequest = z.infer<typeof createEventRequest>;
 export type UpdateEventRequest = z.infer<typeof updateEventRequest>;
 export type DeleteEventRequest = z.infer<typeof deleteEventRequest>;
 export type CreateTagRequest = z.infer<typeof createTagRequest>;
+export type JoinBabyRequest = z.infer<typeof joinBabyRequest>;
 export type SyncQuery = z.infer<typeof syncQuery>;

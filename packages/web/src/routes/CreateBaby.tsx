@@ -3,6 +3,7 @@ import { isPlausibleBirthDate, toLocalDate, zhTW } from '@dongfan/shared';
 import type { BabyDto } from '@dongfan/shared';
 import { apiRequest } from '../lib/api.js';
 import { describeFailure } from '../components/FieldErrors.js';
+import { JoinBaby } from '../components/JoinBaby.js';
 import { useSession } from '../lib/session.js';
 import { newClientId } from '../lib/ids.js';
 import { outcomeIsUnknown, provesNotStored } from '../lib/outcome.js';
@@ -15,9 +16,9 @@ import { outcomeIsUnknown, provesNotStored } from '../lib/outcome.js';
  * be a dead end on a freshly deployed database, where the owner is the only
  * person there is.
  *
- * A second parent does not come through here. They are added to an existing
- * baby from the account CLI, and will have one by the time they sign in
- * (spec 12).
+ * A second parent may not want to make one at all: they have a code for a
+ * baby that already exists, and no settings page to type it into, because
+ * reaching that needs a baby. So the other half of spec 7.1 is here too.
  */
 type CreateBabyBody = {
   id: string;
@@ -125,7 +126,7 @@ export function CreateBaby(): React.JSX.Element {
   };
 
   return (
-    <div className="flex h-full flex-col justify-center px-7">
+    <div className="flex h-full flex-col justify-center overflow-y-auto px-7 py-8">
       <h1 className="mb-1 text-center text-xl font-bold tracking-wide">{zhTW.baby.createTitle}</h1>
       <p className="mb-7 text-center text-sm leading-relaxed text-ink-faint">{zhTW.baby.createHint}</p>
 
@@ -209,6 +210,15 @@ export function CreateBaby(): React.JSX.Element {
               : zhTW.baby.create}
         </button>
       </form>
+
+      {/* The second parent's actual first moment: a code in a message, no
+          baby of their own, and nothing above that applies to them. */}
+      <div className="mt-8 border-t border-line-soft pt-5">
+        <h2 className="mb-2.5 text-xs font-medium tracking-widest text-ink-faint">
+          {zhTW.settings.joinSection}
+        </h2>
+        <JoinBaby />
+      </div>
     </div>
   );
 }

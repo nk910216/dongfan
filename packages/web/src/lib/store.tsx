@@ -2,7 +2,9 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react';
 import { getEventType, toLocalDate, zhTW } from '@dongfan/shared';
 import { Message } from '../components/Message.js';
-import type { BabyDto, EventDto, SummaryDto, TypeSummaryDto } from '@dongfan/shared';
+import type {
+  BabyDto, EventDto, InviteDto, MemberDto, MembersDto, SummaryDto, TypeSummaryDto,
+} from '@dongfan/shared';
 import { ApiFailure, OfflineError, apiRequest, isOffline } from './api.js';
 import * as local from './db.js';
 import {
@@ -148,6 +150,18 @@ export type Store = {
    */
   discardStop: (eventId: string) => Promise<void>;
   removeEvent: (eventId: string, version: number) => Promise<void>;
+  /**
+   * The settings screen's four, which nothing else asks for.
+   *
+   * Fetched when that screen opens rather than held here: a list of two
+   * people that changes once a year does not belong in the state every
+   * other screen re-renders on (spec 7.8).
+   */
+  listMembers: () => Promise<MemberDto[]>;
+  /** A one-time code, returned in full exactly once (spec 6.5). */
+  createInvite: () => Promise<InviteDto>;
+  removeMember: (userId: string) => Promise<void>;
+  editBaby: (patch: { nickname?: string; gender?: string; birthDate?: string }) => Promise<void>;
 };
 
 const StoreContext = createContext<Store | null>(null);
@@ -159,7 +173,7 @@ function allDayFirst(events: EventDto[]): EventDto[] {
 }
 
 export function StoreProvider({ baby, children }: { baby: BabyDto; children: ReactNode }): React.JSX.Element {
-  const { token, expire, me } = useSession();
+  const { token, expire, me, reload } = useSession();
   // One account, one baby. Everything below reads and writes under this,
   // so switching accounts cannot show the previous one's records and a
   // record cannot be filed against the wrong baby (spec 6.1, 6.2).
@@ -671,15 +685,48 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     [scope],
   );
 
+  const listMembers = useCallback(
+    async (): Promise<MemberDto[]> =>
+      (await call<MembersDto>(`/babies/${baby.id}/members`)).members,
+    [call, baby.id],
+  );
+
+  const createInvite = useCallback(
+    (): Promise<InviteDto> => call<InviteDto>(`/babies/${baby.id}/invite`, { method: 'POST' }),
+    [call, baby.id],
+  );
+
+  const removeMember = useCallback(
+    async (userId: string): Promise<void> => {
+      await call(`/babies/${baby.id}/members/${userId}`, { method: 'DELETE' });
+      // Which babies this account can see is decided by the account, so
+      // removing somebody -- including oneself -- is only visible once it
+      // has been read again.
+      await reload();
+    },
+    [call, baby.id, reload],
+  );
+
+  const editBaby = useCallback(
+    async (patch: { nickname?: string; gender?: string; birthDate?: string }): Promise<void> => {
+      await call<BabyDto>(`/babies/${baby.id}`, { method: 'PATCH', body: patch });
+      // The baby on screen comes from the account description, not from
+      // here, so nothing changes until that is read again.
+      await reload();
+    },
+    [call, baby.id, reload],
+  );
+
   const value = useMemo<Store>(
     () => ({
       baby, scope, events, summary: summary as SummaryDto, now, loading, stale, syncing, syncedAt,
       unsynced, stopDrafts, refresh: settle, findEvent, addEvent, updateEvent, stopTimer,
       discardStop, removeEvent, retryUnsynced, correctUnsynced, abandonUnsynced,
+      listMembers, createInvite, removeMember, editBaby,
     }),
     [baby, scope, events, summary, now, loading, stale, syncing, syncedAt, unsynced, stopDrafts, settle,
       findEvent, addEvent, updateEvent, stopTimer, discardStop, removeEvent, retryUnsynced,
-      correctUnsynced, abandonUnsynced],
+      correctUnsynced, abandonUnsynced, listMembers, createInvite, removeMember, editBaby],
   );
 
   // Nothing below this point has to cope with an absent summary. Gating here
