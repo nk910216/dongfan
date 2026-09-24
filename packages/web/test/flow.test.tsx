@@ -2940,6 +2940,108 @@ describe('the settings page', () => {
     expect(await screen.findByText('Theirs')).toBeInTheDocument();
   });
 
+  it('keeps asking whether it got in when the answer and the account are both lost', async () => {
+    const code = 'ABCDE-FGHJK-MNPQR-STVWX-YZ234-56789';
+    const theirs = { ...BABY, id: 'baby-9', nickname: 'Theirs', role: 'member' as const };
+    api.invites.set(code, theirs.id);
+    api.joinsInto = theirs;
+
+    const user = await openSettings();
+
+    // The code is spent on the server, the answer is lost, and the check
+    // that would have settled it cannot reach anything either.
+    server.use(
+      http.post('/api/babies/join', async ({ request }) => {
+        await request.json();
+        api.invites.delete(code);
+        api.alsoHasBaby(theirs);
+        return HttpResponse.error();
+      }),
+      http.get('/api/me', () => HttpResponse.error()),
+    );
+
+    await user.type(screen.getByLabelText(zhTW.settings.joinPlaceholder), code);
+    await user.click(screen.getByTestId('join'));
+    expect(await screen.findByTestId('form-error')).toHaveTextContent(zhTW.settings.joinUnknown);
+
+    // The signal comes back. Pressing again must ask the account first:
+    // the code has been spent, by this very person, so sending it again
+    // can only answer 404 -- which says the opposite of the truth.
+    server.resetHandlers();
+    const sent = api.requests.filter((e) => e.path === '/api/babies/join').length;
+    await user.click(screen.getByTestId('join'));
+
+    await user.click(await screen.findByRole('link', { name: zhTW.a11y.back }));
+    expect(await screen.findByText('Theirs')).toBeInTheDocument();
+    expect(api.requests.filter((e) => e.path === '/api/babies/join')).toHaveLength(sent);
+  });
+
+  it('measures against the account as it was before the attempt', async () => {
+    const code = 'ABCDE-FGHJK-MNPQR-STVWX-YZ234-56789';
+    const theirs = { ...BABY, id: 'baby-9', nickname: 'Theirs', role: 'member' as const };
+    api.invites.set(code, theirs.id);
+    api.joinsInto = theirs;
+
+    const user = await openSettings();
+
+    // Spent on the server, answer lost, account unreachable.
+    server.use(
+      http.post('/api/babies/join', async ({ request }) => {
+        await request.json();
+        api.invites.delete(code);
+        api.alsoHasBaby(theirs);
+        return HttpResponse.error();
+      }),
+      http.get('/api/me', () => HttpResponse.error()),
+    );
+    await user.type(screen.getByLabelText(zhTW.settings.joinPlaceholder), code);
+    await user.click(screen.getByTestId('join'));
+    await screen.findByTestId('form-error');
+
+    // The connection comes back, and something else on this page reads
+    // the account first -- renaming the baby does. By the time join is
+    // pressed again, the list it would compare against already has the
+    // new baby in it, so "did one appear" can only be answered against
+    // what it was before any of this started.
+    server.resetHandlers();
+    const nickname = screen.getByLabelText(zhTW.baby.nickname);
+    await user.clear(nickname);
+    await user.type(nickname, USER_CONTENT.note);
+    await user.click(screen.getByTestId('save-baby'));
+    await waitFor(() => expect(api.lastRequest('/api/babies/baby-1')).toBeDefined());
+
+    await user.click(screen.getByTestId('join'));
+
+    await user.click(await screen.findByRole('link', { name: zhTW.a11y.back }));
+    expect(await screen.findByText('Theirs')).toBeInTheDocument();
+  });
+
+  it('does not let a later refusal settle a doubt it cannot settle', async () => {
+    const code = 'ABCDE-FGHJK-MNPQR-STVWX-YZ234-56789';
+    api.invites.set(code, BABY.id);
+    const user = await openSettings();
+
+    // Nothing answered, and the account could not be reached either.
+    server.use(
+      http.post('/api/babies/join', () => HttpResponse.error()),
+      http.get('/api/me', () => HttpResponse.error()),
+    );
+    await user.type(screen.getByLabelText(zhTW.settings.joinPlaceholder), code);
+    await user.click(screen.getByTestId('join'));
+    await screen.findByTestId('form-error');
+
+    // Now /me works and says this person is not in any new baby, but the
+    // code answers 404 -- which is what a code spent by this very person
+    // answers too. Only the account reading clean settles it.
+    server.resetHandlers();
+    server.use(http.post('/api/babies/join', () => HttpResponse.json(
+      { error: { code: 'NOT_FOUND', details: null } }, { status: 404 },
+    )));
+    await user.click(screen.getByTestId('join'));
+
+    expect(await screen.findByTestId('form-error')).toHaveTextContent(zhTW.settings.joinFailed);
+  });
+
   it('switches between babies from the name at the top', async () => {
     api.alsoHasBaby({ ...BABY, id: 'baby-9', nickname: 'Theirs', role: 'member' });
 

@@ -168,6 +168,18 @@ mark written before a write says what was attempted. Only the store can
 say what happened, so ask it — the queue for an entry, the local events
 for a record, the draft itself for the version it was written on.
 
+### State read inside the call that changed it is the value from before
+
+`const [x, setX] = useState()`, then `setX(...)`, then a branch on `x` a
+few lines later: that branch sees the old value. It has bitten three
+times, twice in `JoinBaby.tsx` alone, and each time the symptom was a
+screen reporting the wrong one of two outcomes — not a crash, not a
+failed test, just the wrong sentence at the worst moment.
+
+An async handler that has to act on what happened *during* this press
+keeps its own local variable and sets the state alongside it. The state
+is for rendering; the variable is for deciding.
+
 The worker is off in `vite dev` and only exists in a real build, so it is
 tested through `cloudflared` against the Worker on 8787, never by
 deploying. `docs/running-locally.md` has the steps.

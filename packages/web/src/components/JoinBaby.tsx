@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { zhTW } from '@dongfan/shared';
+import type { MeDto } from '@dongfan/shared';
 import { ApiFailure } from '../lib/api.js';
 import { ErrorLine, describeFailure } from './FieldErrors.js';
 import { outcomeIsUnknown } from '../lib/outcome.js';
@@ -18,7 +19,15 @@ import { useSession } from '../lib/session.js';
  * the account which babies it can now see is the other. Joining them meant
  * a failed refresh looked exactly like a failed join -- while the code was
  * already spent, so pressing the button again could only ever collect a
- * 404. What is remembered here is which of the two still has to happen.
+ * 404.
+ *
+ * And doubt, once it is here, is sticky (spec 6.1). A send that got no
+ * answer may well have landed; if the account cannot be asked either, the
+ * only honest state is "not known", and it has to survive the press that
+ * comes after. Letting the next 404 settle it would report a failed join
+ * to somebody who is already a member -- a used code and one that never
+ * existed answer identically, which is the whole reason this cannot be
+ * read off the refusal.
  */
 export function JoinBaby(): React.JSX.Element {
   const { me, joinBaby, reload, selectBaby } = useSession();
@@ -28,30 +37,39 @@ export function JoinBaby(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [joined, setJoined] = useState<string | null>(null);
 
+  /** Set when a send ended with nothing from the server. Sticky. */
+  const [unsure, setUnsure] = useState(false);
+
   /**
-   * Reads the account and says whether a baby that was not there before
-   * has appeared.
+   * The babies this account had before the first attempt.
    *
-   * The recovery for a request that got no answer. The code may well have
-   * been spent -- asking is the only way to find out, and it is a great
-   * deal better than telling somebody it failed while they are already a
-   * member (spec 6.1).
+   * Kept rather than compared against the list as it stands, because the
+   * question is asked again on a later press, by which time the list may
+   * have moved for reasons of its own. Without it, "did a new one appear"
+   * has no fixed thing to be measured against.
    */
-  const appeared = async (): Promise<string | null> => {
-    const before = new Set((me?.babies ?? []).map((baby) => baby.id));
-    const fresh = await reload();
-    return fresh.babies.find((baby) => !before.has(baby.id))?.id ?? null;
+  const [before, setBefore] = useState<string[] | null>(null);
+
+  const appeared = (fresh: MeDto, was: string[]): string | null =>
+    fresh.babies.find((baby) => !was.includes(baby.id))?.id ?? null;
+
+  const settle = (babyId: string): void => {
+    setJoined(babyId);
+    setUnsure(false);
+    setCode('');
+    selectBaby(babyId);
   };
 
   const submit = async (): Promise<void> => {
     setFailure(null);
     setBusy(true);
 
-    // Held locally as well as in state, because state read back inside
-    // this call is the value from before it started. Without it, a
-    // refresh that failed a moment after the code was spent reports that
-    // nothing is known -- when what is known is that they are in.
+    // Both of these are held locally as well as in state, because state
+    // read back inside this call is the value from before it started.
+    // Every branch below turns on what has happened *during* this press.
     let landed = joined;
+    let stillUnsure = unsure;
+    const was = before ?? (me?.babies ?? []).map((baby) => baby.id);
 
     try {
       // Already in, and only the refresh is outstanding. Sending the code
@@ -61,6 +79,34 @@ export function JoinBaby(): React.JSX.Element {
         await reload();
         selectBaby(landed);
         return;
+      }
+
+      // In doubt: ask the account before sending anything. If the earlier
+      // attempt landed, the code is spent and this is the only way to
+      // find out; sending it again would answer 404 and say the opposite
+      // of the truth.
+      if (stillUnsure) {
+        let fresh: MeDto;
+        try {
+          fresh = await reload();
+        } catch {
+          // Still nothing to ask. The doubt stands, which is the point of
+          // it being sticky.
+          setFailure(zhTW.settings.joinUnknown);
+          return;
+        }
+
+        const found = appeared(fresh, was);
+        if (found !== null) {
+          settle(found);
+          return;
+        }
+
+        // The account has been read and this person is not in it, so the
+        // earlier send did not land. Sending again is now a fair test,
+        // and whatever it answers is the answer.
+        stillUnsure = false;
+        setUnsure(false);
       }
 
       const baby = await joinBaby(code);
@@ -78,20 +124,37 @@ export function JoinBaby(): React.JSX.Element {
       }
 
       if (outcomeIsUnknown(error)) {
-        // Nothing came back, so the code may or may not have been spent.
-        const found = await appeared().catch(() => null);
-        if (found !== null) {
-          setJoined(found);
-          setCode('');
-          selectBaby(found);
-          return;
+        stillUnsure = true;
+        setUnsure(true);
+        setBefore(was);
+
+        // Try to settle it now rather than leaving somebody looking at a
+        // maybe. If the account cannot be reached either, the doubt is
+        // kept and the next press starts by asking again.
+        try {
+          const fresh = await reload();
+          const found = appeared(fresh, was);
+          if (found !== null) {
+            settle(found);
+            return;
+          }
+          stillUnsure = false;
+          setUnsure(false);
+          setFailure(zhTW.settings.joinFailed);
+        } catch {
+          setFailure(zhTW.settings.joinUnknown);
         }
-        setFailure(zhTW.settings.joinUnknown);
         return;
       }
 
+      // Reaching here means the doubt has already been settled, if there
+      // was one: a press that started in doubt either found the baby and
+      // returned, or could not ask and returned, or read the account
+      // clean -- which is what makes this refusal a fair answer rather
+      // than the same thing a code spent by this very person would say.
+      //
       // A code that never existed, one already used and one that expired
-      // all answer the same way, deliberately: which of the three it was
+      // all answer identically, deliberately: which of the three it was
       // is something only somebody guessing would want to know (spec 6.5).
       setFailure(
         error instanceof ApiFailure && error.status === 404
@@ -111,9 +174,10 @@ export function JoinBaby(): React.JSX.Element {
         aria-label={zhTW.settings.joinPlaceholder}
         placeholder={zhTW.settings.joinPlaceholder}
         value={code}
-        // Frozen once the code has been spent: what is left to do is a
-        // refresh, and retyping anything here cannot help with that.
-        disabled={joined !== null}
+        // Frozen once the code has been spent, or while it may have been:
+        // what is left to do is find out, and retyping anything here
+        // cannot help with that (spec 6.1).
+        disabled={joined !== null || unsure}
         onChange={(e) => { setCode(e.target.value); setFailure(null); }}
         className="mb-2 w-full rounded-xl border border-line bg-surface px-4 py-3.5 font-numeric text-base tracking-wider outline-none focus:border-ink-faint disabled:opacity-60"
       />
@@ -123,7 +187,7 @@ export function JoinBaby(): React.JSX.Element {
       <button
         type="button"
         onClick={() => void submit()}
-        disabled={busy || (joined === null && code.trim() === '')}
+        disabled={busy || (joined === null && !unsure && code.trim() === '')}
         data-testid="join"
         className="min-h-11 w-full rounded-xl border border-line text-sm text-ink-muted disabled:opacity-50"
       >
