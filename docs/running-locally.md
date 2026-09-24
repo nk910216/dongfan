@@ -299,7 +299,7 @@ earlier offline checks could not cover.
 2. `npm run dev:api` rebuilds and serves it.
 3. On the phone, **start filling in a bottle**: type an amount and a note,
    and do not save.
-4. Bring the app to the front, or wait for it to check.
+4. Send the app to the background and bring it back.
    - A strip appears at the top: there is a new version.
    - Nothing has reloaded. The form is exactly as you left it.
 5. Tap the strip.
@@ -309,6 +309,12 @@ earlier offline checks could not cover.
      every time a release lands.
 6. Anything in the queue, and any unconfirmed stop, are also still there —
    they live in IndexedDB, which a reload does not touch.
+
+Backgrounding it is not decoration. **Nothing polls.** The version check
+runs when the app starts, when the browser says it is online again, and on
+`visibilitychange` — there is no timer, because one would wake a phone on a
+bedside table to ask a question nobody is waiting for. So the way to make
+the check happen is to leave the app and come back to it.
 
 Two signals can raise that strip and either is enough: the service worker
 finding new assets, and `GET /api/version` reporting a build the running
