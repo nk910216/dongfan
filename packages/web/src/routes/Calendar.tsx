@@ -230,7 +230,7 @@ export function Calendar(): React.JSX.Element {
             <EmptyDay title={zhTW.calendar.empty} />
           </div>
         ) : null}
-        <Timeline layout={layout} timezone={baby.timezone} nowMinutes={nowMinutes} />
+        <Timeline layout={layout} day={date} timezone={baby.timezone} nowMinutes={nowMinutes} />
       </div>
 
       {/* Adds to the day being looked at, not to today. Carried in the URL

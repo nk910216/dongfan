@@ -7,7 +7,7 @@ import {
 import { EventIcon, EventIconBadge } from '../components/EventIcon.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { useCreateEvent } from '../lib/create-event.js';
-import { askedDay, dayView, daySuffix, startFor } from '../lib/dated-add.js';
+import { addQuery, askedDay, dayView, startFor } from '../lib/dated-add.js';
 import { useStore } from '../lib/store.js';
 
 /**
@@ -25,6 +25,14 @@ export function AddEvent(): React.JSX.Element {
 
   /** The day this add was started from, when it was not today's screen. */
   const day = askedDay(search.toString());
+  /**
+   * The screen it was started from, when that was not the home screen.
+   *
+   * The day alone is not enough: `dayView` names the single-day calendar, so
+   * adding from the two-day view and saving left it. Which day a record is
+   * filed under and which screen somebody is looking at are two questions.
+   */
+  const from = search.get('from');
 
   const diaper = getEventType('diaper');
 
@@ -61,14 +69,14 @@ export function AddEvent(): React.JSX.Element {
     }
     // Back to the screen this was entered from, on the day it was
     // showing -- never to today (spec 7.3).
-    navigate(day === null ? '/' : dayView(day, baby.timezone, Date.now()));
+    navigate(from ?? (day === null ? '/' : dayView(day, baby.timezone, Date.now())));
   };
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <header className="flex shrink-0 items-center border-b border-line-soft px-2 py-2">
         <Link
-          to={day === null ? '/' : `/day/${day}`}
+          to={from ?? (day === null ? '/' : `/day/${day}`)}
           aria-label={zhTW.addEvent.cancel}
           className="flex size-11 items-center justify-center text-ink-muted"
         >
@@ -131,7 +139,7 @@ export function AddEvent(): React.JSX.Element {
                 {types.map((type) => (
                   <Link
                     key={type.id}
-                    to={`/add/${type.id}${daySuffix(day)}`}
+                    to={`/add/${type.id}${addQuery(day, from)}`}
                     className="flex flex-col items-center gap-1.5"
                   >
                     <span

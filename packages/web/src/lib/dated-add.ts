@@ -15,9 +15,18 @@ export function askedDay(search: string): string | null {
   return on !== null && isRealLocalDate(on) ? on : null;
 }
 
-/** `?on=2026-09-18`, or nothing at all. Built in one place so it matches. */
-export function daySuffix(day: string | null, separator = '?'): string {
-  return day === null ? '' : `${separator}on=${day}`;
+/**
+ * The query an add carries: the day it is for, and where it came from.
+ *
+ * Both or neither travel together, because losing the second is what sent
+ * somebody adding from the two-day view back to the single-day one. Built in
+ * one place so every link in the chain writes the same thing.
+ */
+export function addQuery(day: string | null, from: string | null): string {
+  const parts: string[] = [];
+  if (day !== null) parts.push(`on=${day}`);
+  if (from !== null) parts.push(`from=${encodeURIComponent(from)}`);
+  return parts.length === 0 ? '' : `?${parts.join('&')}`;
 }
 
 /**

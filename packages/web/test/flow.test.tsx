@@ -1753,6 +1753,109 @@ describe('two days at once', () => {
       .toHaveAttribute('aria-current', 'page');
   });
 
+  it('comes back to the two days after a shortcut add', async () => {
+    // The nappy shortcut is the fastest path in the app and the easiest one
+    // to drop somebody out of the screen they were on.
+    const later = daysAgo(2);
+    const user = openSignedIn(`/two/${later}`);
+
+    await user.click(await screen.findByRole('link', { name: zhTW.a11y.addEvent }));
+    await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') }));
+
+    expect(await screen.findByTestId('column-later')).toHaveTextContent(later);
+    expect(screen.getByTestId('column-earlier')).toHaveTextContent(daysAgo(3));
+  });
+
+  it('comes back to the two days after the form is saved', async () => {
+    const later = daysAgo(2);
+    const user = openSignedIn(`/two/${later}`);
+
+    await user.click(await screen.findByRole('link', { name: zhTW.a11y.addEvent }));
+    await user.click(await screen.findByRole('link', { name: eventTypeName('bottle') }));
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+
+    expect(await screen.findByTestId('column-later')).toHaveTextContent(later);
+  });
+
+  it('comes back to the two days when the add is given up on', async () => {
+    const later = daysAgo(2);
+    const user = openSignedIn(`/two/${later}`);
+
+    await user.click(await screen.findByRole('link', { name: zhTW.a11y.addEvent }));
+    await screen.findByTestId('adding-on');
+    await user.click(screen.getByLabelText(zhTW.addEvent.cancel));
+
+    expect(await screen.findByTestId('column-later')).toHaveTextContent(later);
+  });
+
+  it('keeps the single-day screen and the home screen as they were', async () => {
+    // Nothing said otherwise on those, so nothing changes for them.
+    const day = daysAgo(2);
+    const user = openSignedIn(`/day/${day}`);
+
+    await user.click(await screen.findByRole('link', { name: zhTW.a11y.addEvent }));
+    await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') }));
+
+    expect(await screen.findByTestId('calendar-date')).toHaveValue(day);
+    expect(screen.queryByTestId('column-later')).not.toBeInTheDocument();
+
+    closeApp();
+    const again = openSignedIn();
+    await waitForHome();
+    await again.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await again.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'pee') }));
+
+    await waitForHome();
+    expect(screen.queryByTestId('calendar-date')).not.toBeInTheDocument();
+  });
+
+  it('opens one day’s crowded stretch without opening the other’s', async () => {
+    // Both columns have a 09:00. Keyed on the minute alone, pressing one
+    // opened both and closing either closed both.
+    const later = daysAgo(2);
+    const earlier = daysAgo(3);
+    for (const [day, type] of [[earlier, 'bottle'], [later, 'diaper']] as const) {
+      for (let i = 0; i < 4; i += 1) {
+        api.add({ typeId: type, startedAt: onDay(day, 9, i), value: 100 + i });
+      }
+    }
+
+    const user = openSignedIn(`/two/${later}`);
+    await waitFor(() => expect(screen.getAllByTestId('crowded')).toHaveLength(2));
+
+    await user.click(screen.getAllByTestId('crowded')[0] as HTMLElement);
+
+    // One opened, one still shut.
+    expect(screen.getAllByTestId('crowded-open')).toHaveLength(1);
+    expect(screen.getAllByTestId('crowded')).toHaveLength(1);
+    // And it is the left column's, which holds the bottles.
+    expect(screen.getAllByTestId('slot-bottle')).toHaveLength(4);
+    expect(screen.queryByTestId('slot-diaper')).not.toBeInTheDocument();
+  });
+
+  it('reopens the right column’s stretch after going into one of its records', async () => {
+    const later = daysAgo(2);
+    const earlier = daysAgo(3);
+    for (const [day, type] of [[earlier, 'bottle'], [later, 'diaper']] as const) {
+      for (let i = 0; i < 4; i += 1) {
+        api.add({ typeId: type, startedAt: onDay(day, 9, i), value: 100 + i });
+      }
+    }
+
+    const user = openSignedIn(`/two/${later}`);
+    await waitFor(() => expect(screen.getAllByTestId('crowded')).toHaveLength(2));
+
+    await user.click(screen.getAllByTestId('crowded')[1] as HTMLElement);
+    await user.click(screen.getAllByTestId('slot-diaper')[0] as HTMLElement);
+    await screen.findByTestId('submit');
+    await user.click(screen.getByLabelText(zhTW.addEvent.cancel));
+
+    await screen.findByTestId('crowded-open');
+    expect(screen.getAllByTestId('slot-diaper')).toHaveLength(4);
+    expect(screen.queryByTestId('slot-bottle')).not.toBeInTheDocument();
+  });
+
   it('files a new record under the later day', async () => {
     const later = daysAgo(2);
     const user = openSignedIn(`/two/${later}`);

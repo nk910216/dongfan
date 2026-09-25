@@ -9,7 +9,7 @@ import type { EventDraft } from '../components/EventFields.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { useCreateEvent } from '../lib/create-event.js';
 import type { SubmitResult } from '../lib/create-event.js';
-import { askedDay, dayView, daySuffix, startFor } from '../lib/dated-add.js';
+import { addQuery, askedDay, dayView, startFor } from '../lib/dated-add.js';
 import { linkBack, useReturnTo } from '../lib/return-to.js';
 import { clearForm, formKey, readForm, saveForm } from '../lib/form-draft.js';
 import { typeSummary, useStore } from '../lib/store.js';
@@ -55,6 +55,14 @@ export function EventForm({ typeId: given, entryId }: {
    * list to do -- put them back on the home screen, on today.
    */
   const back = useReturnTo();
+  /**
+   * Where this add came from, when it came from a calendar.
+   *
+   * `dayView` names the single-day screen, so it is the right answer only
+   * when nothing said otherwise: adding from the two-day view and saving
+   * used to leave it.
+   */
+  const from = search.get('from');
 
   // Where what is being typed is kept, so that a reload does not throw it
   // away. Named by the account, the type, and which entry it is correcting,
@@ -148,7 +156,7 @@ export function EventForm({ typeId: given, entryId }: {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 px-6">
         <p className="text-sm text-ink-muted">{zhTW.eventType.unknown}</p>
-        <Link to={entryId === undefined ? `/add${daySuffix(day)}` : back} className="text-sm text-accent">
+        <Link to={entryId === undefined ? `/add${addQuery(day, from)}` : back} className="text-sm text-accent">
           {zhTW.addEvent.cancel}
         </Link>
       </div>
@@ -182,7 +190,7 @@ export function EventForm({ typeId: given, entryId }: {
     // finally entered. Spec 7.3 is explicit: not today. A correction has no
     // day of its own -- it carries whatever the queue holds -- so it goes
     // back to wherever it was opened from.
-    navigate(day === null ? back : dayView(day, baby.timezone, Date.now()));
+    navigate(from ?? (day === null ? back : dayView(day, baby.timezone, Date.now())));
   };
 
   const submit = async (): Promise<void> => {
@@ -231,7 +239,7 @@ export function EventForm({ typeId: given, entryId }: {
             to where the list was opened from, because there is no type to
             pick again. */}
         <Link
-          to={entryId === undefined ? `/add${daySuffix(day)}` : back}
+          to={entryId === undefined ? `/add${addQuery(day, from)}` : back}
           aria-label={zhTW.addEvent.cancel}
           className="flex size-11 items-center justify-center text-ink-muted"
         >

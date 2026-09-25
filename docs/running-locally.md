@@ -396,6 +396,23 @@ it at arm's length with the lights off.
 15. Turn the network off entirely and reopen the day. The events already on
     the device are still drawn; the timeline asks the server for nothing.
 
+### Two days at once
+
+The two-day view is the same timeline drawn twice (spec 7.6). The things
+worth checking are the ones a shared component cannot promise:
+
+20. Both columns are on **one** set of hour labels, and 09:00 in the left
+    column is level with 09:00 in the right. The older day is on the left.
+21. At half the width, a card still shows its type, its time and its figure,
+    and can still be pressed. This is the case the single-day view never has
+    to survive, and nothing about sharing the component proves it.
+22. A night from 23:00 to 07:00 ends the left column and begins the right
+    one. Tapping either half opens the same record.
+23. Where both days are busy at the same hour, each column's entry opens
+    **only its own**, and going into a record and back reopens the right one.
+24. Adding from here — the shortcut, the form, and cancelling — comes back to
+    the two days, not to the single-day view.
+
 ### The rest of the page
 
 16. The date picker, back to today, the manual sync line and the add button

@@ -157,6 +157,19 @@ reads in, beginning on the left and ending on the right. Each column has its
 own all-day band, because an all-day record belongs to one of the days rather
 than to the pair.
 
+**A crowded stretch is named by its day as well as its minute.** Both columns
+have a 09:00; keyed on the minute alone, opening one opened the other and
+closing either closed both.
+
+**Adding from here carries where it came from.** The day a record is filed
+under and the screen somebody is looking at are two questions, and only the
+first travelled: `dayView` names the single-day calendar, so the nappy
+shortcut, saving the form and cancelling the type picker all left the two-day
+view. `addQuery` writes both, and every link in the chain uses it. The home
+screen and the single-day calendar say nothing, so nothing changes for them --
+which has a test, so the chain cannot be "fixed" by sending everything to the
+same place.
+
 `Timeline.tsx` was split for it. A day's cards live in a `DayBand` positioned
 by whoever is drawing it, and their geometry is percentages **of that band**;
 the hour labels' strip belongs to the band's offset, not to each card. The

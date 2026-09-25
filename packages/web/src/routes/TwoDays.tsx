@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import {
   addLocalDays, isRealLocalDate, startOfLocalDay, toLocalDate, zhTW,
@@ -9,6 +9,7 @@ import { PageMenu } from '../components/PageMenu.js';
 import { SyncState } from '../components/SyncState.js';
 import { DEFAULT_METRICS, MINUTES_IN_DAY, itemsFor, layOut, openingMinute } from '../lib/timeline.js';
 import type { DayLayout } from '../lib/timeline.js';
+import { addQuery } from '../lib/dated-add.js';
 import { useDay, useDayScroll } from './Calendar.js';
 import { useStore } from '../lib/store.js';
 
@@ -30,6 +31,7 @@ export function TwoDays(): React.JSX.Element {
   const { baby, now, unsynced, stopDrafts } = useStore();
   const params = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const today = toLocalDate(now, baby.timezone);
   const asked = params['date'];
@@ -146,6 +148,7 @@ export function TwoDays(): React.JSX.Element {
 
           <DayBand
             layout={left}
+            day={earlier}
             timezone={baby.timezone}
             metrics={DEFAULT_METRICS}
             nowMinutes={null}
@@ -153,6 +156,7 @@ export function TwoDays(): React.JSX.Element {
           />
           <DayBand
             layout={right}
+            day={date}
             timezone={baby.timezone}
             metrics={DEFAULT_METRICS}
             nowMinutes={nowMinutes}
@@ -162,9 +166,11 @@ export function TwoDays(): React.JSX.Element {
       </div>
 
       {/* Files under the later day, which is the one the date control names
-          and the one somebody is most likely adding to (spec 7.3). */}
+          and the one somebody is most likely adding to (spec 7.3) -- and says
+          where it came from, so saving comes back here rather than to the
+          single-day view. */}
       <Link
-        to={`/add?on=${date}`}
+        to={`/add${addQuery(date, `${location.pathname}${location.search}`)}`}
         aria-label={zhTW.a11y.addEvent}
         className="absolute right-4.5 bottom-6 flex size-15 items-center justify-center rounded-full bg-accent shadow-lg shadow-black/50"
       >

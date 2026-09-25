@@ -163,17 +163,23 @@ function Card({ item, timezone, metrics, style }: {
  * component and lost it, so the list a parent had just opened collapsed
  * under them; in the URL it survives that, and a reload as well.
  */
-const ClusterBody = memo(function ClusterBody({ cluster, timezone, metrics }: {
+const ClusterBody = memo(function ClusterBody({ cluster, day, timezone, metrics }: {
   cluster: Cluster;
+  /** The date this band is for. Part of what identifies the stretch. */
+  day: string;
   timezone: string;
   metrics: Metrics;
 }): React.JSX.Element {
   const [search, setSearch] = useSearchParams();
-  const open = search.get('open') === String(cluster.fromMin);
+  // The day is in the name, not only the minute. Two columns showing two
+  // days both have a 09:00, and keyed on the minute alone opening one opened
+  // the other and closing either closed both (spec 7.6).
+  const id = `${day}@${cluster.fromMin}`;
+  const open = search.get('open') === id;
 
   const setOpen = (wanted: boolean): void => {
     const next = new URLSearchParams(search);
-    if (wanted) next.set('open', String(cluster.fromMin));
+    if (wanted) next.set('open', id);
     else next.delete('open');
     // Replaced, not pushed: opening a list is not a place to go back to.
     setSearch(next, { replace: true });
@@ -267,8 +273,10 @@ const ClusterBody = memo(function ClusterBody({ cluster, timezone, metrics }: {
  * days sit beside each other on **the same hour scale**, which is the whole
  * point of showing two (spec 7.6).
  */
-export function DayBand({ layout, timezone, metrics, nowMinutes, style }: {
+export function DayBand({ layout, day, timezone, metrics, nowMinutes, style }: {
   layout: DayLayout;
+  /** The date this band shows, which names its stretches apart. */
+  day: string;
   timezone: string;
   metrics: Metrics;
   /** Minutes into this column's day, or null when it is not today. */
@@ -278,7 +286,13 @@ export function DayBand({ layout, timezone, metrics, nowMinutes, style }: {
   return (
     <div className="absolute top-0 bottom-0" style={style}>
       {layout.clusters.map((cluster) => (
-        <ClusterBody key={cluster.key} cluster={cluster} timezone={timezone} metrics={metrics} />
+        <ClusterBody
+          key={cluster.key}
+          cluster={cluster}
+          day={day}
+          timezone={timezone}
+          metrics={metrics}
+        />
       ))}
 
       {/* Only on today, and from the baby's clock rather than the
@@ -341,8 +355,9 @@ export const Hours = memo(function Hours({ metrics }: { metrics: Metrics }): Rea
   );
 });
 
-export function Timeline({ layout, timezone, nowMinutes, metrics = DEFAULT_METRICS }: {
+export function Timeline({ layout, day, timezone, nowMinutes, metrics = DEFAULT_METRICS }: {
   layout: DayLayout;
+  day: string;
   timezone: string;
   /** Minutes into this day, or null when the day is not today. */
   nowMinutes: number | null;
@@ -365,6 +380,7 @@ export function Timeline({ layout, timezone, nowMinutes, metrics = DEFAULT_METRI
         <Hours metrics={metrics} />
         <DayBand
           layout={layout}
+          day={day}
           timezone={timezone}
           metrics={metrics}
           nowMinutes={nowMinutes}
