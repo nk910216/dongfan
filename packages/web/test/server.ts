@@ -1,6 +1,6 @@
 import { HttpResponse, http } from 'msw';
 import { setupServer } from 'msw/node';
-import { APP_VERSION, getEventType, toLocalDate } from '@dongfan/shared';
+import { APP_VERSION, addLocalDays, getEventType, toLocalDate } from '@dongfan/shared';
 import type {
   BabyDto, EventDto, MeDto, SummaryDto, TypeSummaryDto,
 } from '@dongfan/shared';
@@ -34,7 +34,13 @@ const ME: { user: MeDto['user']; babies: MeDto['babies'] } = { user: { id: 'user
 
 type Failure = { status: number; code: string; fields?: { field: string; code: string; params: Record<string, unknown> }[] };
 
-type Recorded = { method: string; path: string; body: unknown };
+type Recorded = {
+  method: string;
+  path: string;
+  /** Kept apart from the path, so assertions on either stay readable. */
+  query: URLSearchParams;
+  body: unknown;
+};
 
 class Api {
   events: EventDto[] = [];
@@ -47,6 +53,16 @@ class Api {
    */
   loseNextResponse = false;
   loginFails = false;
+  /** Makes the statistics endpoint refuse, for the failure state. */
+  failStats = false;
+  /**
+   * What the statistics endpoint reports for a date.
+   *
+   * Set by the tests rather than derived from `events`: the aggregation is
+   * proved against a real database in the API suite, and deriving it here
+   * would mean the screen tests were checking this file's arithmetic.
+   */
+  statsValues: Record<string, number> = {};
   /** Holds the next write until a test lets it go (see `holdNextWrite`). */
   private gate: Promise<void> | null = null;
   /** Holds the next pull of the sync feed (see `holdNextSync`). */
@@ -189,6 +205,8 @@ class Api {
     this.requests = [];
     this.nextFailure = null;
     this.loseNextResponse = false;
+    this.failStats = false;
+    this.statsValues = {};
     this.loginFails = false;
     this.gate = null;
     this.syncGate = null;
@@ -239,6 +257,13 @@ class Api {
     return [...this.requests]
       .reverse()
       .find((entry) => entry.method !== 'GET' && entry.path.includes(fragment));
+  }
+
+  /** The same for reads, which is what a chart makes. */
+  lastGet(fragment: string): Recorded | undefined {
+    return [...this.requests]
+      .reverse()
+      .find((entry) => entry.method === 'GET' && entry.path.includes(fragment));
   }
 
   summary(): SummaryDto {
@@ -309,7 +334,7 @@ function pending(): Failure | null {
 async function record(request: Request): Promise<unknown> {
   const url = new URL(request.url);
   const body = request.method === 'GET' ? null : await request.clone().json().catch(() => null);
-  api.requests.push({ method: request.method, path: url.pathname, body });
+  api.requests.push({ method: request.method, path: url.pathname, query: url.searchParams, body });
   return body;
 }
 
@@ -450,6 +475,48 @@ export const server = setupServer(
     const allDay = events.filter((event) => getEventType(event.typeId)?.allDay === true);
     const timed = events.filter((event) => !allDay.includes(event)).sort((a, b) => b.startedAt - a.startedAt);
     return HttpResponse.json({ date, events: [...allDay, ...timed] });
+  }),
+
+  /**
+   * The statistics endpoint, answering what was asked for.
+   *
+   * Deliberately thin: the aggregation is tested against a real D1 in the
+   * API suite, and re-implementing it here would test this file. What the
+   * screen tests need is the shape of the contract -- one point per day,
+   * integers in stored units, the aggregation named -- and the query
+   * actually reaching the server.
+   */
+  http.get('/api/babies/:babyId/stats', async ({ request }) => {
+    await record(request);
+    const url = new URL(request.url);
+    const from = String(url.searchParams.get('from'));
+    const to = String(url.searchParams.get('to'));
+    const types = String(url.searchParams.get('types')).split(',').filter((t) => t !== '');
+
+    if (api.failStats) return new HttpResponse(null, { status: 500 });
+
+    return HttpResponse.json({
+      from,
+      to,
+      series: types.map((typeId) => {
+        const type = getEventType(typeId);
+        const aggregation = type?.aggregation ?? 'count';
+        const filled = ['count', 'sum', 'duration_sum'].includes(aggregation);
+
+        const points: { date: string; value: number }[] = [];
+        for (let date = from; date <= to; date = addLocalDays(date, 1)) {
+          const value = api.statsValues[date] ?? 0;
+          if (filled || value > 0) points.push({ date, value });
+        }
+
+        return {
+          typeId,
+          aggregation,
+          unit: aggregation === 'duration_sum' ? 'min' : type?.value?.unit ?? null,
+          points,
+        };
+      }),
+    });
   }),
 
   http.post('/api/babies/:babyId/events', async ({ request }) => {

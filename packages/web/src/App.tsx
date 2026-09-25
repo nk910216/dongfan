@@ -12,6 +12,7 @@ import { EventForm } from './routes/EventForm.js';
 import { Home } from './routes/Home.js';
 import { Login } from './routes/Login.js';
 import { Settings } from './routes/Settings.js';
+import { Stats } from './routes/Stats.js';
 import { ConfirmStop } from './routes/ConfirmStop.js';
 import { CorrectUnsynced, Unsynced } from './routes/Unsynced.js';
 
@@ -69,6 +70,7 @@ function Shell(): React.JSX.Element {
         <Route path="/add/:typeId" element={<EventForm />} />
         <Route path="/event/:eventId" element={<EditEvent />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/stats" element={<Stats />} />
         <Route path="/stop/:eventId" element={<ConfirmStop />} />
         <Route path="/unsynced" element={<Unsynced />} />
         <Route path="/unsynced/:eventId" element={<CorrectUnsynced />} />

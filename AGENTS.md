@@ -111,7 +111,7 @@ is a year of data to point it at.
 | 2 | The single-day calendar screen: date picker, back to today, the FAB, writing something up afterwards | **done** |
 | 3 | A year of synthetic data in its own database, the D1 query-count guardrail (spec 11.2), and `GET /stats` for `count`/`sum`/`last`/`max`/`avg` | **done** |
 | 4 | `duration_sum`: the midnight split in SQL, `UNION ALL`, excluding running timers | **done** |
-| 5 | The stats screen: type, range, chart kind, axis density, the two warnings | |
+| 5 | The stats screen: type, range, chart kind, axis density, the two warnings | **done** |
 | 6 | The M3 measurement (see below) | |
 
 ### A day's calendar is not a day's list
@@ -255,10 +255,14 @@ breaking it would have its whole tail attributed to the following day.
 The boundary is the start of the day after the one the event is filed under.
 SQLite's `unixepoch` gives UTC midnight of a date and the baby's offset turns
 that into a local one, so one bound number does the whole range.
-`offsetFor` refuses to guess when the zone's offset is not the same at both
-ends of the range — unreachable while `SUPPORTED_TIMEZONES` holds one
-fixed-offset zone, and there so that adding a zone with daylight saving fails
-loudly instead of quietly losing an hour twice a year.
+`offsetFor` is an **allow-list, not a detection**: it serves the zones
+spec 5.3 declares fixed-offset — `Asia/Taipei` alone in v1 — and refuses
+anything else. An earlier version compared the offset at the two ends of the
+range instead, which looks like a safety net and is not one: a range from
+June to June spans two transitions and has the same offset at each end, so it
+would pass while every night on two days of the year was split an hour out.
+Nothing reaches the refusal today, since a baby's timezone is validated
+against the same list, and it promises nothing about detecting a transition.
 
 **The lower bound is a day earlier than asked for** (spec 3.4.1 rule 2), and
 the segments are filtered back to the range *after* the split. Without it,
@@ -372,6 +376,44 @@ thrown away, so the year-scale test seeds its own rows directly into the
 table; going through the API would mean thousands of POSTs and would hit the
 500-a-day circuit breaker (spec 5.7), which is about runaway loops and not
 about a year of history.
+
+### The statistics screen
+
+Every figure on it comes from `GET /stats`. **Nothing is aggregated in the
+browser**, and the reason is not tidiness: a year is thousands of events, the
+device holds only what it has synced, so a chart built locally would be short
+by whatever has not arrived while looking complete — and would disagree with
+the same chart on the other parent's phone (spec 5.6, 6.2).
+
+Which means this screen needs a connection, and says so when it has none.
+Failing to ask is not the same as nothing having happened, so a failure shows
+a message rather than an empty chart: an empty chart is a claim.
+
+Two things spec 7.7 asks for out loud, and both are easy to leave out because
+the screen looks finished without them:
+
+- **"Finished records only"**, on any type with a range. A timer still running
+  has no length yet (spec 3.4.1 rule 3), so today is short for a reason
+  nobody can see.
+- **What is still on this phone.** The figures are the server's, so a queued
+  record is missing from them. Saying so is the difference between a chart
+  that is behind and one that is wrong.
+
+A total is offered only where adding up means something — `count`, `sum`,
+`duration_sum`. Summing weighings reports a toddler at twenty-one kilos.
+
+The range arithmetic lives in `lib/stats-range.ts`, away from the screen,
+because it is all off-by-one-day work: a week is seven days and not eight, a
+month range ends the day before the next month starts, and a month from the
+31st ends in February rather than reaching into March (`addLocalMonths`
+clamps). A test checks that no range the screen can select exceeds the 366
+days the endpoint will answer, so no control is a dead one.
+
+The chart is hand-drawn SVG. A charting library is a large thing to precache
+for a phone that has to start with no connection at all (spec 6.2), and two
+kinds of chart over at most 366 points is a few dozen lines of geometry.
+Points the server left out are a gap the line joins across, which is exactly
+what the no-zero-filling rule asks for.
 
 ### Two things spec.md is not consistent about
 
@@ -698,6 +740,14 @@ repository that passed for the wrong reason: an assertion written the wrong
 way round, an event fired before the listener existed, a "did not happen"
 assertion that released its gate before the thing had a chance to happen.
 All three looked fine and all three were worthless.
+
+**A "did not happen" assertion needs something positive waited for first.**
+`await waitFor(() => expect(queryBy(...)).not.toBeInTheDocument())` passes on
+its first attempt, before the thing it is about has had a chance to render.
+Three tests on the statistics screen passed that way — offering totals for
+every aggregation and claiming "finished records only" for everything both
+survived being broken. Wait for the new state to be on screen, then assert
+the absence.
 
 **A mutation that did not reach the running code proves nothing.** The API
 suite resolves `@dongfan/shared` from `dist`, not from source, so breaking

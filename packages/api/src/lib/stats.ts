@@ -1,4 +1,6 @@
-import { addLocalDays, getEventType, msToMinutes, startOfLocalDay } from '@dongfan/shared';
+import {
+  SUPPORTED_TIMEZONES, addLocalDays, getEventType, msToMinutes, startOfLocalDay,
+} from '@dongfan/shared';
 import type { Aggregation, StatSeriesDto } from '@dongfan/shared';
 
 /**
@@ -159,32 +161,35 @@ SELECT type_id AS typeId, date, CAST(SUM(ms) AS INTEGER) AS ms
 type DurationRow = { typeId: string; date: string; ms: number };
 
 /**
- * The baby's offset from UTC, in milliseconds, for this range.
+ * The baby's offset from UTC, in milliseconds.
  *
- * The SQL above needs one number to turn a UTC midnight into a local one,
- * which only exists if the offset does not change inside the range. v1
- * supports `Asia/Taipei` alone and it has no daylight saving (spec 5.3), so
- * this never refuses today.
+ * The SQL above turns a UTC midnight into a local one with a single number,
+ * which is only sound for a zone whose offset never changes. So this is an
+ * **allow-list**, not a detection: it serves the zones the project has
+ * declared fixed-offset (spec 5.3 — `Asia/Taipei` alone in v1, which has no
+ * daylight saving) and refuses everything else.
  *
- * It is here so that the day somebody adds a zone with daylight saving, the
- * split fails loudly instead of quietly losing or inventing an hour on two
- * days a year. Unreachable as things stand, and said plainly rather than
- * dressed up as a tested branch.
+ * Deliberately not "check the offset at both ends of the range and compare".
+ * That looks like a safety net and is not one: a range from June to June
+ * spans two transitions and has the same offset at each end, so it would
+ * pass while every night on two days of the year was split an hour out.
+ *
+ * Nothing reaches the refusal today: the timezone on a baby is validated
+ * against the same list when the record is written. It is here so that
+ * adding a zone means dealing with this query rather than discovering it
+ * later, and it makes no promise about detecting anything.
  */
-export function offsetFor(timeZone: string, from: string, to: string): number {
-  const offsetAt = (date: string): number => {
-    const [y, m, d] = date.split('-').map(Number);
-    return Date.UTC(y as number, (m as number) - 1, d as number) - startOfLocalDay(date, timeZone);
-  };
-
-  const at = offsetAt(from);
-  if (at !== offsetAt(to)) {
+export function offsetFor(timeZone: string, date: string): number {
+  if (!SUPPORTED_TIMEZONES.includes(timeZone as (typeof SUPPORTED_TIMEZONES)[number])) {
     throw new Error(
-      `${timeZone} changes offset between ${from} and ${to}; `
-      + 'the duration split cannot be done with a single offset',
+      `${timeZone} is not a zone this query can be used with. The midnight `
+      + 'split binds one UTC offset for the whole range, which is only correct '
+      + 'where the offset never changes (spec 5.3).',
     );
   }
-  return at;
+
+  const [y, m, d] = date.split('-').map(Number);
+  return Date.UTC(y as number, (m as number) - 1, d as number) - startOfLocalDay(date, timeZone);
 }
 
 type DirectRow = { typeId: string; date: string; n: number; total: number; high: number; mean: number };
@@ -292,7 +297,7 @@ export async function statsFor(
     const { results } = await db
       .prepare(DURATION_SQL(placeholdersFor(spans.length)))
       .bind(
-        offsetFor(timeZone, from, to),
+        offsetFor(timeZone, from),
         babyId,
         ...spans,
         // One day earlier than asked for, because last night's sleep is

@@ -4,7 +4,8 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { HttpResponse, http } from 'msw';
 import {
-  addLocalDays, eventTypeName, fromLocalInput, interpolate, metadataLabel, metadataOptionLabel,
+  addLocalDays, addLocalMonths, eventTypeName, fromLocalInput, interpolate, metadataLabel,
+  metadataOptionLabel,
   startOfLocalDay, toLocalDate, toLocalInput, toStored, valueLabel, zhTW,
 } from '@dongfan/shared';
 import { App } from '../src/App.js';
@@ -1331,6 +1332,185 @@ describe('writing something up afterwards', () => {
 
     openSignedIn(`/add/bottle?on=${monday}`);
     expect(await screen.findByDisplayValue('150')).toBeInTheDocument();
+  });
+});
+
+describe('looking back at a trend', () => {
+  const today = (): string => toLocalDate(Date.now(), BABY.timezone);
+  const daysAgo = (days: number): string => addLocalDays(today(), -days);
+
+  async function openStats(): Promise<ReturnType<typeof userEvent.setup>> {
+    const user = openSignedIn('/stats');
+    await screen.findByLabelText(zhTW.stats.type);
+    return user;
+  }
+
+  it('asks the server for the figures rather than adding up what is on the device', async () => {
+    // The whole point of spec 5.6. A year is thousands of events and the
+    // device holds only what it has synced, so a chart built here would be
+    // short by whatever has not arrived -- while looking complete.
+    api.add({ typeId: 'bottle', value: 120, startedAt: earlierToday(HOUR) });
+    await openStats();
+
+    await waitFor(() => expect(api.lastGet('/stats')).toBeDefined());
+    const asked = api.lastGet('/stats')?.query;
+    expect(asked?.get('types')).toBe('bottle');
+    expect(asked?.get('from')).toBe(daysAgo(6));
+    expect(asked?.get('to')).toBe(today());
+  });
+
+  it('opens on a week ending today, and moves the whole window with the range', async () => {
+    const user = await openStats();
+
+    await user.click(screen.getByTestId('range-year'));
+
+    await waitFor(() => {
+      const asked = api.lastGet('/stats')?.query;
+      expect(asked?.get('to')).toBe(today());
+      expect(asked?.get('from')).toBe(addLocalDays(addLocalMonths(today(), -12), 1));
+    });
+  });
+
+  it('asks again when the start date is moved, keeping the range', async () => {
+    await openStats();
+
+    fireEvent.change(screen.getByTestId('stats-start'), { target: { value: '2026-03-02' } });
+
+    await waitFor(() => {
+      const asked = api.lastGet('/stats')?.query;
+      expect(asked?.get('from')).toBe('2026-03-02');
+      expect(asked?.get('to')).toBe('2026-03-08');
+    });
+  });
+
+  it('draws what came back, as bars or as a line', async () => {
+    api.statsValues = { [daysAgo(1)]: 300, [today()]: 420 };
+    const user = await openStats();
+
+    // Seven points for a week, whatever the figures are: the zeros are the
+    // server saying those days really had none (spec 7.7).
+    await waitFor(() => expect(screen.getByTestId('chart-bar')).toHaveAttribute('aria-label', '7'));
+
+    await user.click(screen.getByTestId('kind-line'));
+    expect(await screen.findByTestId('chart-line')).toBeInTheDocument();
+    expect(screen.queryByTestId('chart-bar')).not.toBeInTheDocument();
+  });
+
+  it('shows the figures in the type’s own units, not as stored integers', async () => {
+    // 420 is stored millilitres and reads as 420ml; for a duration the same
+    // integer is minutes and reads as seven hours (spec 5.3).
+    api.statsValues = { [today()]: 420 };
+    await openStats();
+
+    await waitFor(() => expect(screen.getByTestId('stats-totals')).toHaveTextContent('420ml'));
+
+    fireEvent.change(screen.getByTestId('stats-type'), { target: { value: 'sleep' } });
+    await waitFor(() =>
+      expect(screen.getByTestId('stats-totals'))
+        .toHaveTextContent(interpolate(zhTW.stats.hoursMinutes, { hours: 7, minutes: 0 })));
+  });
+
+  it('does not offer a total for a weight, which would be meaningless', async () => {
+    // Adding up three weighings reports a toddler at twenty-one kilos.
+    api.statsValues = { [today()]: 7200 };
+    await openStats();
+    await waitFor(() => expect(screen.getByTestId('stats-totals')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('stats-type'), { target: { value: 'weight' } });
+
+    // Waited for on something positive first. Asserting the absence
+    // straight away passes before the new series has even arrived, which
+    // is how the first version of this test passed while totals were
+    // offered for every aggregation.
+    await waitFor(() =>
+      expect(screen.getByTestId('chart-bar')).toHaveAttribute('aria-label', '1'));
+    expect(screen.queryByTestId('stats-totals')).not.toBeInTheDocument();
+  });
+
+  it('says it counts finished records only, where that can be short', async () => {
+    await openStats();
+    fireEvent.change(screen.getByTestId('stats-type'), { target: { value: 'sleep' } });
+
+    // Spec 7.7 asks for this out loud: a timer still running has no length
+    // yet, so today looks short for a reason nobody can see.
+    expect(await screen.findByTestId('finished-only')).toHaveTextContent(zhTW.stats.finishedOnly);
+  });
+
+  it('does not claim that of a type that has no duration at all', async () => {
+    api.statsValues = { [today()]: 3 };
+    await openStats();
+    fireEvent.change(screen.getByTestId('stats-type'), { target: { value: 'diaper' } });
+
+    // The chart for the new type first, then the absence. The other way
+    // round the assertion is made before anything has rendered and passes
+    // whatever the screen would have said.
+    await waitFor(() =>
+      expect(screen.getByTestId('stats-totals')).toHaveTextContent(
+        interpolate(zhTW.stats.times, { count: 3 })));
+    expect(screen.queryByTestId('finished-only')).not.toBeInTheDocument();
+  });
+
+  it('says when records on this phone are missing from the figures', async () => {
+    // The figures are the server's, so anything still queued is not in
+    // them. Saying so is the difference between a chart that is behind and
+    // a chart that is wrong (spec 6.2, 7.7).
+    //
+    // Recorded with the writes failing but the reads working, which is the
+    // situation this notice exists for: the entry is stuck on the device
+    // while the chart loads perfectly well.
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') }));
+    await screen.findByTestId('unsynced-count');
+
+    await user.click(screen.getByTestId('open-menu'));
+    await user.click(screen.getByRole('link', { name: zhTW.nav.stats }));
+    await screen.findByLabelText(zhTW.stats.type);
+
+    expect(await screen.findByTestId('stats-unsynced'))
+      .toHaveTextContent(interpolate(zhTW.stats.unsynced, { count: 1 }));
+  });
+
+  it('says it could not read them rather than drawing an empty chart', async () => {
+    // An empty chart is a claim: nothing happened. Failing to ask is not
+    // the same thing.
+    api.failStats = true;
+    await openStats();
+
+    expect(await screen.findByTestId('stats-failed')).toBeInTheDocument();
+    expect(screen.queryByTestId('chart-bar')).not.toBeInTheDocument();
+  });
+
+  it('stops showing a chart once a later range could not be read', async () => {
+    api.statsValues = { [today()]: 120 };
+    const user = await openStats();
+    await waitFor(() => expect(screen.getByTestId('stats-totals')).toBeInTheDocument());
+
+    api.failStats = true;
+    await user.click(screen.getByTestId('range-month'));
+
+    expect(await screen.findByTestId('stats-failed')).toBeInTheDocument();
+    expect(screen.queryByTestId('stats-totals')).not.toBeInTheDocument();
+  });
+
+  it('says a stretch with nothing in it is empty, for a type that has no zeros', async () => {
+    await openStats();
+    fireEvent.change(screen.getByTestId('stats-type'), { target: { value: 'weight' } });
+
+    expect(await screen.findByTestId('stats-empty')).toHaveTextContent(zhTW.stats.empty);
+  });
+
+  it('is reachable from the page list', async () => {
+    const user = openSignedIn();
+    await waitForHome();
+
+    await user.click(screen.getByTestId('open-menu'));
+    await user.click(screen.getByRole('link', { name: zhTW.nav.stats }));
+
+    expect(await screen.findByLabelText(zhTW.stats.type)).toBeInTheDocument();
   });
 });
 

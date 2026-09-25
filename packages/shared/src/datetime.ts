@@ -118,6 +118,28 @@ export function addLocalDays(date: LocalDate, days: number): LocalDate {
 }
 
 /**
+ * Shifts a local date by whole months, clamped to the month's last day.
+ *
+ * 31 January plus one month is 28 February, not 3 March. `Date.UTC` rolls
+ * over instead, which for a statistics range means a month view that
+ * silently includes two or three days of the next one.
+ */
+export function addLocalMonths(date: LocalDate, months: number): LocalDate {
+  const { year, month, day } = parseLocalDate(date);
+  const target = new Date(Date.UTC(year, month - 1 + months, 1));
+  const lastOfTarget = new Date(Date.UTC(
+    target.getUTCFullYear(),
+    target.getUTCMonth() + 1,
+    0,
+  )).getUTCDate();
+  return new Date(Date.UTC(
+    target.getUTCFullYear(),
+    target.getUTCMonth(),
+    Math.min(day, lastOfTarget),
+  )).toISOString().slice(0, 10);
+}
+
+/**
  * Whole local days from one date to another, counting both ends.
  *
  * Calendar arithmetic, not a subtraction of instants: `(to - from) / DAY`

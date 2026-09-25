@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_EVENT_DURATION_MS,
   addLocalDays,
+  addLocalMonths,
   ageAt,
   coversLocalDate,
   localToUtc,
@@ -55,6 +56,28 @@ describe('addLocalDays', () => {
 
   it('handles a leap day', () => {
     expect(addLocalDays('2028-02-28', 1)).toBe('2028-02-29');
+  });
+});
+
+describe('addLocalMonths', () => {
+  it('moves whole months', () => {
+    expect(addLocalMonths('2026-06-15', 1)).toBe('2026-07-15');
+    expect(addLocalMonths('2026-06-15', 6)).toBe('2026-12-15');
+    expect(addLocalMonths('2026-06-15', 12)).toBe('2027-06-15');
+  });
+
+  it('clamps to the last day rather than rolling into the next month', () => {
+    // 31 January plus a month is 28 February. Rolling over gives 3 March,
+    // and a "month" range would then quietly include three days of the one
+    // after it.
+    expect(addLocalMonths('2026-01-31', 1)).toBe('2026-02-28');
+    expect(addLocalMonths('2026-03-31', -1)).toBe('2026-02-28');
+    expect(addLocalMonths('2028-01-31', 1)).toBe('2028-02-29');
+  });
+
+  it('goes backwards across a year boundary', () => {
+    expect(addLocalMonths('2026-01-15', -1)).toBe('2025-12-15');
+    expect(addLocalMonths('2026-01-15', -12)).toBe('2025-01-15');
   });
 });
 

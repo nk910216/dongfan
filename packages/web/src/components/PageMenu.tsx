@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CalendarDays, House, Menu, Settings } from 'lucide-react';
+import { CalendarDays, ChartColumn, House, Menu, Settings } from 'lucide-react';
 import { zhTW } from '@dongfan/shared';
 
 /**
@@ -20,6 +20,7 @@ export function PageMenu(): React.JSX.Element {
   const pages = [
     { to: '/', icon: House, label: zhTW.nav.home },
     { to: '/day', icon: CalendarDays, label: zhTW.nav.calendar },
+    { to: '/stats', icon: ChartColumn, label: zhTW.nav.stats },
     { to: '/settings', icon: Settings, label: zhTW.nav.settings },
   ];
 

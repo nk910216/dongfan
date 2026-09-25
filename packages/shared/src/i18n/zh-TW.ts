@@ -144,8 +144,36 @@ export const zhTW = {
     title: '前往',
     home: '主頁',
     calendar: '行事曆',
+    stats: '統計',
     settings: '設定',
     close: '關閉',
+  },
+
+  stats: {
+    title: '統計',
+    type: '事件類型',
+    range: '區間',
+    week: '週',
+    month: '月',
+    halfYear: '6 個月',
+    year: '年',
+    start: '起始日期',
+    chart: '圖表',
+    bar: '長條',
+    line: '折線',
+    /** Spec 7.7 asks for this in as many words. */
+    finishedOnly: '僅含已完成的紀錄',
+    /** Local records the server has not seen, so the figures are short. */
+    unsynced: '尚有 {count} 筆未同步，圖表還沒算進去。',
+    empty: '這段期間沒有紀錄',
+    failed: '讀不到統計資料',
+    retry: '重試',
+    total: '合計',
+    average: '每日平均',
+    /** Durations are read in hours and minutes, never in raw minutes. */
+    hoursMinutes: '{hours} 小時 {minutes} 分',
+    minutesOnly: '{minutes} 分',
+    times: '{count} 次',
   },
 
   calendar: {

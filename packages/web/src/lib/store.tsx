@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { getEventType, toLocalDate, zhTW } from '@dongfan/shared';
 import { Message } from '../components/Message.js';
 import type {
-  BabyDto, EventDto, InviteDto, MemberDto, MembersDto, SummaryDto, TypeSummaryDto,
+  BabyDto, EventDto, InviteDto, MemberDto, MembersDto, StatsDto, SummaryDto, TypeSummaryDto,
 } from '@dongfan/shared';
 import { ApiFailure, OfflineError, apiRequest, isOffline } from './api.js';
 import * as local from './db.js';
@@ -142,6 +142,14 @@ export type Store = {
    * before it can be sent (spec 7.2).
    */
   stopTimer: (eventId: string, version: number, endedAt: number) => Promise<EventDto | null>;
+  /**
+   * Daily figures for a chart, aggregated by the server (spec 5.6).
+   *
+   * Never computed from the local events. A year is thousands of them, the
+   * device holds only what it has synced, and a chart built here would be
+   * short by whatever has not arrived -- while looking complete.
+   */
+  loadStats: (typeIds: readonly string[], from: string, to: string) => Promise<StatsDto>;
   /**
    * Throws away an unconfirmed stop, leaving the timer running.
    *
@@ -717,14 +725,37 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     [call, baby.id, reload],
   );
 
+  /**
+   * Daily figures for a chart, straight from the server (spec 5.6).
+   *
+   * Not computed here, and deliberately so. The aggregation is the
+   * database's: a year is thousands of events, and the device holds only
+   * what it has synced, so a chart built locally would be quietly short by
+   * whatever has not arrived -- and would disagree with the same chart on
+   * the other parent's phone.
+   *
+   * Nothing is cached. A chart is looked at rarely and read once; keeping
+   * it in IndexedDB would mean deciding when it goes stale, which is a
+   * question the events themselves already answer.
+   */
+  const loadStats = useCallback(
+    (typeIds: readonly string[], from: string, to: string): Promise<StatsDto> =>
+      call<StatsDto>(
+        `/babies/${baby.id}/stats?types=${typeIds.join(',')}&from=${from}&to=${to}`,
+      ),
+    [call, baby.id],
+  );
+
   const value = useMemo<Store>(
     () => ({
       baby, scope, events, summary: summary as SummaryDto, now, loading, stale, syncing, syncedAt,
       unsynced, stopDrafts, refresh: settle, findEvent, addEvent, updateEvent, stopTimer,
+      loadStats,
       discardStop, removeEvent, retryUnsynced, correctUnsynced, abandonUnsynced,
       listMembers, createInvite, removeMember, editBaby,
     }),
     [baby, scope, events, summary, now, loading, stale, syncing, syncedAt, unsynced, stopDrafts, settle,
+      loadStats,
       findEvent, addEvent, updateEvent, stopTimer, discardStop, removeEvent, retryUnsynced,
       correctUnsynced, abandonUnsynced, listMembers, createInvite, removeMember, editBaby],
   );
