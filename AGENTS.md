@@ -258,6 +258,24 @@ answered with a series computed without the midnight split. A chart quietly
 missing every hour of sleep before midnight looks exactly like a chart.
 Delete that code and that error together.
 
+### A failed Zod refinement does not stop the next one
+
+`.refine` marks a result **dirty**, not aborted, so every refinement after it
+still runs — with the raw, unvalidated value still in place. A range check
+chained after a date check therefore ran on `"invalid"` and threw out of
+`safeParse` instead of returning a failure, and the route answered **500** to
+a plainly bad request.
+
+`parseLocalDate` throwing is correct and stays: it says "somebody passed this
+something that is not a date", which is a bug. The bug was calling it with
+something unvalidated. Anything downstream of a `.refine` re-checks what it
+depends on, and `statsQuery` does that with an early return in a
+`superRefine`.
+
+`2026-02-31` does **not** exercise this: it parses perfectly and is merely a
+day that does not exist. The tests name several strings that do not parse at
+all, because the one that was there caught nothing.
+
 ### The D1 query-count guardrail
 
 `test/query-count.ts` wraps the binding and counts every statement a request
@@ -265,6 +283,12 @@ executes, failing past 30 (spec 11.2). The free plan allows 50 per
 invocation and **the local runtime enforces none of them**, so a handler that
 had quietly become N+1 would pass every other test and fail in production
 against a baby with a year of records.
+
+**It is wired into `helpers.ts`'s `request`, so every test in the API suite
+enforces it.** It first existed as an assertion in one stats test, which
+meant an N+1 anywhere else went through CI untouched — and a guardrail
+nobody has to remember to ask for is the only kind worth having
+(spec 13.3). Every existing endpoint already fits.
 
 Wrapped at the binding rather than inside Drizzle, because handlers reach the
 database both ways — reads through the query builder, writes as raw
@@ -293,6 +317,19 @@ to look at, and this database exists to be filled and emptied freely. The
 script looks its own account and baby up rather than assuming they are
 absent, so a run that failed partway through does not make the next one
 impossible — which is exactly what the first version did.
+
+**And it checks that what is there is a whole year, not merely that
+something is.** The insert goes in chunks, so a run that died between them
+leaves a few hundred events behind; a guard of "more than none" then skipped
+filling and printed timings for a fortnight of data as though they were a
+year's. Nothing errored and the numbers looked reassuring. `fixturePlan` is
+a pure function, unit-tested in `scripts/test/`, and it rebuilds when the
+year has moved on as well — the window ends yesterday, so a fixture built
+last week no longer covers the range being asked about.
+
+The script only runs `main` when it is the entry point. A test that imported
+it to reach `fixturePlan` shelled out to wrangler and filled a database as a
+side effect of reading a pure function.
 
 The integration tests do not use it. Their D1 is created for the run and
 thrown away, so the year-scale test seeds its own rows directly into the
@@ -625,6 +662,13 @@ repository that passed for the wrong reason: an assertion written the wrong
 way round, an event fired before the listener existed, a "did not happen"
 assertion that released its gate before the thing had a chance to happen.
 All three looked fine and all three were worthless.
+
+**A mutation that did not reach the running code proves nothing.** The API
+suite resolves `@dongfan/shared` from `dist`, not from source, so breaking
+something in `packages/shared/src` and re-running tests the old build and
+comes back green. Rebuild shared, or the mutation is untested rather than
+survived. The same goes for a patch that silently failed to apply: check the
+file actually changed before believing the result. Both have happened here.
 
 When a guard turns out to be unreachable — a second check behind a first
 that already makes it impossible — say so rather than implying coverage.

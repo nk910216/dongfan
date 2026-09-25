@@ -157,6 +157,8 @@ export const syncQuery = z.object({
  * cannot grow with anything a client sends (spec 2.5's 100-parameter
  * limit).
  */
+const localDate = z.string().refine(isRealLocalDate, { message: 'not a real date' });
+
 export const statsQuery = z
   .object({
     types: z
@@ -166,13 +168,29 @@ export const statsQuery = z
       .refine((list) => list.every((id) => getEventType(id) !== undefined), {
         message: 'unknown event type',
       }),
-    from: z.string().refine(isRealLocalDate, { message: 'not a real date' }),
-    to: z.string().refine(isRealLocalDate, { message: 'not a real date' }),
+    from: localDate,
+    to: localDate,
   })
-  .refine((q) => q.from <= q.to, { message: 'from is after to', path: ['from'] })
-  .refine((q) => daysBetween(q.from, q.to) <= MAX_STATS_DAYS, {
-    message: 'range too wide',
-    path: ['to'],
+  .superRefine((q, ctx) => {
+    // Nothing here may assume the dates parse.
+    //
+    // A failed `.refine` above marks the result dirty rather than aborting
+    // it, so Zod runs this anyway with the raw strings still in place. The
+    // first version of this called `daysBetween` unguarded, and a `from` of
+    // "invalid" threw out of `safeParse` instead of returning -- which the
+    // route turns into a 500 for what is plainly a bad request.
+    //
+    // `parseLocalDate` throwing is correct and stays: it says "this is a
+    // bug", and the bug was calling it with something unvalidated.
+    if (!isRealLocalDate(q.from) || !isRealLocalDate(q.to)) return;
+
+    if (q.from > q.to) {
+      ctx.addIssue({ code: 'custom', message: 'from is after to', path: ['from'] });
+      return;
+    }
+    if (daysBetween(q.from, q.to) > MAX_STATS_DAYS) {
+      ctx.addIssue({ code: 'custom', message: 'range too wide', path: ['to'] });
+    }
   });
 
 export type StatsQuery = z.infer<typeof statsQuery>;

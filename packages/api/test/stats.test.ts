@@ -5,7 +5,7 @@ import {
 } from '@dongfan/shared';
 import type { StatsDto } from '@dongfan/shared';
 import { createBaby, createEvent, deleteEvent, json, request, signedInUser } from './helpers.js';
-import { MAX_QUERIES_PER_REQUEST, requestCounting } from './query-count.js';
+import { MAX_QUERIES_PER_REQUEST, enforceBudget, requestCounting } from './query-count.js';
 
 /**
  * `GET /babies/:id/stats` (spec 5.6, 7.7).
@@ -134,6 +134,27 @@ describe('what it will not accept', () => {
     // And the promise itself, not just the refusal that protects it.
     const body = await json<StatsDto>(widest);
     expect(series(body, 'diaper')).toHaveLength(366);
+  });
+
+  it('refuses a date that is not a date at all, rather than failing inside', async () => {
+    // Not the same path as 2026-02-31, which parses perfectly and is merely
+    // a day that does not exist. These do not parse, and the range check
+    // used to run on them anyway: a failed `.refine` leaves the raw string
+    // in place and Zod carries on, so `daysBetween` threw out of
+    // `safeParse` and the route answered 500 to a plainly bad request.
+    const malformed: [string, string][] = [
+      ['invalid', '2026-06-16'],
+      ['2026-06-15', 'nope'],
+      ['2026-6-15', '2026-06-16'],
+      ['', '2026-06-16'],
+      ['2026-06-15', ''],
+      ['15-06-2026', '2026-06-16'],
+    ];
+
+    for (const [from, to] of malformed) {
+      const response = await request(statsUrl('diaper', from, to), {}, token);
+      expect(response.status, `from=${from} to=${to}`).toBe(422);
+    }
   });
 
   it('refuses a type it has never heard of', async () => {
@@ -334,6 +355,22 @@ describe('a year of it', () => {
 });
 
 describe('the query counter itself', () => {
+  it('refuses a request that cost more than the budget', async () => {
+    // A guard nobody has seen refuse anything is not a guard. The budget is
+    // lowered to one here rather than an N+1 being added to a handler, so
+    // the thing under test is the enforcement and not a deliberate bug.
+    await expect(requestCounting(statsUrl('diaper', DAY, DAY), {}, token, 1))
+      .rejects.toThrow(/over the budget of 1/);
+  });
+
+  it('says nothing about a request inside the budget', () => {
+    expect(() => enforceBudget('/anything', MAX_QUERIES_PER_REQUEST, MAX_QUERIES_PER_REQUEST))
+      .not.toThrow();
+    expect(() => enforceBudget('/anything', MAX_QUERIES_PER_REQUEST + 1, MAX_QUERIES_PER_REQUEST))
+      .toThrow(/spec 11.2/);
+  });
+
+
   it('counts what a request actually executed', async () => {
     // A counter that reported zero would make every guardrail above pass
     // for the wrong reason, so it is checked against a request known to

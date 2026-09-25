@@ -30,7 +30,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { addLocalDays, startOfLocalDay, toLocalDate } from '../packages/shared/dist/index.js';
 
@@ -115,6 +115,31 @@ function* events() {
   }
 }
 
+/**
+ * Whether what is in the table is a whole year, and what to do if not.
+ *
+ * Counting rows and stopping at "more than none" is not enough. The insert
+ * goes in chunks, so a run that died partway leaves a few hundred events
+ * behind; the next run saw a non-zero count, skipped, and then reported
+ * timings for a fortnight of data as though they were a year's. A fixture
+ * that quietly measures the wrong thing is worse than no fixture.
+ *
+ * The window also moves: it ends yesterday, so a fixture built last week
+ * covers days that are no longer the year being asked about.
+ *
+ * Pure, so it can be tested without a database.
+ */
+export function fixturePlan({ existing, expected, firstDate, lastDate, wantFirst, wantLast }) {
+  if (existing === 0) return { action: 'fill', why: 'empty' };
+  if (existing !== expected) {
+    return { action: 'rebuild', why: `holds ${existing} events, a whole year is ${expected}` };
+  }
+  if (firstDate !== wantFirst || lastDate !== wantLast) {
+    return { action: 'rebuild', why: `covers ${firstDate}..${lastDate}, the year wanted is ${wantFirst}..${wantLast}` };
+  }
+  return { action: 'keep', why: `already holds a whole year, ${existing} events` };
+}
+
 function insert(userId, babyId) {
   const rows = [...events()];
   const statements = rows.map((row) =>
@@ -164,10 +189,28 @@ function main() {
     run(`INSERT INTO baby_members (baby_id, user_id, role, created_at) VALUES (${literal(babyId)}, ${literal(userId)}, ${literal('owner')}, ${Date.now()})`);
   }
 
-  const existing = run(`SELECT COUNT(*) AS n FROM events WHERE baby_id = ${literal(babyId)}`).results[0]?.n ?? 0;
-  if (existing > 0) {
-    console.log(`Already holding ${existing} events. Delete scripts/.wrangler to rebuild it.`);
-  } else {
+  const held = run(
+    'SELECT COUNT(*) AS n, MIN(local_date) AS first, MAX(local_date) AS last'
+    + ` FROM events WHERE baby_id = ${literal(babyId)}`).results[0] ?? {};
+
+  const plan = fixturePlan({
+    existing: held.n ?? 0,
+    expected: [...events()].length,
+    firstDate: held.first ?? null,
+    lastDate: held.last ?? null,
+    wantFirst: addLocalDays(today, -DAYS),
+    wantLast: addLocalDays(today, -1),
+  });
+
+  console.log(`${plan.action}: ${plan.why}`);
+
+  if (plan.action === 'rebuild') {
+    // Only this fixture's own rows, in this fixture's own database. Nothing
+    // else has ever been written here.
+    run(`DELETE FROM event_tags WHERE event_id IN (SELECT id FROM events WHERE baby_id = ${literal(babyId)})`);
+    run(`DELETE FROM events WHERE baby_id = ${literal(babyId)}`);
+  }
+  if (plan.action !== 'keep') {
     console.log(`Wrote ${insert(userId, babyId)} invented events across ${DAYS} days.`);
   }
 
@@ -190,4 +233,9 @@ function main() {
   console.log('  is outstanding (spec 9.3, 11.2, 12.1).');
 }
 
-main();
+// Only when run, never when imported. `fixturePlan` is unit-tested, and a
+// test that imported this file used to shell out to wrangler and fill a
+// database as a side effect of reading a pure function.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}

@@ -81,13 +81,13 @@ function counting(real: D1Database, counter: Counter): D1Database {
 }
 
 /**
- * Drives one request and reports what it cost.
+ * Runs one request against a counted binding.
  *
  * The statements a `batch()` carries are counted, but the batch itself is
- * still executed against the real database, so this measures the same
- * request the other tests exercise rather than a stubbed one.
+ * still executed against the real database, so this drives the same request
+ * the other tests exercise rather than a stubbed one.
  */
-export async function requestCounting(
+export async function fetchCounting(
   path: string,
   init: RequestInit = {},
   token?: string,
@@ -103,4 +103,33 @@ export async function requestCounting(
   );
 
   return { response, queries: counter.count };
+}
+
+/**
+ * Fails the test if a request cost more than the budget.
+ *
+ * Separate from the counting so it can be tested with a ceiling low enough
+ * to trip: a guard nobody has ever seen refuse anything is not a guard
+ * (AGENTS.md).
+ */
+export function enforceBudget(path: string, queries: number, budget: number): void {
+  if (queries > budget) {
+    throw new Error(
+      `${path} executed ${queries} D1 statements, over the budget of ${budget}. `
+      + 'The free plan allows 50 per invocation and the local runtime enforces none of '
+      + 'them, so this is the only place an N+1 shows up before production (spec 11.2).',
+    );
+  }
+}
+
+/** Both together, which is what the shared request helper uses. */
+export async function requestCounting(
+  path: string,
+  init: RequestInit = {},
+  token?: string,
+  budget: number = MAX_QUERIES_PER_REQUEST,
+): Promise<{ response: Response; queries: number }> {
+  const result = await fetchCounting(path, init, token);
+  enforceBudget(path, result.queries, budget);
+  return result;
 }

@@ -2,14 +2,20 @@ import { env } from 'cloudflare:test';
 import { drizzle } from 'drizzle-orm/d1';
 import { hashPassword } from '@dongfan/shared';
 import { users } from '../src/db/schema.js';
-import app from '../src/index.js';
+import { requestCounting } from './query-count.js';
 
-/** Shorthand for driving the worker the way a client would. */
+/**
+ * Shorthand for driving the worker the way a client would.
+ *
+ * Every request in this suite goes through the D1 statement counter and
+ * fails if it costs more than the budget (spec 11.2). Enforced here rather
+ * than in the one test that happened to think of it: an N+1 can appear in
+ * any handler, and the point of a guardrail is that nobody has to remember
+ * to ask for it.
+ */
 export async function request(path: string, init: RequestInit = {}, token?: string): Promise<Response> {
-  const headers = new Headers(init.headers);
-  headers.set('Content-Type', 'application/json');
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-  return app.fetch(new Request(`http://test${path}`, { ...init, headers }), env);
+  const { response } = await requestCounting(path, init, token);
+  return response;
 }
 
 export async function json<T>(response: Response): Promise<T> {
