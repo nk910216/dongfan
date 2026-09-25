@@ -25,13 +25,54 @@ export type Metrics = {
   readonly hourHeight: number;
   /** The least a card may be, in pixels. */
   readonly minCardHeight: number;
+  /**
+   * The least a card may be **across**, in pixels.
+   *
+   * A height that cannot be pressed and a width that cannot be read are the
+   * same kind of failure, and only the first of them had a number. Below
+   * this a card shows one truncated character where its type should be, so
+   * the stretch is better offered as an "N of them" entry (spec 7.5).
+   */
+  readonly minCardWidth: number;
 };
 
-export const DEFAULT_METRICS: Metrics = { hourHeight: 64, minCardHeight: 44 };
+export const DEFAULT_METRICS: Metrics = {
+  /**
+   * Ninety-six, not sixty-four.
+   *
+   * The minimum card height is a fingertip, and at 64px an hour a fingertip
+   * covers **41 minutes of axis** -- so two records half an hour apart, with
+   * nothing whatever between them, collided as cards and were laid out as if
+   * they were simultaneous. That spurious collision is what chained a whole
+   * evening into one group and then collapsed it (docs/timeline-design.md).
+   *
+   * At 96 the same 44px covers 27.5 minutes. The cost is a day 2304px tall
+   * instead of 1536, which is about seven hours on a phone rather than ten:
+   * taken deliberately, because nobody reads a day at once and the thing
+   * that is read -- a night, an evening -- is about four hours.
+   */
+  hourHeight: 96,
+  minCardHeight: 44,
+  /**
+   * What a card needs to be readable, which is not what it needs to be
+   * *complete*.
+   *
+   * This was 128 -- the width for an icon, a name, a value and a clock on
+   * one line -- and requiring all four is what made the screen give up so
+   * eagerly. A card degrades by dropping words instead: the badge says the
+   * type and the clock says when, and those two fit in 48.
+   */
+  minCardWidth: 48,
+};
 
 /** How many minutes of the axis a card's minimum height covers. */
 export function minCardMinutes(metrics: Metrics): number {
   return (metrics.minCardHeight / metrics.hourHeight) * 60;
+}
+
+/** Minutes of the day as pixels down the axis. The one conversion there is. */
+export function minutesToPx(minutes: number, metrics: Metrics): number {
+  return (minutes / 60) * metrics.hourHeight;
 }
 
 export type ItemKind =
@@ -117,8 +158,83 @@ export type DayLayout = {
   readonly clusters: readonly Cluster[];
 };
 
-/** Past this many side by side, a phone has no width left for words. */
+/** Past this many side by side, no phone has width left for words. */
 export const MAX_COLUMNS = 3;
+
+/**
+ * How many cards fit across a band, given how wide the band actually is.
+ *
+ * Not a constant, because the two calendars do not have the same width to
+ * divide: one day owns everything right of the hour labels and two days own
+ * half of it each. Carrying "three side by side is fine" over to a half-width
+ * column is what put four characters of a type name on screen and cut the
+ * rest, which is the state spec 7.5 says to offer an entry for instead.
+ *
+ * A width of zero means nobody has measured yet; the old ceiling is the
+ * answer then, rather than collapsing a day that may be perfectly readable.
+ */
+export function columnsFor(bandWidth: number, metrics: Metrics): number {
+  if (!Number.isFinite(bandWidth) || bandWidth <= 0) return MAX_COLUMNS;
+  const fits = Math.floor(bandWidth / metrics.minCardWidth);
+  return Math.min(Math.max(fits, 1), MAX_COLUMNS);
+}
+
+/** A moment's mark: a dot straddling the card's top edge. */
+export const POINT_PX = 7;
+
+/**
+ * The least a range's bar may be drawn as.
+ *
+ * Three pixels is under three minutes at the default metrics. It is there so
+ * that a two-minute feed is visible at all, and it is the only place the
+ * drawing departs from the clock -- deliberately not the other direction,
+ * because a bar stretched to fit words would be a duration nobody recorded.
+ */
+export const MIN_BAR_PX = 3;
+
+/**
+ * The real extent of a record, in pixels, which is not its card's height.
+ *
+ * Measured from the card's own top edge, because the card's top edge **is**
+ * the start minute -- for everything, with no offset and no exceptions. That
+ * is the whole of how a card is tied to a time now: an anchor drawn in a
+ * lane beside the card was one record drawn as two objects, and the marks
+ * read as debris scattered down the column.
+ *
+ * A finished range gets a stripe of exactly its minutes. Anything without a
+ * length -- a bottle, a running timer, a back-filled record with no end --
+ * gets a dot on the edge and no stripe at all, because a stripe of no height
+ * is nothing and a stripe of some height would be a duration nobody
+ * recorded (spec 3.4.1 rule 3).
+ */
+export type Extent = {
+  /** Height of the stripe, in pixels. Zero when there is nothing to draw. */
+  readonly px: number;
+  /** A moment rather than a range, so it is drawn as a dot. */
+  readonly point: boolean;
+};
+
+export function extentOf(item: TimelineItem, metrics: Metrics): Extent {
+  if (item.lengthMin <= 0) return { px: 0, point: true };
+  return { px: Math.max(minutesToPx(item.lengthMin, metrics), MIN_BAR_PX), point: false };
+}
+
+/**
+ * How much of itself a card can say at a given width.
+ *
+ * A card narrows by dropping words, never by disappearing. The badge goes
+ * last because it is the only thing that says which type, and the clock goes
+ * never: a timeline that has stopped saying when has stopped being a
+ * timeline (docs/timeline-design.md).
+ */
+export type Tier = 'A' | 'B' | 'C' | 'D';
+
+export function tierFor(width: number): Tier {
+  if (width >= 160) return 'A';
+  if (width >= 96) return 'B';
+  if (width >= 64) return 'C';
+  return 'D';
+}
 
 function minutesInto(day: number, instant: number): number {
   return (instant - day) / 60_000;
@@ -259,6 +375,7 @@ export function boxOf(item: TimelineItem, metrics: Metrics): { top: number; bott
 export function layOut(
   items: readonly TimelineItem[],
   metrics: Metrics = DEFAULT_METRICS,
+  maxColumns: number = MAX_COLUMNS,
 ): DayLayout {
   const { allDay, timed } = splitAllDay(items);
 
@@ -279,7 +396,7 @@ export function layOut(
       fromMin: first.startMin,
       toMin: reach,
       placed: placed.map((one) => ({ ...one, columns })),
-      crowded: columns > MAX_COLUMNS,
+      crowded: columns > maxColumns,
     });
     current = [];
   };

@@ -17,7 +17,7 @@ import { scopeOf } from '../src/lib/db.js';
 import { earlierToday as atEarlierToday } from './fixtures/clock.js';
 import { formatClock } from '../src/lib/format.js';
 import { daysIn } from '../src/lib/stats-range.js';
-import { breakStorage, setOnline } from './setup.js';
+import { breakStorage, setOnline, setViewportWidth } from './setup.js';
 import { USER_CONTENT } from './fixtures/user-content.js';
 
 /**
@@ -1130,8 +1130,8 @@ describe('looking back at one day', () => {
     openSignedIn(`/day/${evening}`);
 
     const slot = await screen.findByTestId('slot-sleep');
-    // 23:10, and fifty minutes of it, on a 64px hour.
-    expect(topOf(slot)).toBeCloseTo((23 * 60 + 10) / 60 * 64, 1);
+    // 23:10, and fifty minutes of it, on a 96px hour.
+    expect(topOf(slot)).toBeCloseTo((23 * 60 + 10) / 60 * 96, 1);
     expect(slot).toHaveAccessibleName(new RegExp(zhTW.calendar.continues));
   });
 
@@ -1147,10 +1147,79 @@ describe('looking back at one day', () => {
     const sleep = await screen.findByTestId('slot-sleep');
     const bottle = await screen.findByTestId('slot-bottle');
 
-    expect(topOf(sleep)).toBeCloseTo(9 * 64, 1);
-    expect(Number.parseFloat(sleep.style.height)).toBeCloseTo(64, 1);
+    expect(topOf(sleep)).toBeCloseTo(9 * 96, 1);
+    expect(Number.parseFloat(sleep.style.height)).toBeCloseTo(96, 1);
     // Half an hour later is half an hour down, whatever the card's height.
-    expect(topOf(bottle) - topOf(sleep)).toBeCloseTo(32, 1);
+    expect(topOf(bottle) - topOf(sleep)).toBeCloseTo(48, 1);
+  });
+
+  it('draws a range as long as it lasted, and a moment as a dot on its edge', async () => {
+    // The two numbers the page is made of, and they are not the same one.
+    // The card's top edge is the start minute -- for both of them, with no
+    // offset -- and the stripe inside a range is the minutes between its
+    // timestamps (spec 7.5, docs/timeline-design.md).
+    const day = daysAgo(2);
+    api.add({ typeId: 'sleep', startedAt: onDay(day, 9), endedAt: onDay(day, 10, 30) });
+    api.add({ typeId: 'bottle', startedAt: onDay(day, 13) });
+
+    openSignedIn(`/day/${day}`);
+    await screen.findByTestId('slot-bottle');
+
+    const sleep = screen.getByTestId('slot-sleep');
+    const bottle = screen.getByTestId('slot-bottle');
+    const markIn = (card: HTMLElement): HTMLElement =>
+      card.querySelector('[data-testid="mark"]') as HTMLElement;
+
+    // Both cards begin at their own minute.
+    expect(topOf(sleep)).toBeCloseTo(9 * 96, 1);
+    expect(topOf(bottle)).toBeCloseTo(13 * 96, 1);
+
+    // An hour and a half of stripe, measured from the card's own top.
+    expect(markIn(sleep).dataset['shape']).toBe('bar');
+    expect(Number.parseFloat(markIn(sleep).style.top)).toBe(0);
+    expect(Number.parseFloat(markIn(sleep).style.height)).toBeCloseTo(1.5 * 96, 1);
+
+    // The bottle has no stripe at all -- a dot on the edge instead, because
+    // a stripe of any height would be a length nobody recorded.
+    expect(markIn(bottle).dataset['shape']).toBe('point');
+    expect(Number.parseFloat(markIn(bottle).style.height)).toBeLessThan(10);
+  });
+
+  it('stops the tint where the record stops, so height is not a duration', async () => {
+    // A thirteen-minute nursing needs a card a fingertip tall, and a card a
+    // fingertip tall is three times its length. The colour ends at the
+    // length; the card carries on plain.
+    const day = daysAgo(2);
+    api.add({ typeId: 'nursing', startedAt: onDay(day, 8, 6), endedAt: onDay(day, 8, 19) });
+
+    openSignedIn(`/day/${day}`);
+    const card = await screen.findByTestId('slot-nursing');
+    const stripe = card.querySelector('[data-testid="mark"]') as HTMLElement;
+
+    // 44px of card, 20.8px of record.
+    expect(Number.parseFloat(card.style.height)).toBe(44);
+    expect(Number.parseFloat(stripe.style.height)).toBeCloseTo((13 / 60) * 96, 1);
+    // And the background says so too: a hard stop at the extent rather than
+    // a flat fill over the whole card.
+    expect(card.style.background).toContain('linear-gradient');
+  });
+
+  it('puts a long record\u2019s words at the minute it began', async () => {
+    // Centred, the type and start time of a three-hour sleep sat an hour
+    // and a half below the line it started on -- which is the one number
+    // the card is there to carry.
+    //
+    // jsdom lays nothing out, so this pins the rule the card asks for and
+    // not the picture. The picture is a phone check.
+    const day = daysAgo(2);
+    api.add({ typeId: 'sleep', startedAt: onDay(day, 20), endedAt: onDay(day, 23) });
+
+    openSignedIn(`/day/${day}`);
+    const card = await screen.findByTestId('slot-sleep');
+
+    expect(Number.parseFloat(card.style.height)).toBeCloseTo(3 * 96, 1);
+    expect(card.className).toContain('justify-start');
+    expect(card.className).not.toContain('justify-center');
   });
 
   it('keeps an empty afternoon empty rather than closing the gap', async () => {
@@ -1164,7 +1233,7 @@ describe('looking back at one day', () => {
 
     const early = await screen.findByTestId('slot-bottle');
     const later = await screen.findByTestId('slot-diaper');
-    expect(topOf(later) - topOf(early)).toBeCloseTo(6 * 64, 1);
+    expect(topOf(later) - topOf(early)).toBeCloseTo(6 * 96, 1);
   });
 
   it('does not say a record of the day itself was carried over', async () => {
@@ -1222,6 +1291,61 @@ describe('looking back at one day', () => {
     await user.click(entry);
 
     expect(screen.getAllByTestId('slot-bottle')).toHaveLength(4);
+  });
+
+  it('says what is behind a crowded entry without it being opened', async () => {
+    // A count on its own is not an answer: four records could be four
+    // nappies or a bath, a feed and two moods, over four minutes or over
+    // seven hours. The entry names the types it holds and the stretch it
+    // covers (docs/timeline-design.md).
+    const day = daysAgo(2);
+    api.add({ typeId: 'bottle', startedAt: onDay(day, 9), value: 90 });
+    api.add({ typeId: 'diaper', startedAt: onDay(day, 9, 2) });
+    api.add({ typeId: 'bottle', startedAt: onDay(day, 9, 4), value: 110 });
+    api.add({ typeId: 'solid_food', startedAt: onDay(day, 9, 6) });
+
+    openSignedIn(`/day/${day}`);
+    const entry = await screen.findByTestId('crowded');
+
+    expect(entry).toHaveTextContent(interpolate(zhTW.calendar.crowded, { count: 4 }));
+    // The stretch it covers, so a four-minute huddle cannot read like an
+    // evening.
+    expect(entry).toHaveTextContent(
+      `${formatClock(onDay(day, 9), BABY.timezone)} - ${formatClock(onDay(day, 9, 6), BABY.timezone)}`,
+    );
+    // And every type inside it: as badges for the eye, in start order and
+    // one per type however many of that type there are...
+    expect([...entry.querySelectorAll('[data-testid="chip-type"]')]
+      .map((one) => (one as HTMLElement).dataset['type']))
+      .toEqual(['bottle', 'diaper', 'solid_food']);
+    // ...and named in full for a screen reader, all four of them.
+    for (const typeId of ['bottle', 'diaper', 'solid_food']) {
+      expect(entry).toHaveTextContent(eventTypeName(typeId));
+    }
+  });
+
+  it('lists a crowded stretch as rows, with no duration drawn in any of them', async () => {
+    // A row in the list stands for a record, not for a stretch of time. A
+    // bar scaled by duration in here would say one of them lasted longer
+    // than another because its row happened to be taller (spec 7.5).
+    const day = daysAgo(2);
+    api.add({ typeId: 'sleep', startedAt: onDay(day, 9), endedAt: onDay(day, 9, 50) });
+    for (let i = 1; i <= 3; i += 1) {
+      api.add({ typeId: 'bottle', startedAt: onDay(day, 9, i), value: 100 });
+    }
+
+    const user = openSignedIn(`/day/${day}`);
+    await user.click(await screen.findByTestId('crowded'));
+
+    const list = await screen.findByTestId('crowded-open');
+    expect(list.querySelectorAll('[data-testid="anchor"]')).toHaveLength(0);
+
+    const rows = [...list.querySelectorAll('[data-testid^="slot-"]')] as HTMLElement[];
+    expect(rows).toHaveLength(4);
+    for (const row of rows) {
+      expect(row.style.top, row.dataset['testid']).toBe('');
+      expect(row.style.height, row.dataset['testid']).toBe('');
+    }
   });
 
   it('lays three out side by side rather than hiding them', async () => {
@@ -1313,8 +1437,19 @@ describe('looking back at one day', () => {
 
     for (const id of ['slot-bottle', 'slot-diaper']) {
       const { left, width } = screen.getByTestId(id).style;
+      // `calc(50% + 11px)` beside `calc(50% - 15px)`. The percentages are
+      // the band divided; the pixels the anchor's lane and the gap take are
+      // *subtracted from the width*, never added to the offset alone --
+      // which is the arithmetic that put a card past the edge before.
+      // `50%` beside `calc(50% - 4px)`. The percentages are the band
+      // divided; the only pixels in it are the gap, taken out of the width
+      // rather than added to the offset -- which is the arithmetic that put
+      // a card past the edge before.
       expect(left, id).toMatch(/^\d+(\.\d+)?%$/);
-      const span = Number.parseFloat(left) + Number.parseFloat(/([\d.]+)%/.exec(width)?.[1] ?? '0');
+      const across = /^calc\(([\d.]+)% - ([\d.]+)px\)$/.exec(width);
+      expect(across, `${id} width: ${width}`).not.toBeNull();
+
+      const span = Number.parseFloat(left) + Number.parseFloat(across?.[1] ?? '0');
       expect(span, id).toBeLessThanOrEqual(100);
     }
   });
@@ -1337,8 +1472,8 @@ describe('looking back at one day', () => {
     fireEvent.change(screen.getByTestId('calendar-date'), { target: { value: early } });
 
     await screen.findByTestId('slot-diaper');
-    // 07:00 on a 64px hour, less the 80px of context above it.
-    await waitFor(() => expect(scroller.scrollTop).toBeCloseTo(7 * 64 - 80, 0));
+    // 07:00 on a 96px hour, less the 80px of context above it.
+    await waitFor(() => expect(scroller.scrollTop).toBeCloseTo(7 * 96 - 80, 0));
   });
 
   it('shows the morning of a night stopped with no signal', async () => {
@@ -1414,10 +1549,10 @@ describe('looking back at one day', () => {
 
     // Opens on the first record of the day, in the morning.
     const scroller = screen.getByTestId('day-scroller');
-    await waitFor(() => expect(scroller.scrollTop).toBeCloseTo(7 * 64 - 80, 0));
+    await waitFor(() => expect(scroller.scrollTop).toBeCloseTo(7 * 96 - 80, 0));
 
     // Somebody scrolls down to the evening and opens the stretch.
-    fireEvent.scroll(scroller, { target: { scrollTop: 21 * 64 } });
+    fireEvent.scroll(scroller, { target: { scrollTop: 21 * 96 } });
     await user.click(screen.getByTestId('crowded'));
 
     await user.click(screen.getAllByTestId('slot-bottle')[0] as HTMLElement);
@@ -1425,7 +1560,7 @@ describe('looking back at one day', () => {
     await user.click(screen.getByLabelText(zhTW.addEvent.cancel));
 
     await screen.findByTestId('crowded-open');
-    expect(screen.getByTestId('day-scroller').scrollTop).toBe(21 * 64);
+    expect(screen.getByTestId('day-scroller').scrollTop).toBe(21 * 96);
   });
 
   it('takes a queued record back to the day it was opened from', async () => {
@@ -1680,6 +1815,39 @@ describe('two days at once', () => {
     expect(leftBand.width).toBe(rightBand.width);
   });
 
+  it('narrows a card rather than collapsing it, at half a phone', async () => {
+    // Half of 390px, less the hour labels, is 173px a column, and two cards
+    // in that is 86px each. That used to be past what the screen would draw,
+    // so the pair became an "N records" button; now the cards drop a tier --
+    // the badge and the value stay, the name goes (docs/timeline-design.md).
+    setViewportWidth(390);
+    const later = daysAgo(2);
+    api.add({ typeId: 'bottle', startedAt: onDay(later, 9), value: 120 });
+    api.add({ typeId: 'diaper', startedAt: onDay(later, 9, 4) });
+
+    openSignedIn(`/two/${later}`);
+    await screen.findByTestId('slot-bottle');
+
+    expect(screen.getByTestId('slot-diaper')).toBeInTheDocument();
+    expect(screen.queryByTestId('crowded')).not.toBeInTheDocument();
+    expect(screen.getByTestId('slot-bottle').dataset['tier']).toBe('C');
+  });
+
+  it('lays those same two side by side on a single day, which has the width', async () => {
+    // The control. Same phone, same two records, and the answer differs
+    // because the room does -- which is the whole of what the width is for.
+    setViewportWidth(390);
+    const day = daysAgo(2);
+    api.add({ typeId: 'bottle', startedAt: onDay(day, 9) });
+    api.add({ typeId: 'diaper', startedAt: onDay(day, 9, 4) });
+
+    openSignedIn(`/day/${day}`);
+    await screen.findByTestId('slot-bottle');
+
+    expect(screen.getByTestId('slot-diaper')).toBeInTheDocument();
+    expect(screen.queryByTestId('crowded')).not.toBeInTheDocument();
+  });
+
   it('draws each half of a night in the column its day owns', async () => {
     // 23:00 to 07:00 across the pair: the evening ends the left column and
     // the morning begins the right one, and both open the same record.
@@ -1696,7 +1864,7 @@ describe('two days at once', () => {
       top: topOf(half),
       href: half.getAttribute('href') ?? '',
     }));
-    expect(evening?.top).toBeCloseTo(23 * 64, 1);
+    expect(evening?.top).toBeCloseTo(23 * 96, 1);
     expect(morning?.top).toBe(0);
     // The same event from either side.
     expect(evening?.href.split('?')[0]).toBe(morning?.href.split('?')[0]);
@@ -1772,7 +1940,10 @@ describe('two days at once', () => {
 
     expect(await screen.findByTestId('column-later')).toHaveTextContent(later);
     expect(screen.getByTestId('column-earlier')).toHaveTextContent(daysAgo(3));
-    expect(screen.getByTestId('crowded-open')).toBeInTheDocument();
+    // Awaited, not read: the header is on screen before the day's rows have
+    // been read back out of IndexedDB, and a stretch cannot be open before
+    // there is a stretch.
+    expect(await screen.findByTestId('crowded-open')).toBeInTheDocument();
   });
 
   it('comes back to the two days when a shortcut turns into an edit', async () => {
@@ -1824,7 +1995,10 @@ describe('two days at once', () => {
     expect(await screen.findByTestId('column-later')).toHaveTextContent(later);
     // The stretch that was open before any of this is open again: the day
     // is not the whole of where somebody was.
-    expect(screen.getByTestId('crowded-open')).toBeInTheDocument();
+    // Awaited, not read: the header is on screen before the day's rows have
+    // been read back out of IndexedDB, and a stretch cannot be open before
+    // there is a stretch.
+    expect(await screen.findByTestId('crowded-open')).toBeInTheDocument();
     // And the resend added nothing: the server answered with the record it
     // already had (spec 5.8).
     expect(nappies()).toHaveLength(1);

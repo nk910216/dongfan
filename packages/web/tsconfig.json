@@ -11,6 +11,6 @@
   // Tests are included on purpose. Left out, a screen test can drift from the
   // response contract and only say so when it runs, which is exactly the
   // drift the shared types exist to prevent.
-  "include": ["src/**/*", "test/**/*"],
+  "include": ["src/**/*", "test/**/*", "preview/**/*"],
   "references": [{ "path": "../shared" }]
 }

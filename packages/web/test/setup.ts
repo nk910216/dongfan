@@ -77,6 +77,21 @@ export function setOnline(online: boolean): void {
 }
 
 /**
+ * How wide the window is.
+ *
+ * Not decoration: it is what decides how many cards fit across a calendar
+ * band, and therefore when a stretch is offered as an "N of them" entry
+ * instead of laid out side by side (spec 7.5, 7.6). jsdom's default is a
+ * desktop, so a test about a phone has to say so.
+ */
+export function setViewportWidth(width: number): void {
+  Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
+  window.dispatchEvent(new Event('resize'));
+}
+
+const DESKTOP_WIDTH = window.innerWidth;
+
+/**
  * jsdom does not implement `matchMedia`, and every browser does.
  *
  * Supplied rather than guarded around, so the screens run the same code
@@ -161,6 +176,8 @@ afterEach(async () => {
   // A build offered in one test must not still be on offer in the next.
   resetUpdate();
   setOnline(true);
+  // A phone in one test is not a phone in the next one.
+  setViewportWidth(DESKTOP_WIDTH);
   closeDb();
   globalThis.indexedDB = new IDBFactory();
   // A test may have left a Storage that throws in place.

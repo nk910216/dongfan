@@ -60,3 +60,33 @@ export function EventIconBadge({ icon, color, size = 20, diameter = 38 }: BadgeP
     </span>
   );
 }
+
+type ChipProps = { icon: string; color: string; size?: number };
+
+/**
+ * The type's colour as a solid block, with the glyph knocked out of it.
+ *
+ * The strongest signal available for *which* type, and it costs four hundred
+ * square pixels rather than a whole card -- which is why it is the last
+ * thing a narrowing card drops (docs/timeline-design.md).
+ *
+ * It has to carry that load because the palette cannot: five of the
+ * twenty-three colours are near-identical teals and four are near-identical
+ * purples, so colour identifies a family and the glyph identifies the type.
+ */
+export function EventIconChip({ icon, color, size = 20 }: ChipProps): React.JSX.Element {
+  return (
+    <span
+      className="flex shrink-0 items-center justify-center rounded-[6px]"
+      style={{ width: size, height: size, backgroundColor: color }}
+    >
+      <Icon icon={icon} size={Math.round(size * 0.65)} />
+    </span>
+  );
+}
+
+/** The glyph alone, in the ground colour, for knocking out of a block. */
+function Icon({ icon, size }: { icon: string; size: number }): React.JSX.Element {
+  const Glyph = ICONS[icon] ?? CircleEllipsis;
+  return <Glyph size={size} color="var(--color-ground)" strokeWidth={2.2} aria-hidden />;
+}

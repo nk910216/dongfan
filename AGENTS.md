@@ -260,6 +260,62 @@ twice or leaves it going all night. If the draft asks for longer than an event
 may be, the card says the time needs correcting rather than offering a
 confirmation that cannot succeed.
 
+### The card is the record, and its top edge is the time
+
+`docs/timeline-design.md` is the redesign this came from; it has the numbers,
+the sketches and the reasoning. What follows is what a reader of the code
+needs to know.
+
+**The anchor used to live in a lane of its own** beside the card, and before
+that inside it. Inside, a rounded corner and `overflow: hidden` clipped a
+moment's mark into a speck. Outside, the mark and the card were one record
+drawn as two objects with a gap between them, and a column of them read as
+debris. Now **the card's top edge is the start minute** -- for everything,
+with no offset and no exception -- so there is exactly one rule tying a card
+to a time. A moment adds a dot straddling that edge; a range adds a stripe
+down its left, whose height is the true extent.
+
+**And the tint stops where the record stops.** A card has a minimum height
+because a target smaller than a fingertip is no use at 3am, so a thirteen
+minute nursing gets a 44px card. The colour ends at thirteen minutes and the
+rest of the card is plain, which is why its height cannot be read as its
+duration. When the extent covers the card this degenerates to a flat tint --
+one rule, no branch.
+
+**An hour is 96px, and that is a correctness number rather than a taste.**
+At 64px an hour the 44px minimum covered **41 minutes of axis**, so two
+records half an hour apart -- with nothing whatever between them -- collided
+as cards, were laid out as though simultaneous, and joined the same cluster.
+That spurious collision is the fuel for the collapse described below. At 96
+it covers 27.5 minutes. The cost is a day 2304px tall instead of 1536.
+`timeline.test.ts` pins the constant *and* the pair it exists for: a 05:40
+bottle and a 06:10 nappy are two clusters at 96 and one at 64.
+
+**A narrow card drops words; it does not disappear.** `minCardWidth` was 128
+-- the width for a badge, a name, a value and a clock on one line -- and
+requiring all four is why half a phone read as "no room". It is 48 now, and
+`tierFor` decides what a card says at its width. The **type badge goes last**,
+because with five near-identical teals and four near-identical purples in the
+palette, colour identifies a family and only the glyph identifies the type.
+The **clock never goes**: a timeline that has stopped saying when has stopped
+being a timeline.
+
+**A collapsed entry has to say what is inside it.** "6 records" is the same
+sentence for six nappies and for a bath, a feed and four moods, and the same
+for four minutes and for seven hours. The entry carries the badges of the
+types inside it in start order, the count, the stretch it covers, and a
+stripe segmented one colour per member. It is `surface` rather than a tint so
+that nobody reads it as a record.
+
+**What is still wrong, and is the next stage.** A cluster is still a
+transitive chain of card boxes, and `crowded` is still decided for the whole
+chain. A long range therefore chains everything it overlaps, and a few
+crowded minutes still collapse hours. The fix is in the design document:
+split **spans** (a real extent) from **pins** (a moment, a running timer, a
+back-filled record with no end); lay spans out by true interval overlap and
+never merge them; merge only pins, and only within one clock hour. Until that
+lands, the evening of a busy day is still one entry on the two-day screen.
+
 ### The clock ticks every second, so nothing may depend on it by accident
 
 `now` in the store moves once a second. The timeline passed it straight
@@ -313,6 +369,24 @@ being unmounted. Coming back is not a first visit: re-deciding dropped
 somebody reading last night's cluster back at the morning's first feed, with
 the list they had opened still open and somewhere off the screen. A reload
 forgets, which is right -- that is a fresh look at the day.
+
+### The preview harness
+
+`packages/web/preview/` draws the timeline from invented fixtures, with no
+store, no account and no database. `npm run dev` serves it at
+`/preview/timeline.html?view=day|two&at=<hour>`; `vite build` takes
+`index.html` and nothing else, so none of it ships.
+
+It exists because every failure this screen has had is geometric and **jsdom
+computes no geometry**. A mark clipped into a speck, words an hour below the
+line they belong to, a type name cut to one character and a six-hour block
+with a number in the middle of it all pass every assertion in the suite. A
+test can say a card is 44px tall; only a picture can say it is unreadable.
+
+Chrome's `--window-size` is clamped to about 500px wide on macOS, so a
+screenshot at a phone's metrics needs `Emulation.setDeviceMetricsOverride`
+over the DevTools protocol rather than a window of that size. A jsdom test is
+not a visual acceptance and must never be reported as one.
 
 ### Four ways the timeline was wrong and looked right
 

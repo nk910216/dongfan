@@ -7,11 +7,14 @@ import {
 import { AllDayBand, DayBand, Hours, TIMELINE_GUTTER } from '../components/Timeline.js';
 import { PageMenu } from '../components/PageMenu.js';
 import { SyncState } from '../components/SyncState.js';
-import { DEFAULT_METRICS, MINUTES_IN_DAY, itemsFor, layOut, openingMinute } from '../lib/timeline.js';
+import {
+  DEFAULT_METRICS, MINUTES_IN_DAY, columnsFor, itemsFor, layOut, openingMinute,
+} from '../lib/timeline.js';
 import type { DayLayout } from '../lib/timeline.js';
 import { addQuery } from '../lib/dated-add.js';
 import { useDay, useDayScroll } from './Calendar.js';
 import { useStore } from '../lib/store.js';
+import { useViewportWidth } from '../lib/viewport.js';
 
 /**
  * Two days side by side, on one set of hours (spec 7.6).
@@ -42,13 +45,32 @@ export function TwoDays(): React.JSX.Element {
   const leftRows = useDay(earlier, stopDrafts);
   const rightRows = useDay(date, stopDrafts);
 
+  /**
+   * Half a phone is not the same amount of room as all of it.
+   *
+   * Two days divide what one day had, so the single-day ceiling of three
+   * side by side puts one clipped character where a type name should be --
+   * which is the state spec 7.5 says to offer an "N of them" entry for
+   * rather than to draw (spec 7.6).
+   */
+  const bandWidth = (useViewportWidth() - TIMELINE_GUTTER) / 2;
+  const columns = columnsFor(bandWidth, DEFAULT_METRICS);
+
   const left = useMemo<DayLayout>(
-    () => layOut(itemsFor(leftRows ?? [], unsynced, stopDrafts, earlier, baby.timezone)),
-    [leftRows, unsynced, stopDrafts, earlier, baby.timezone],
+    () => layOut(
+      itemsFor(leftRows ?? [], unsynced, stopDrafts, earlier, baby.timezone),
+      DEFAULT_METRICS,
+      columns,
+    ),
+    [leftRows, unsynced, stopDrafts, earlier, baby.timezone, columns],
   );
   const right = useMemo<DayLayout>(
-    () => layOut(itemsFor(rightRows ?? [], unsynced, stopDrafts, date, baby.timezone)),
-    [rightRows, unsynced, stopDrafts, date, baby.timezone],
+    () => layOut(
+      itemsFor(rightRows ?? [], unsynced, stopDrafts, date, baby.timezone),
+      DEFAULT_METRICS,
+      columns,
+    ),
+    [rightRows, unsynced, stopDrafts, date, baby.timezone, columns],
   );
 
   /** Whole minutes, so the clock ticking does not rebuild both days. */
@@ -132,8 +154,20 @@ export function TwoDays(): React.JSX.Element {
             <span className="shrink-0 pt-1 text-[10px] text-ink-dim" style={{ width: `${TIMELINE_GUTTER}px` }}>
               {zhTW.calendar.allDay}
             </span>
-            <AllDayBand items={left.allDay} timezone={baby.timezone} metrics={DEFAULT_METRICS} label="" />
-            <AllDayBand items={right.allDay} timezone={baby.timezone} metrics={DEFAULT_METRICS} label="" />
+            <AllDayBand
+              items={left.allDay}
+              timezone={baby.timezone}
+              metrics={DEFAULT_METRICS}
+              bandWidth={bandWidth}
+              label=""
+            />
+            <AllDayBand
+              items={right.allDay}
+              timezone={baby.timezone}
+              metrics={DEFAULT_METRICS}
+              bandWidth={bandWidth}
+              label=""
+            />
           </div>
         ) : null}
 
@@ -146,12 +180,23 @@ export function TwoDays(): React.JSX.Element {
               by side rather than a comparison. */}
           <Hours metrics={DEFAULT_METRICS} />
 
+          {/* A line between the two columns. Without it a card at the right
+              edge of one day abuts a card at the left edge of the other with
+              nothing to say they belong to different days. Drawn rather than
+              spaced, so it takes no width from either band. */}
+          <div
+            aria-hidden
+            className="absolute top-0 bottom-0 w-px bg-line-soft"
+            style={{ left: `calc(${TIMELINE_GUTTER}px + ${column})` }}
+          />
+
           <DayBand
             layout={left}
             day={earlier}
             timezone={baby.timezone}
             metrics={DEFAULT_METRICS}
             nowMinutes={null}
+            bandWidth={bandWidth}
             style={{ left: `${TIMELINE_GUTTER}px`, width: column }}
           />
           <DayBand
@@ -160,6 +205,7 @@ export function TwoDays(): React.JSX.Element {
             timezone={baby.timezone}
             metrics={DEFAULT_METRICS}
             nowMinutes={nowMinutes}
+            bandWidth={bandWidth}
             style={{ left: `calc(${TIMELINE_GUTTER}px + ${column})`, width: column }}
           />
         </div>

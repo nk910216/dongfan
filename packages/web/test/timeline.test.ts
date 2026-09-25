@@ -3,8 +3,8 @@ import { MAX_EVENT_DURATION_MS, localToUtc, startOfLocalDay } from '@dongfan/sha
 import type { EventDto } from '@dongfan/shared';
 import type { DayEntry, QueuedCreate, StopDraft } from '../src/lib/db.js';
 import {
-  DEFAULT_METRICS, MINUTES_IN_DAY, boxOf, columnSpan, itemsFor, layOut, minCardMinutes,
-  openingMinute, splitAllDay,
+  DEFAULT_METRICS, MAX_COLUMNS, MINUTES_IN_DAY, MIN_BAR_PX, boxOf, columnSpan, columnsFor,
+  extentOf, itemsFor, layOut, minCardMinutes, minutesToPx, openingMinute, splitAllDay, tierFor,
 } from '../src/lib/timeline.js';
 
 /**
@@ -218,14 +218,14 @@ describe('two things at once', () => {
   });
 
   it('reuses a column once the card above it has finished', () => {
-    // A card covers 41 minutes of axis at the default metrics, so the third
-    // here is clear of the first (09:00) and still caught by the second
-    // (09:04). It goes back to column 0 rather than starting a third and
-    // squeezing the words.
+    // A card covers 27.5 minutes of axis at the default metrics, so the
+    // third here is clear of the first (09:00, done by 09:27) and still
+    // caught by the second (09:04, done by 09:31). It goes back to column 0
+    // rather than starting a third and squeezing the words.
     const layout = layOut(items([
       entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 9) })),
       entry(event({ id: 'b', typeId: 'diaper', startedAt: at(DAY, 9, 4) })),
-      entry(event({ id: 'c', typeId: 'bottle', startedAt: at(DAY, 9, 42) })),
+      entry(event({ id: 'c', typeId: 'bottle', startedAt: at(DAY, 9, 30) })),
     ]));
 
     expect(layout.clusters).toHaveLength(1);
@@ -272,6 +272,196 @@ describe('two things at once', () => {
       ['a', 'b', 'c'].map((id, i) => entry(event({ id, typeId: 'bottle', startedAt: at(DAY, 9, i) }))),
     ));
     expect(layout.clusters[0]?.crowded).toBe(false);
+  });
+});
+
+describe('the extent is the duration, and the card is not', () => {
+  const only = (e: EventDto): never => items([entry(e)])[0] as never;
+  const HOUR_PX = DEFAULT_METRICS.hourHeight;
+
+  it('draws a finished range as exactly the minutes it lasted', () => {
+    // The whole question a timeline answers. An hour is an hour of axis, and
+    // five hours and forty-seven minutes is five hours and forty-seven
+    // minutes of axis -- not the height of whatever words sit in it.
+    const hour = extentOf(only(event({
+      id: 'a', typeId: 'sleep', startedAt: at(DAY, 9), endedAt: at(DAY, 10),
+    })), DEFAULT_METRICS);
+    expect(hour).toMatchObject({ px: HOUR_PX, point: false });
+
+    const long = extentOf(only(event({
+      id: 'b', typeId: 'nursing', startedAt: at(DAY, 17, 24), endedAt: at(DAY, 23, 11),
+    })), DEFAULT_METRICS);
+    expect(long.px).toBeCloseTo(minutesToPx(5 * 60 + 47, DEFAULT_METRICS), 10);
+    expect(long.px / HOUR_PX).toBeCloseTo(347 / 60, 10);
+  });
+
+  it('is never stretched to fit the words beside it', () => {
+    // The card has a minimum height and the extent does not share it. A
+    // twenty-minute nap is twenty minutes of stripe inside a card of
+    // forty-four pixels, which is the trap spec 7.5 names: the card's own
+    // height must never be readable as a duration.
+    const nap = only(event({
+      id: 'n', typeId: 'sleep', startedAt: at(DAY, 14), endedAt: at(DAY, 14, 20),
+    }));
+    const stripe = extentOf(nap, DEFAULT_METRICS);
+    const box = boxOf(nap, DEFAULT_METRICS);
+
+    expect(stripe.px).toBeCloseTo(minutesToPx(20, DEFAULT_METRICS), 10);
+    expect(minutesToPx(box.bottom - box.top, DEFAULT_METRICS)).toBe(DEFAULT_METRICS.minCardHeight);
+    expect(stripe.px).toBeLessThan(DEFAULT_METRICS.minCardHeight);
+  });
+
+  it('gives a moment no stripe at all, rather than a short one', () => {
+    // Zero is not a very small duration. A moment is marked with a dot on
+    // the card's top edge and nothing else, because a stripe of any height
+    // would be a length nobody recorded.
+    const bottle = extentOf(only(event({
+      id: 'b', typeId: 'bottle', startedAt: at(DAY, 16, 20),
+    })), DEFAULT_METRICS);
+
+    expect(bottle).toEqual({ px: 0, point: true });
+  });
+
+  it('gives a running timer and an unfinished record a dot as well', () => {
+    // Neither has a length that is a fact yet (spec 3.4.1 rule 3).
+    const running = extentOf(only(event({
+      id: 'r', typeId: 'sleep', startedAt: at(DAY, 13), active: true,
+    })), DEFAULT_METRICS);
+    const unfinished = extentOf(only(event({
+      id: 'u', typeId: 'sleep', startedAt: at(DAY, 13), endedAt: null,
+    })), DEFAULT_METRICS);
+
+    expect(running.point).toBe(true);
+    expect(unfinished.point).toBe(true);
+  });
+
+  it('keeps a two-minute feed visible without inventing minutes', () => {
+    // The one place the drawing departs from the clock, and only upwards
+    // from nothing: three pixels is under two minutes at these metrics.
+    const brief = extentOf(only(event({
+      id: 's', typeId: 'nursing', startedAt: at(DAY, 9), endedAt: at(DAY, 9, 1),
+    })), DEFAULT_METRICS);
+
+    expect(brief.px).toBe(MIN_BAR_PX);
+    expect((MIN_BAR_PX / HOUR_PX) * 60).toBeLessThan(2);
+    // And nothing above the floor is touched by it.
+    const ten = extentOf(only(event({
+      id: 't', typeId: 'nursing', startedAt: at(DAY, 9), endedAt: at(DAY, 9, 10),
+    })), DEFAULT_METRICS);
+    expect(ten.px).toBeCloseTo(minutesToPx(10, DEFAULT_METRICS), 10);
+  });
+
+  it('draws only the part of a night that falls on the day being looked at', () => {
+    const overnight = event({
+      id: 'n', typeId: 'sleep', startedAt: at(DAY, 23), endedAt: at(NEXT, 7), localDate: DAY,
+    });
+    const evening = extentOf(only(overnight), DEFAULT_METRICS);
+    const morning = extentOf(
+      items([entry(overnight, true)], [], [], NEXT)[0] as never,
+      DEFAULT_METRICS,
+    );
+
+    expect(evening.px).toBe(HOUR_PX);
+    expect(morning.px).toBe(7 * HOUR_PX);
+  });
+});
+
+describe('how tall an hour is', () => {
+  it('is 96 pixels, which is what stops half an hour reading as a collision', () => {
+    // A fingertip is 44px whatever the axis does, so the hour height decides
+    // how many *minutes* a fingertip covers. At 64 it covered 41, and two
+    // records half an hour apart -- with nothing at all between them --
+    // collided as cards and were laid out as if they were simultaneous. That
+    // spurious collision is what chained an evening into one group and then
+    // collapsed the lot (docs/timeline-design.md).
+    expect(DEFAULT_METRICS.hourHeight).toBe(96);
+    expect(minCardMinutes(DEFAULT_METRICS)).toBeCloseTo(27.5, 10);
+  });
+
+  it('leaves two records half an hour apart alone, which 64 did not', () => {
+    // The regression test for the metric itself, from the fixtures: a bottle
+    // at 05:40 and a nappy at 06:10.
+    const pair = items([
+      entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 5, 40) })),
+      entry(event({ id: 'b', typeId: 'diaper', startedAt: at(DAY, 6, 10) })),
+    ]);
+
+    expect(layOut(pair, DEFAULT_METRICS).clusters).toHaveLength(2);
+    expect(layOut(pair, { ...DEFAULT_METRICS, hourHeight: 64 }).clusters).toHaveLength(1);
+  });
+
+  it('still puts ten minutes apart side by side, because they are', () => {
+    // No hour height fixes this one short of 264px an hour, and side by side
+    // is the right answer for it.
+    const pair = items([
+      entry(event({ id: 'a', typeId: 'diaper', startedAt: at(DAY, 5, 59) })),
+      entry(event({ id: 'b', typeId: 'bottle', startedAt: at(DAY, 6, 9) })),
+    ]);
+    expect(layOut(pair, DEFAULT_METRICS).clusters).toHaveLength(1);
+  });
+});
+
+describe('how much a card can say at its width', () => {
+  it('drops words as it narrows, and never the clock', () => {
+    // A card degrades by saying less, not by disappearing. The badge is the
+    // last thing to go because it is the only thing that says which type
+    // (docs/timeline-design.md).
+    expect(tierFor(346)).toBe('A');
+    expect(tierFor(160)).toBe('A');
+    expect(tierFor(159)).toBe('B');
+    expect(tierFor(96)).toBe('B');
+    expect(tierFor(95)).toBe('C');
+    expect(tierFor(64)).toBe('C');
+    expect(tierFor(63)).toBe('D');
+    expect(tierFor(48)).toBe('D');
+  });
+
+  it('calls a half-width two-day column readable', () => {
+    // 390px phone, less the 44px hour labels, halved: 173px. That is the
+    // default width of the two-day screen and it has to carry a name.
+    expect(tierFor((390 - 44) / 2)).toBe('A');
+    // And two cards inside one of those columns still say type and value.
+    expect(tierFor((390 - 44) / 2 / 2 - 4)).toBe('C');
+  });
+});
+
+describe('how many cards fit across a band', () => {
+  it('fits several across a phone, at the width a card is readable at', () => {
+    // 48px, not 128. Requiring a name, a value and a clock on one line is
+    // what made the screen give up at half width; a card that narrows by
+    // dropping words needs far less (docs/timeline-design.md).
+    const band = 390 - 44;
+    expect(columnsFor(band, DEFAULT_METRICS)).toBe(MAX_COLUMNS);
+    expect(columnsFor(band / 2, DEFAULT_METRICS)).toBe(MAX_COLUMNS);
+  });
+
+  it('gives up only when a card could not be read at all', () => {
+    expect(columnsFor(100, DEFAULT_METRICS)).toBe(2);
+    expect(columnsFor(47, DEFAULT_METRICS)).toBe(1);
+  });
+
+  it('never offers less than one, and falls back when nothing was measured', () => {
+    // Zero means "nobody has measured", which is not the same as "no room".
+    expect(columnsFor(0, DEFAULT_METRICS)).toBe(MAX_COLUMNS);
+    expect(columnsFor(Number.NaN, DEFAULT_METRICS)).toBe(MAX_COLUMNS);
+  });
+
+  it('offers an entry for two at once where only one fits, and not where two do', () => {
+    // The same two records, and the answer depends on the room there is.
+    const both = items([
+      entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 9) })),
+      entry(event({ id: 'b', typeId: 'diaper', startedAt: at(DAY, 9, 4) })),
+    ]);
+
+    expect(layOut(both, DEFAULT_METRICS, 1).clusters[0]?.crowded).toBe(true);
+    expect(layOut(both, DEFAULT_METRICS, 2).clusters[0]?.crowded).toBe(false);
+    // And nothing is dropped either way (spec 7.5).
+    expect(layOut(both, DEFAULT_METRICS, 1).clusters[0]?.placed).toHaveLength(2);
+  });
+
+  it('leaves one record alone however narrow the band is', () => {
+    const one = items([entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 9) }))]);
+    expect(layOut(one, DEFAULT_METRICS, 1).clusters[0]?.crowded).toBe(false);
   });
 });
 

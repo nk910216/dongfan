@@ -5,11 +5,14 @@ import { isRealLocalDate, startOfLocalDay, toLocalDate, zhTW } from '@dongfan/sh
 import { EmptyDay } from '../components/EventRow.js';
 import { PageMenu } from '../components/PageMenu.js';
 import { SyncState } from '../components/SyncState.js';
-import { Timeline } from '../components/Timeline.js';
+import { TIMELINE_GUTTER, Timeline } from '../components/Timeline.js';
 import { calendarDay } from '../lib/db.js';
 import type { DayEntry, StopDraft } from '../lib/db.js';
-import { DEFAULT_METRICS, MINUTES_IN_DAY, itemsFor, layOut, openingMinute } from '../lib/timeline.js';
+import {
+  DEFAULT_METRICS, MINUTES_IN_DAY, columnsFor, itemsFor, layOut, openingMinute,
+} from '../lib/timeline.js';
 import { useStore } from '../lib/store.js';
+import { useViewportWidth } from '../lib/viewport.js';
 
 /**
  * One day, on a fixed 00:00-24:00 axis (spec 7.5).
@@ -139,9 +142,19 @@ export function Calendar(): React.JSX.Element {
 
   const entries = useDay(date, stopDrafts);
 
+  // One day owns everything right of the hour labels. That width decides
+  // both how many cards fit across it and how much each one can say, so it
+  // is measured rather than assumed (spec 7.5).
+  const bandWidth = useViewportWidth() - TIMELINE_GUTTER;
+  const columns = columnsFor(bandWidth, DEFAULT_METRICS);
+
   const layout = useMemo(
-    () => layOut(itemsFor(entries ?? [], unsynced, stopDrafts, isRealLocalDate(date) ? date : today, baby.timezone)),
-    [entries, unsynced, stopDrafts, date, today, baby.timezone],
+    () => layOut(
+      itemsFor(entries ?? [], unsynced, stopDrafts, isRealLocalDate(date) ? date : today, baby.timezone),
+      DEFAULT_METRICS,
+      columns,
+    ),
+    [entries, unsynced, stopDrafts, date, today, baby.timezone, columns],
   );
 
   /**
@@ -230,7 +243,13 @@ export function Calendar(): React.JSX.Element {
             <EmptyDay title={zhTW.calendar.empty} />
           </div>
         ) : null}
-        <Timeline layout={layout} day={date} timezone={baby.timezone} nowMinutes={nowMinutes} />
+        <Timeline
+          layout={layout}
+          day={date}
+          timezone={baby.timezone}
+          nowMinutes={nowMinutes}
+          bandWidth={bandWidth}
+        />
       </div>
 
       {/* Adds to the day being looked at, not to today. Carried in the URL
