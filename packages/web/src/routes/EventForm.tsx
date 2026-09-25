@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
-import { deriveEventTimes, eventTypeName, getEventType, zhTW } from '@dongfan/shared';
+import { deriveEventTimes, eventTypeName, getEventType, interpolate, zhTW } from '@dongfan/shared';
 import type { EventIntent } from '@dongfan/shared';
 import { EventIcon } from '../components/EventIcon.js';
 import { EventFields, checkDraft, draftForValue } from '../components/EventFields.js';
@@ -9,6 +9,7 @@ import type { EventDraft } from '../components/EventFields.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { useCreateEvent } from '../lib/create-event.js';
 import type { SubmitResult } from '../lib/create-event.js';
+import { askedDay, dayAfterAdding, daySuffix, startFor } from '../lib/dated-add.js';
 import { clearForm, formKey, readForm, saveForm } from '../lib/form-draft.js';
 import { typeSummary, useStore } from '../lib/store.js';
 
@@ -31,13 +32,28 @@ export function EventForm({ typeId: given, entryId }: {
   const params = useParams();
   const typeId = given ?? params['typeId'] ?? '';
   const navigate = useNavigate();
+  const [search] = useSearchParams();
   const { baby, scope, summary } = useStore();
   const type = getEventType(typeId);
+
+  /**
+   * The day this add was started from, when it was not today's screen.
+   *
+   * A correction being resent is never dated: it carries the content the
+   * queue already holds, and the day it was for was decided when it was
+   * first written (spec 6.1).
+   */
+  const day = entryId === undefined ? askedDay(search.toString()) : null;
 
   // Where what is being typed is kept, so that a reload does not throw it
   // away. Named by the account, the type, and which entry it is correcting,
   // because all three can have a form open at once (spec 2.1).
-  const formId = formKey(scope, `add:${typeId}:${entryId ?? ''}`);
+  //
+  // The day is part of the name. Without it, a half-typed feed for the 18th
+  // would be offered back on the 19th's form, holding the 18th's instant
+  // while the screen said the 19th -- and the wrong one of those two would
+  // be the one that got saved.
+  const formId = formKey(scope, `add:${typeId}:${entryId ?? ''}${day === null ? '' : `:${day}`}`);
 
   /**
    * Read once, at mount, and already settled.
@@ -92,7 +108,12 @@ export function EventForm({ typeId: given, entryId }: {
       // midnight here as well as in the database. Sending the raw clock and
       // letting the server pin it works, but then the form is showing one
       // day's date while holding another day's instant (spec 3.9).
-      startedAt: type ? deriveEventTimes(type, Date.now(), 'record', baby.timezone).startedAt : Date.now(),
+      // `startFor` is the clock for today and midday for any earlier day;
+      // the reasoning is in dated-add.ts.
+      startedAt: (() => {
+        const from = startFor(day, baby.timezone, Date.now());
+        return type ? deriveEventTimes(type, from, 'record', baby.timezone).startedAt : from;
+      })(),
       endedAt: null,
       // Feed amounts repeat, so the last one is a better starting point
       // than an empty box. It still has to be confirmed rather than sent
@@ -108,7 +129,7 @@ export function EventForm({ typeId: given, entryId }: {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 px-6">
         <p className="text-sm text-ink-muted">{zhTW.eventType.unknown}</p>
-        <Link to="/add" className="text-sm text-accent">{zhTW.addEvent.cancel}</Link>
+        <Link to={`/add${daySuffix(day)}`} className="text-sm text-accent">{zhTW.addEvent.cancel}</Link>
       </div>
     );
   }
@@ -130,7 +151,13 @@ export function EventForm({ typeId: given, entryId }: {
     // The queue sent the original while this screen was open, so what is
     // typed here is now an edit to a stored event and has to carry a
     // version. That is the edit screen's job (spec 6.3).
-    navigate(result.kind === 'gone' ? `/event/${result.eventId}` : '/');
+    if (result.kind === 'gone') {
+      navigate(`/event/${result.eventId}`);
+      return;
+    }
+    // Back to the day it was written for, and to the day it actually
+    // landed on if the time was changed to another one.
+    navigate(day === null ? '/' : dayAfterAdding(draft.startedAt, baby.timezone, Date.now()));
   };
 
   const submit = async (): Promise<void> => {
@@ -175,7 +202,7 @@ export function EventForm({ typeId: given, entryId }: {
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <header className="flex shrink-0 items-center border-b border-line-soft px-2 py-2">
-        <Link to="/add" aria-label={zhTW.addEvent.cancel} className="flex size-11 items-center justify-center text-ink-muted">
+        <Link to={`/add${daySuffix(day)}`} aria-label={zhTW.addEvent.cancel} className="flex size-11 items-center justify-center text-ink-muted">
           <ChevronLeft size={22} />
         </Link>
         <div className="-ml-11 flex flex-1 items-center justify-center gap-2">
@@ -183,6 +210,19 @@ export function EventForm({ typeId: given, entryId }: {
           <span className="text-base font-medium">{eventTypeName(type.id)}</span>
         </div>
       </header>
+
+      {/* A form for the 18th looks exactly like a form for now. Saying so
+          is what stops a record being filed under a day nobody chose --
+          and the time below starts at midday rather than at the current
+          clock for the same reason (see dated-add.ts). */}
+      {day !== null ? (
+        <p
+          className="shrink-0 border-b border-line-soft bg-surface px-4 py-2 text-center text-xs text-accent"
+          data-testid="adding-on"
+        >
+          {interpolate(zhTW.addEvent.onDate, { date: day })}
+        </p>
+      ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4.5 pt-4">
         {type.timerEnabled ? (

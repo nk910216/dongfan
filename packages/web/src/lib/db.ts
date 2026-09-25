@@ -1,6 +1,6 @@
 import { openDB } from 'idb';
 import type { DBSchema, IDBPDatabase } from 'idb';
-import { addLocalDays, coversLocalDate, msOnLocalDate } from '@dongfan/shared';
+import { addLocalDays, coversLocalDate, getEventType, msOnLocalDate } from '@dongfan/shared';
 import type { EventDto, EventIntent, SummaryDto } from '@dongfan/shared';
 
 /**
@@ -495,8 +495,25 @@ export async function calendarDay(
       carriedOver: event.localDate !== date,
       msOnDay: msOnLocalDate(event.startedAt, event.endedAt, date, timeZone),
     }))
-    .sort((a, b) =>
-      b.event.startedAt - a.event.startedAt || (a.event.id < b.event.id ? 1 : -1));
+    .sort(byDayOrder);
+}
+
+/**
+ * All-day events first, then the clock, newest first.
+ *
+ * An all-day event has no time of day at all -- the server pins it to local
+ * midnight (spec 3.9) -- so ordering it by `started_at` would drop
+ * yesterday's illness to the bottom of the day underneath every feed. It is
+ * a heading for the day rather than a thing that happened at 00:00.
+ *
+ * The id breaks the remaining ties, so two events recorded in the same
+ * second do not swap places between reads (spec 5.5).
+ */
+function byDayOrder(a: DayEntry, b: DayEntry): number {
+  const allDayA = getEventType(a.event.typeId)?.allDay === true;
+  const allDayB = getEventType(b.event.typeId)?.allDay === true;
+  if (allDayA !== allDayB) return allDayA ? -1 : 1;
+  return b.event.startedAt - a.event.startedAt || (a.event.id < b.event.id ? 1 : -1);
 }
 
 /** Everything held for a scope, oldest write first. For tests and debugging. */

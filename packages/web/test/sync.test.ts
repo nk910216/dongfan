@@ -156,6 +156,25 @@ describe('a day on the calendar', () => {
     expect(day[0]).toMatchObject({ carriedOver: false, msOnDay: 20 * 60_000 });
   });
 
+  it('puts an all-day event above everything, whatever the clock says', async () => {
+    // Its instant is local midnight, because that is what the server
+    // stores for an all-day event (spec 3.9). Sorted by the clock it
+    // would sink beneath every feed of the day, which is the opposite of
+    // what a milestone is for.
+    await applyPage(MINE, [
+      breakfast(),
+      event('milestone', 3, {
+        typeId: 'milestone',
+        localDate: '2026-09-21',
+        startedAt: at(21, 0),
+        endedAt: null,
+      }),
+    ], 3);
+
+    expect((await calendarDay(MINE, '2026-09-21', TAIPEI)).map((e) => e.event.id))
+      .toEqual(['milestone', 'breakfast']);
+  });
+
   it('gives the earlier day only the minutes that were actually its own', async () => {
     await applyPage(MINE, [overnight()], 1);
 

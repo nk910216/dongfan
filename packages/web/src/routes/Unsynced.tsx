@@ -1,15 +1,12 @@
 import { useState } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
-import {
-  errorMessage, eventTypeName, formatValue, getEventType, interpolate,
-  metadataOptionLabel, zhTW,
-} from '@dongfan/shared';
+import { errorMessage, eventTypeName, getEventType, interpolate, zhTW } from '@dongfan/shared';
 import type { QueuedCreate } from '../lib/db.js';
 import { EventIconBadge, FALLBACK_COLOR } from '../components/EventIcon.js';
+import { describeQueued } from '../components/EventRow.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { EventForm } from './EventForm.js';
-import { formatClock } from '../lib/format.js';
 import { useStore } from '../lib/store.js';
 
 /**
@@ -64,24 +61,6 @@ function Header({ title }: { title: string }): React.JSX.Element {
 }
 
 /** A one-line description of what is in an entry, so it can be recognised. */
-export function describeQueued(entry: QueuedCreate, timezone: string): string {
-  const type = getEventType(entry.input.typeId);
-  const parts: string[] = [];
-
-  if (type?.allDay) parts.push(zhTW.event.allDay);
-  else parts.push(formatClock(entry.input.startedAt, timezone));
-
-  if (type?.value && entry.input.value !== undefined) {
-    parts.push(`${formatValue(entry.input.value, type.value)}${type.value.unit}`);
-  }
-  for (const [key, value] of Object.entries(entry.input.metadata)) {
-    if (value !== '') parts.push(metadataOptionLabel(key, value));
-  }
-  if (entry.input.note !== '') parts.push(entry.input.note);
-
-  return parts.join(' · ');
-}
-
 function Row({ entry }: { entry: QueuedCreate }): React.JSX.Element {
   const { baby, retryUnsynced, abandonUnsynced } = useStore();
   const [busy, setBusy] = useState(false);

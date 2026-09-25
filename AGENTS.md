@@ -108,7 +108,7 @@ is a year of data to point it at.
 | | | |
 |---|---|---|
 | 1 | The day boundary: what a day's calendar contains (spec 3.4.1, 7.5) | **done** |
-| 2 | The single-day calendar screen: date picker, back to today, the FAB | |
+| 2 | The single-day calendar screen: date picker, back to today, the FAB, writing something up afterwards | **done** |
 | 3 | A year of synthetic data in its own database, the D1 query-count guardrail (spec 11.2), and `GET /stats` for `count`/`sum`/`last`/`max`/`avg` | |
 | 4 | `duration_sum`: the midnight split in SQL, `UNION ALL`, excluding running timers | |
 | 5 | The stats screen: type, range, chart kind, axis density, the two warnings | |
@@ -147,6 +147,52 @@ twice for as long as it runs.
 does not, and never did: both screens read their day out of IndexedDB
 because a day has to open with no network (spec 6.2). The endpoint has no
 client at all.
+
+### Writing something up afterwards
+
+The day an add is for travels in the query string — `/add?on=2026-09-18`,
+`/add/bottle?on=2026-09-18` — and not in router state. State is gone after
+a reload, and the screen would carry on looking identical while meaning
+something else: a record for the 18th quietly becoming a record for now
+(spec 2.1). `lib/dated-add.ts` holds the four small decisions so both
+screens make them the same way.
+
+- **The time starts at midday**, not at the current time of day moved onto
+  that date. A time carried over from the clock reads as something that was
+  observed and gets saved without being looked at; midday reads as a
+  placeholder, and the field it sits in is the one thing a parent writing
+  from memory has to fill in. Today is still `now`, which is the ordinary
+  case and needs no placeholder.
+- **The form draft is named with the day.** Without that, a half-typed feed
+  for the 18th is offered back on the 19th's form, holding the 18th's
+  instant while the heading says the 19th — and the wrong one of those two
+  is the one that gets saved.
+- **Afterwards it returns to the day the record landed on**, which is the
+  day it was written for unless the parent changed the time to another one.
+  Returning to the day they were browsing regardless would show them a day
+  without the record they just made, and "it did not save" is the wrong
+  thing to learn from a screen. Today returns to `/day`, not to today's
+  date, so it keeps meaning today after midnight.
+- **Both screens say which day they are filing under.** A form for the 18th
+  looks exactly like a form for now.
+
+`/day` and `/day/:date` are deliberately different: without a date it is
+today and stays today when the clock passes midnight under a phone on a
+bedside table; with one it is that day and does not move. "Back to today"
+goes to `/day`.
+
+Rows are shared rather than copied. `components/EventRow.tsx` holds
+`EventRow`, `WaitingRow` and `describeQueued`, because spec 7.5 asks for
+the calendar's events to look like the home screen's, and two copies would
+answer that on the day they were written and then drift.
+
+An all-day event sorts **above** everything, in `calendarDay` rather than
+in a screen. It is stored at local midnight (spec 3.9), so by the clock it
+would sink under every feed of the day instead of heading it.
+
+The menu button at the top left had no handler at all until this screen
+existed — there was no way into the calendar. `PageMenu` is the page list
+spec 7.10 asks for.
 
 ### Two things spec.md is not consistent about
 

@@ -1,18 +1,15 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Menu, Plus, Settings } from 'lucide-react';
+import { Plus, Settings } from 'lucide-react';
 import {
-  ageAt, eventTypeName, formatValue, getEventType, interpolate,
-  metadataOptionLabel, toLocalDate, zhTW,
+  ageAt, formatValue, getEventType, interpolate, toLocalDate, zhTW,
 } from '@dongfan/shared';
-import type { EventDto } from '@dongfan/shared';
-import { EventIconBadge, FALLBACK_COLOR } from '../components/EventIcon.js';
+import { EmptyDay, EventRow, WaitingRow } from '../components/EventRow.js';
 import { InstallHint } from '../components/InstallHint.js';
+import { PageMenu } from '../components/PageMenu.js';
 import { QuickActions } from '../components/QuickActions.js';
-import type { QueuedCreate } from '../lib/db.js';
-import { formatClock, formatDuration, relativeTime, syncedAgo } from '../lib/format.js';
+import { relativeTime, syncedAgo } from '../lib/format.js';
 import { draftFor, typeSummary, useStore } from '../lib/store.js';
-import { describeQueued } from './Unsynced.js';
 import { useSession } from '../lib/session.js';
 
 export function Home(): React.JSX.Element {
@@ -55,9 +52,9 @@ export function Home(): React.JSX.Element {
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <header className="flex shrink-0 items-center justify-between px-2 pt-2.5 pb-1.5">
-        <button type="button" aria-label={zhTW.a11y.openMenu} className="flex size-11 items-center justify-center text-ink-muted">
-          <Menu size={22} />
-        </button>
+        {/* Until now this had no handler at all, so the calendar had no
+            way in. Spec 7.10 asks for a page list behind it. */}
+        <PageMenu />
         {/* Tappable, because the automatic pulls cover coming back to the
             app and coming back online, and neither covers standing in the
             kitchen wondering whether the other parent has recorded the
@@ -182,7 +179,7 @@ export function Home(): React.JSX.Element {
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-24">
         {events.length === 0 && waiting.length === 0 ? (
-          <EmptyState />
+          <EmptyDay title={zhTW.home.emptyTitle} hint={zhTW.home.emptyHint} />
         ) : (
           <>
             {waiting.map((entry) => (
@@ -297,101 +294,3 @@ function SummaryCell({
   );
 }
 
-function EmptyState(): React.JSX.Element {
-  return (
-    <div className="flex flex-col items-center gap-2 rounded-2xl border border-line-soft bg-surface px-4 py-10">
-      <p className="text-sm text-ink-muted">{zhTW.home.emptyTitle}</p>
-      <p className="text-xs text-ink-dim">{zhTW.home.emptyHint}</p>
-    </div>
-  );
-}
-
-/**
- * A record this device is still holding.
- *
- * Deliberately not dressed as a synced one. Spec 6.2 asks for pending
- * entries to be shown alongside the rest and to be tellable apart at a
- * glance, so this one is dimmer, carries a badge, and leads to the list
- * where something can be done about it rather than to an edit screen for
- * an event the server has never heard of.
- */
-function WaitingRow({ entry, timezone }: { entry: QueuedCreate; timezone: string }): React.JSX.Element {
-  const type = getEventType(entry.input.typeId);
-  const color = type?.color ?? FALLBACK_COLOR;
-
-  return (
-    <Link
-      to="/unsynced"
-      className="flex items-center gap-2.5 border-b border-dashed border-line px-1 py-2.5 opacity-70"
-      data-testid={`waiting-row-${entry.input.typeId}`}
-    >
-      <EventIconBadge icon={type?.icon ?? 'circle-ellipsis'} color={color} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[15px] font-medium">{eventTypeName(entry.input.typeId)}</span>
-          <span className="rounded border border-warn/60 px-1.5 py-px text-[10px] text-warn-soft">
-            {zhTW.unsynced.badge}
-          </span>
-        </div>
-        <div className="mt-px truncate text-xs text-ink-faint">{describeQueued(entry, timezone)}</div>
-      </div>
-    </Link>
-  );
-}
-
-function EventRow({ event, timezone, drafted }: {
-  event: EventDto;
-  timezone: string;
-  /** Stopped on this device, with nobody having confirmed when yet. */
-  drafted: boolean;
-}): React.JSX.Element {
-  const type = getEventType(event.typeId);
-  const color = type?.color ?? FALLBACK_COLOR;
-  const spec = type?.value ?? null;
-
-  const details: string[] = [];
-  if (type?.allDay) details.push(zhTW.event.allDay);
-  else details.push(formatClock(event.startedAt, timezone));
-
-  if (event.endedAt !== null && type?.hasRange) {
-    details.push(formatDuration(event.endedAt - event.startedAt));
-  }
-  for (const [key, value] of Object.entries(event.metadata)) {
-    if (value !== '') details.push(metadataOptionLabel(key, value));
-  }
-
-  return (
-    <Link
-      to={`/event/${event.id}`}
-      aria-label={interpolate(zhTW.event.open, { name: eventTypeName(event.typeId) })}
-      className="flex items-center gap-2.5 border-b border-line-soft px-1 py-2.5"
-      data-testid={`event-row-${event.typeId}`}
-    >
-      <EventIconBadge icon={type?.icon ?? 'circle-ellipsis'} color={color} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[15px] font-medium">{eventTypeName(event.typeId)}</span>
-          {/* "Still running" and "stopped, but only here" have to look
-              different. A parent who cannot tell them apart either stops
-              it a second time or leaves it running all night (spec 7.2). */}
-          {drafted ? (
-            <span className="rounded border border-dashed border-warn/70 px-1.5 py-px text-[10px] text-warn-soft">
-              {zhTW.stopDraft.badge}
-            </span>
-          ) : event.active ? (
-            <span className="rounded border px-1.5 py-px text-[10px]" style={{ color, borderColor: `${color}66` }}>
-              {zhTW.event.inProgress}
-            </span>
-          ) : null}
-        </div>
-        <div className="mt-px truncate text-xs text-ink-faint">{details.join(' · ')}</div>
-      </div>
-      {spec ? (
-        <span className="font-numeric shrink-0 text-[15px] font-semibold" style={{ color }}>
-          {formatValue(event.value, spec)}
-          <span className="text-[11px] text-ink-faint">{spec.unit}</span>
-        </span>
-      ) : null}
-    </Link>
-  );
-}

@@ -6,6 +6,7 @@ import { CreateBaby } from './routes/CreateBaby.js';
 import { SessionProvider, useSession } from './lib/session.js';
 import { StoreProvider } from './lib/store.js';
 import { AddEvent } from './routes/AddEvent.js';
+import { Calendar } from './routes/Calendar.js';
 import { EditEvent } from './routes/EditEvent.js';
 import { EventForm } from './routes/EventForm.js';
 import { Home } from './routes/Home.js';
@@ -61,6 +62,10 @@ function Shell(): React.JSX.Element {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/add" element={<AddEvent />} />
+        {/* Two paths, two meanings: "today, whatever that is" and one
+            fixed day. See the comment in Calendar.tsx. */}
+        <Route path="/day" element={<Calendar />} />
+        <Route path="/day/:date" element={<Calendar />} />
         <Route path="/add/:typeId" element={<EventForm />} />
         <Route path="/event/:eventId" element={<EditEvent />} />
         <Route path="/settings" element={<Settings />} />

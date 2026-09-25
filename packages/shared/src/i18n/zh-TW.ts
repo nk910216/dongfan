@@ -139,6 +139,26 @@ export const zhTW = {
     stopDrafts: '尚有 {count} 筆計時待確認結束時間',
   },
 
+  /** The page list behind the icon at the top left of the home screen (7.10). */
+  nav: {
+    title: '前往',
+    home: '主頁',
+    calendar: '行事曆',
+    settings: '設定',
+    close: '關閉',
+  },
+
+  calendar: {
+    title: '行事曆',
+    date: '日期',
+    today: '回到今天',
+    empty: '這天沒有紀錄',
+    /** Started before midnight, so it is counted on the previous day. */
+    carriedOver: '前一天開始',
+    /** How much of it belongs to the day being shown. */
+    onThisDay: '這天 {duration}',
+  },
+
   timer: {
     running: '{name}中',
     stop: '結束',
@@ -165,6 +185,7 @@ export const zhTW = {
   },
 
   addEvent: {
+    onDate: '正在為 {date} 新增紀錄',
     title: '新增事件',
     startTimer: '開始計時',
     record: '補登紀錄',

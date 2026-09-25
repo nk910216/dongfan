@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { HttpResponse, http } from 'msw';
 import {
-  eventTypeName, fromLocalInput, interpolate, metadataLabel, metadataOptionLabel,
+  addLocalDays, eventTypeName, fromLocalInput, interpolate, metadataLabel, metadataOptionLabel,
   startOfLocalDay, toLocalDate, toLocalInput, toStored, valueLabel, zhTW,
 } from '@dongfan/shared';
 import { App } from '../src/App.js';
@@ -1078,6 +1078,192 @@ describe('touch targets', () => {
     for (const link of shortcuts) expect(link.className).toMatch(/min-h-11/);
 
     expect(screen.getByRole('link', { name: zhTW.a11y.addEvent }).className).toMatch(/size-15/);
+  });
+});
+
+describe('looking back at one day', () => {
+  /**
+   * Days named in calendar space, never as an offset from now.
+   *
+   * `Date.now() - 3 * DAY` is a different local date for a few minutes
+   * every night, and every instant below is anchored to the start of a
+   * named day rather than counted backwards from the clock.
+   */
+  const today = (): string => toLocalDate(Date.now(), BABY.timezone);
+  const daysAgo = (days: number): string => addLocalDays(today(), -days);
+  const onDay = (date: string, hour: number, minute = 0): number =>
+    startOfLocalDay(date, BABY.timezone) + hour * 3_600_000 + minute * 60_000;
+
+  it('shows the night that ran into the morning, and says where it came from', async () => {
+    // Its local_date is the evening before, so a screen asking only for
+    // this morning's date would lose seven hours of it (spec 3.4.1).
+    const evening = daysAgo(3);
+    const morning = daysAgo(2);
+    api.add({
+      typeId: 'sleep',
+      startedAt: onDay(evening, 23, 10),
+      endedAt: onDay(morning, 7, 5),
+    });
+
+    openSignedIn(`/day/${morning}`);
+
+    expect(await screen.findByTestId('event-row-sleep')).toBeInTheDocument();
+    expect(screen.getByTestId('carried-over')).toHaveTextContent(zhTW.calendar.carriedOver);
+  });
+
+  it('does not call a record of the day itself carried over', async () => {
+    const day = daysAgo(2);
+    api.add({ typeId: 'bottle', startedAt: onDay(day, 9) });
+
+    openSignedIn(`/day/${day}`);
+
+    expect(await screen.findByTestId('event-row-bottle')).toBeInTheDocument();
+    expect(screen.queryByTestId('carried-over')).not.toBeInTheDocument();
+  });
+
+  it('puts an all-day event above the rest of the day', async () => {
+    // It is stored at local midnight (spec 3.9), so by the clock it would
+    // sit under every feed instead of heading the day.
+    const day = daysAgo(2);
+    api.add({ typeId: 'bottle', startedAt: onDay(day, 9) });
+    api.add({ typeId: 'milestone', startedAt: onDay(day, 0) });
+
+    openSignedIn(`/day/${day}`);
+    await screen.findByTestId('event-row-milestone');
+
+    const rows = screen.getAllByTestId(/^event-row-/);
+    expect(rows.map((row) => row.dataset['testid'])).toEqual([
+      'event-row-milestone',
+      'event-row-bottle',
+    ]);
+  });
+
+  it('says so rather than looking like a day that failed to load', async () => {
+    openSignedIn(`/day/${daysAgo(5)}`);
+    expect(await screen.findByText(zhTW.calendar.empty)).toBeInTheDocument();
+  });
+
+  it('comes back to today, and to a today that is still moving', async () => {
+    const user = openSignedIn(`/day/${daysAgo(3)}`);
+
+    await user.click(await screen.findByTestId('back-to-today'));
+
+    // `/day` rather than today's date: a phone left on a bedside table has
+    // to still be showing today after midnight.
+    expect(await screen.findByTestId('calendar-date')).toHaveValue(today());
+    expect(screen.queryByTestId('back-to-today')).not.toBeInTheDocument();
+  });
+
+  it('is reachable at all', async () => {
+    // The menu button had no handler until this screen existed, so there
+    // was no way in (spec 7.10).
+    const user = openSignedIn();
+    await waitForHome();
+
+    await user.click(screen.getByTestId('open-menu'));
+    await user.click(screen.getByRole('link', { name: zhTW.nav.calendar }));
+
+    expect(await screen.findByTestId('calendar-date')).toHaveValue(today());
+  });
+});
+
+describe('writing something up afterwards', () => {
+  const today = (): string => toLocalDate(Date.now(), BABY.timezone);
+  const daysAgo = (days: number): string => addLocalDays(today(), -days);
+
+  it('files it under the day being looked at, not under now', async () => {
+    const day = daysAgo(4);
+    const user = openSignedIn(`/day/${day}`);
+
+    await user.click(await screen.findByRole('link', { name: zhTW.a11y.addEvent }));
+    expect(await screen.findByTestId('adding-on')).toHaveTextContent(day);
+
+    await user.click(screen.getByRole('link', { name: eventTypeName('bottle') }));
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    const sent = api.lastRequest('/events')?.body as Record<string, unknown>;
+    expect(toLocalDate(Number(sent['startedAt']), BABY.timezone)).toBe(day);
+  });
+
+  it('starts the time at midday rather than at a plausible-looking now', async () => {
+    // Midday reads as a placeholder. The current time of day transplanted
+    // onto an earlier date reads as an observation, and gets saved without
+    // being looked at.
+    const day = daysAgo(4);
+    openSignedIn(`/add/bottle?on=${day}`);
+
+    const field = await screen.findByTestId('started-at');
+    expect(field).toHaveValue(toLocalInput(startOfLocalDay(day, BABY.timezone) + 12 * 3_600_000, BABY.timezone));
+  });
+
+  it('comes back to the day it was written for', async () => {
+    const day = daysAgo(4);
+    const user = openSignedIn(`/add/bottle?on=${day}`);
+
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+
+    // Not the home screen. Somebody filling in three feeds for Tuesday
+    // should not be sent back to today between each one.
+    expect(await screen.findByTestId('calendar-date')).toHaveValue(day);
+  });
+
+  it('follows the record when the time is moved to another day', async () => {
+    // Returning to the day it was written for would show a day without it,
+    // and "it did not save" is the wrong thing to learn from a screen.
+    const from = daysAgo(4);
+    const landed = daysAgo(6);
+    const user = openSignedIn(`/add/bottle?on=${from}`);
+
+    // Set in one go rather than typed: a datetime control halfway through
+    // being typed is not a moment, and nothing should read one.
+    fireEvent.change(await screen.findByTestId('started-at'), {
+      target: {
+        value: toLocalInput(startOfLocalDay(landed, BABY.timezone) + 9 * 3_600_000, BABY.timezone),
+      },
+    });
+    await user.type(screen.getByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getByTestId('submit'));
+
+    expect(await screen.findByTestId('calendar-date')).toHaveValue(landed);
+  });
+
+  it('gives up on the day rather than on the app when cancelled', async () => {
+    const day = daysAgo(4);
+    const user = openSignedIn(`/add/bottle?on=${day}`);
+
+    await user.click(await screen.findByLabelText(zhTW.addEvent.cancel));
+    expect(await screen.findByTestId('adding-on')).toHaveTextContent(day);
+
+    await user.click(screen.getByLabelText(zhTW.addEvent.cancel));
+    expect(await screen.findByTestId('calendar-date')).toHaveValue(day);
+  });
+
+  it('does not offer one day’s half-typed feed on another day’s form', async () => {
+    const monday = daysAgo(5);
+    const tuesday = daysAgo(4);
+
+    const user = openSignedIn(`/add/bottle?on=${monday}`);
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    closeApp();
+
+    openSignedIn(`/add/bottle?on=${tuesday}`);
+    // Monday's draft holds Monday's instant. Offered here it would show
+    // Tuesday at the top and save Monday underneath.
+    expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('');
+  });
+
+  it('still offers it back on the day it was typed for', async () => {
+    const monday = daysAgo(5);
+
+    const user = openSignedIn(`/add/bottle?on=${monday}`);
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    closeApp();
+
+    openSignedIn(`/add/bottle?on=${monday}`);
+    expect(await screen.findByDisplayValue('150')).toBeInTheDocument();
   });
 });
 
