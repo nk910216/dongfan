@@ -8,6 +8,7 @@ import { EventIcon, EventIconBadge } from '../components/EventIcon.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { useCreateEvent } from '../lib/create-event.js';
 import { addQuery, askedDay, dayView, startFor } from '../lib/dated-add.js';
+import { linkBack } from '../lib/return-to.js';
 import { useStore } from '../lib/store.js';
 
 /**
@@ -33,6 +34,15 @@ export function AddEvent(): React.JSX.Element {
    * filed under and which screen somebody is looking at are two questions.
    */
   const from = search.get('from');
+
+  /**
+   * Where this screen goes when it is finished with, decided once.
+   *
+   * Both ways out used to work it out separately, and only one of them knew
+   * about `from` -- so a shortcut that turned into an edit left the two-day
+   * view while the ordinary one came back to it.
+   */
+  const back = from ?? (day === null ? '/' : dayView(day, baby.timezone, Date.now()));
 
   const diaper = getEventType('diaper');
 
@@ -64,19 +74,22 @@ export function AddEvent(): React.JSX.Element {
     // the parent on this screen.
     if (result.kind === 'failed') return;
     if (result.kind === 'gone') {
-      navigate(`/event/${result.eventId}`);
+      // The queue sent this entry while the screen was open, so it is a
+      // stored record now and belongs to the edit screen -- which still has
+      // to know where all of this started (spec 6.1, 6.3).
+      navigate(linkBack(`/event/${result.eventId}`, back));
       return;
     }
     // Back to the screen this was entered from, on the day it was
     // showing -- never to today (spec 7.3).
-    navigate(from ?? (day === null ? '/' : dayView(day, baby.timezone, Date.now())));
+    navigate(back);
   };
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <header className="flex shrink-0 items-center border-b border-line-soft px-2 py-2">
         <Link
-          to={from ?? (day === null ? '/' : `/day/${day}`)}
+          to={back}
           aria-label={zhTW.addEvent.cancel}
           className="flex size-11 items-center justify-center text-ink-muted"
         >

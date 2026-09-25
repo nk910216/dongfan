@@ -1766,6 +1766,50 @@ describe('two days at once', () => {
     expect(screen.getByTestId('column-earlier')).toHaveTextContent(daysAgo(3));
   });
 
+  it('comes back to the two days when a shortcut turns into an edit', async () => {
+    // The awkward one. The shortcut screen only takes over an entry that is
+    // in doubt or has failed, so reaching this needs a nappy whose answer
+    // was lost, and then the queue getting through while that screen is
+    // open. Pressing a kind then cannot post a creation -- the server holds
+    // the record -- so it becomes an edit (spec 6.1, 6.3), and that screen
+    // has to know where this started too.
+    const later = daysAgo(2);
+    const user = openSignedIn(`/two/${later}`);
+    await screen.findByTestId('column-later');
+
+    // Stored, and the reply never arrives.
+    api.loseNextResponse = true;
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') }));
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    // A lost answer keeps the parent on this screen, saying so, because it
+    // is the one thing they can act on (spec 6.1).
+    await screen.findByTestId('outcome-unknown');
+
+    // The queue waits five seconds before trying again, so the clock is
+    // moved past that rather than the test waiting for it.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 30_000);
+    try {
+      comeBack();
+      // The resend is answered with the record the server already had, so
+      // the entry leaves the queue without adding anything -- and the doubt
+      // on this screen goes with it. Waited for on that, which is a thing
+      // this screen actually shows: `unsynced-count` belongs to the home
+      // screen, so waiting for its absence here proves nothing at all.
+      await waitFor(() => expect(screen.queryByTestId('outcome-unknown')).not.toBeInTheDocument());
+
+      await user.click(screen.getByRole('button', { name: metadataOptionLabel('diaper_kind', 'pee') }));
+
+      await screen.findByText(zhTW.event.edit);
+      await user.click(screen.getByLabelText(zhTW.addEvent.cancel));
+    } finally {
+      clock.mockRestore();
+    }
+
+    expect(await screen.findByTestId('column-later')).toHaveTextContent(later);
+    expect(api.events).toHaveLength(1);
+  });
+
   it('comes back to the two days after the form is saved', async () => {
     const later = daysAgo(2);
     const user = openSignedIn(`/two/${later}`);

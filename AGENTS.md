@@ -161,6 +161,19 @@ than to the pair.
 have a 09:00; keyed on the minute alone, opening one opened the other and
 closing either closed both.
 
+**Both ways out of a screen decide it in one place.** The nappy shortcut had
+two: the ordinary one knew about `from` and the one that hands over to the
+edit screen did not, so a shortcut that turned into an edit left the two-day
+view while the shortcut beside it came back to it. That hand-over happens
+when the queue sends an entry the screen had taken over -- the record is the
+server's by then, so it cannot be posted again (spec 6.1, 6.3).
+
+Reaching it in a test is awkward and worth knowing: the shortcut only takes
+over an entry that is **in doubt or failed**, so it needs a nappy whose answer
+was lost, and then the queue getting through while that screen is open --
+which is five seconds of backoff away. The test moves the clock rather than
+waiting, the same way the statistics one pins the current time.
+
 **Adding from here carries where it came from.** The day a record is filed
 under and the screen somebody is looking at are two questions, and only the
 first travelled: `dayView` names the single-day calendar, so the nappy
@@ -1038,6 +1051,12 @@ repository that passed for the wrong reason: an assertion written the wrong
 way round, an event fired before the listener existed, a "did not happen"
 assertion that released its gate before the thing had a chance to happen.
 All three looked fine and all three were worthless.
+
+**A "did not happen" assertion also has to be about a thing that screen can
+show.** Waiting for `unsynced-count` to disappear from the add screen passes
+on the first attempt for ever: that testid belongs to the home screen and was
+never going to be there. Wait for something the screen in front of you
+renders.
 
 **A "did not happen" assertion needs something positive waited for first.**
 `await waitFor(() => expect(queryBy(...)).not.toBeInTheDocument())` passes on
