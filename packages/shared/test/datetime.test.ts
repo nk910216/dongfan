@@ -3,7 +3,9 @@ import {
   MAX_EVENT_DURATION_MS,
   addLocalDays,
   ageAt,
+  coversLocalDate,
   localToUtc,
+  msOnLocalDate,
   msToMinutes,
   splitByLocalDate,
   splitDuration,
@@ -96,6 +98,58 @@ describe('splitByLocalDate', () => {
 
   it('rejects an interval that ends before it starts', () => {
     expect(() => splitByLocalDate(taipei(2026, 9, 20, 9, 0), taipei(2026, 9, 20, 8, 0), TAIPEI)).toThrow();
+  });
+});
+
+describe('msOnLocalDate', () => {
+  const started = taipei(2026, 9, 20, 23, 10);
+  const ended = taipei(2026, 9, 21, 7, 5);
+
+  it('gives each day only its own share of a sleep that crossed midnight', () => {
+    expect(msOnLocalDate(started, ended, '2026-09-20', TAIPEI)).toBe(50 * 60_000);
+    expect(msOnLocalDate(started, ended, '2026-09-21', TAIPEI)).toBe(7 * 60 * 60_000 + 5 * 60_000);
+  });
+
+  it('answers zero for a day the event never reached', () => {
+    expect(msOnLocalDate(started, ended, '2026-09-22', TAIPEI)).toBe(0);
+    expect(msOnLocalDate(started, ended, '2026-09-19', TAIPEI)).toBe(0);
+  });
+
+  it('answers zero for an event that has not ended, on its own day', () => {
+    // Its length changes with the clock, so it cannot be counted anywhere.
+    expect(msOnLocalDate(started, null, '2026-09-20', TAIPEI)).toBe(0);
+  });
+});
+
+describe('coversLocalDate', () => {
+  const started = taipei(2026, 9, 20, 23, 10);
+  const ended = taipei(2026, 9, 21, 7, 5);
+
+  it('shows an overnight sleep on the morning it ran into', () => {
+    // The whole point: its local_date is the 20th, so a calendar for the
+    // 21st that asked only for local_date = 21 would lose seven hours.
+    expect(coversLocalDate('2026-09-20', started, ended, '2026-09-21', TAIPEI)).toBe(true);
+  });
+
+  it('shows an event on the day it is counted on', () => {
+    expect(coversLocalDate('2026-09-20', started, ended, '2026-09-20', TAIPEI)).toBe(true);
+  });
+
+  it('shows an unfinished event on its own day and nowhere else', () => {
+    // Zero duration does not mean absent. A running timer belongs on the
+    // day it started, and on no other, however long it has been going.
+    expect(coversLocalDate('2026-09-20', started, null, '2026-09-20', TAIPEI)).toBe(true);
+    expect(coversLocalDate('2026-09-20', started, null, '2026-09-21', TAIPEI)).toBe(false);
+  });
+
+  it('does not show an event on a day it merely touches the edge of', () => {
+    // Ending exactly at midnight puts nothing in the new day.
+    const toMidnight = taipei(2026, 9, 21, 0, 0);
+    expect(coversLocalDate('2026-09-20', started, toMidnight, '2026-09-21', TAIPEI)).toBe(false);
+  });
+
+  it('does not show an unrelated day', () => {
+    expect(coversLocalDate('2026-09-20', started, ended, '2026-09-22', TAIPEI)).toBe(false);
   });
 });
 

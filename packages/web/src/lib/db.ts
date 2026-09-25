@@ -1,5 +1,6 @@
 import { openDB } from 'idb';
 import type { DBSchema, IDBPDatabase } from 'idb';
+import { addLocalDays, coversLocalDate, msOnLocalDate } from '@dongfan/shared';
 import type { EventDto, EventIntent, SummaryDto } from '@dongfan/shared';
 
 /**
@@ -441,6 +442,61 @@ export async function eventsOnDate(scope: Scope, localDate: string): Promise<Eve
     .map((row) => row.event)
     .filter((event) => event.deletedAt === null)
     .sort((a, b) => b.startedAt - a.startedAt || (a.id < b.id ? 1 : -1));
+}
+
+/**
+ * One entry on a day's calendar.
+ *
+ * `carriedOver` is not decoration. The sleep shown at the top of the 21st
+ * began the evening before and is *counted* on the 20th, so a screen that
+ * let it look like a record of the 21st would disagree with every figure
+ * next to it.
+ */
+export type DayEntry = {
+  readonly event: EventDto;
+  /** Started on an earlier day and ran into this one. */
+  readonly carriedOver: boolean;
+  /** Milliseconds of it inside this day. Zero while it is still running. */
+  readonly msOnDay: number;
+};
+
+/**
+ * One local day for the calendar: its own events, plus what ran into it.
+ *
+ * Deliberately not `eventsOnDate`. That one answers "what is counted on
+ * this day", which is what the home screen shows beside figures computed
+ * the same way. This one answers "what was happening on this day", which
+ * is what a calendar is, and the two differ by exactly one thing: a sleep
+ * that began before midnight (spec 3.4.1, 7.5).
+ *
+ * Only the previous day is looked at, and that is a consequence rather
+ * than an assumption: an event lasts at most 24 hours, so it crosses
+ * midnight at most once (spec 3.4.1 rule 1). If that limit ever moves,
+ * this has to widen with it.
+ */
+export async function calendarDay(
+  scope: Scope,
+  date: string,
+  timeZone: string,
+): Promise<DayEntry[]> {
+  const store = (await db()).transaction('events').store.index('by-scope-date');
+  const [onDay, dayBefore] = await Promise.all([
+    store.getAll([scope, date]),
+    store.getAll([scope, addLocalDays(date, -1)]),
+  ]);
+
+  return [...onDay, ...dayBefore]
+    .map((row) => row.event)
+    .filter((event) => event.deletedAt === null)
+    .filter((event) =>
+      coversLocalDate(event.localDate, event.startedAt, event.endedAt, date, timeZone))
+    .map((event) => ({
+      event,
+      carriedOver: event.localDate !== date,
+      msOnDay: msOnLocalDate(event.startedAt, event.endedAt, date, timeZone),
+    }))
+    .sort((a, b) =>
+      b.event.startedAt - a.event.startedAt || (a.event.id < b.event.id ? 1 : -1));
 }
 
 /** Everything held for a scope, oldest write first. For tests and debugging. */

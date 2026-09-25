@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { EventDto, EventPageDto } from '@dongfan/shared';
 import type { SummaryDto } from '@dongfan/shared';
+import { localToUtc } from '@dongfan/shared';
 import {
-  allEvents, applyPage, db, eventsOnDate, findEvent, readMeta, scopeOf, writeSummary,
+  allEvents, applyPage, calendarDay, db, eventsOnDate, findEvent, readMeta, scopeOf, writeSummary,
 } from '../src/lib/db.js';
 import { syncEvents } from '../src/lib/sync.js';
 
@@ -120,6 +121,103 @@ describe('one day at a time', () => {
     const again = (await eventsOnDate(MINE, '2026-09-20')).map((e) => e.id);
     expect(first).toEqual(again);
     expect(first).toEqual(['bbb', 'aaa']);
+  });
+});
+
+describe('a day on the calendar', () => {
+  const TAIPEI = 'Asia/Taipei';
+
+  /** An instant from a Taipei wall clock, so the dates are readable. */
+  const at = (day: number, hour: number, minute = 0): number =>
+    localToUtc({ year: 2026, month: 9, day, hour, minute }, TAIPEI);
+
+  const overnight = (): EventDto =>
+    event('overnight', 1, {
+      typeId: 'sleep',
+      localDate: '2026-09-20',
+      startedAt: at(20, 23, 10),
+      endedAt: at(21, 7, 5),
+    });
+
+  const breakfast = (): EventDto =>
+    event('breakfast', 2, {
+      localDate: '2026-09-21',
+      startedAt: at(21, 8),
+      endedAt: at(21, 8, 20),
+    });
+
+  it('shows the sleep that began before midnight, and says it was carried over', async () => {
+    await applyPage(MINE, [overnight(), breakfast()], 2);
+
+    const day = await calendarDay(MINE, '2026-09-21', TAIPEI);
+
+    expect(day.map((e) => e.event.id)).toEqual(['breakfast', 'overnight']);
+    expect(day[1]).toMatchObject({ carriedOver: true, msOnDay: 7 * 3_600_000 + 5 * 60_000 });
+    expect(day[0]).toMatchObject({ carriedOver: false, msOnDay: 20 * 60_000 });
+  });
+
+  it('gives the earlier day only the minutes that were actually its own', async () => {
+    await applyPage(MINE, [overnight()], 1);
+
+    const day = await calendarDay(MINE, '2026-09-20', TAIPEI);
+
+    expect(day.map((e) => e.event.id)).toEqual(['overnight']);
+    expect(day[0]).toMatchObject({ carriedOver: false, msOnDay: 50 * 60_000 });
+  });
+
+  it('is the one thing it differs from the home screen list by', async () => {
+    // Not an accident. `eventsOnDate` answers "what is counted on this
+    // day", which is what the figures beside it are computed from; the
+    // calendar answers "what was happening". The overnight sleep is the
+    // only case where those two are not the same list.
+    await applyPage(MINE, [overnight(), breakfast()], 2);
+
+    expect((await eventsOnDate(MINE, '2026-09-21')).map((e) => e.id)).toEqual(['breakfast']);
+    expect((await calendarDay(MINE, '2026-09-21', TAIPEI)).map((e) => e.event.id))
+      .toEqual(['breakfast', 'overnight']);
+  });
+
+  it('shows a timer that is still running on its own day and no later one', async () => {
+    // Zero minutes is not absent. A sleep started at 23:10 and never
+    // stopped belongs to the 20th, and putting it on the 21st as well
+    // would have it appear twice for as long as it runs.
+    await applyPage(MINE, [
+      event('running', 1, {
+        typeId: 'sleep',
+        localDate: '2026-09-20',
+        startedAt: at(20, 23, 10),
+        endedAt: null,
+        active: true,
+      }),
+    ], 1);
+
+    expect((await calendarDay(MINE, '2026-09-20', TAIPEI)).map((e) => e.event.id))
+      .toEqual(['running']);
+    expect(await calendarDay(MINE, '2026-09-21', TAIPEI)).toEqual([]);
+  });
+
+  it('does not reach back further than the day before', async () => {
+    // It looks at one earlier day because an event lasts at most 24 hours
+    // and so crosses midnight at most once. Anything older cannot reach.
+    await applyPage(MINE, [
+      event('two-days-ago', 1, { localDate: '2026-09-19', startedAt: at(19, 10), endedAt: at(19, 11) }),
+    ], 1);
+
+    expect(await calendarDay(MINE, '2026-09-21', TAIPEI)).toEqual([]);
+  });
+
+  it('leaves out a deleted event that would otherwise have carried over', async () => {
+    await applyPage(MINE, [{ ...overnight(), deletedAt: at(21, 9) }], 1);
+
+    expect(await calendarDay(MINE, '2026-09-21', TAIPEI)).toEqual([]);
+  });
+
+  it('does not show one account the other’s night', async () => {
+    await applyPage(THEIRS, [overnight()], 1);
+
+    expect(await calendarDay(MINE, '2026-09-21', TAIPEI)).toEqual([]);
+    expect((await calendarDay(THEIRS, '2026-09-21', TAIPEI)).map((e) => e.event.id))
+      .toEqual(['overnight']);
   });
 });
 

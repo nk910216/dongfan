@@ -260,7 +260,18 @@ babyEventRoutes.get('/:babyId/events', requireBabyAccess(), async (c) => {
   return c.json({ events: page.events, nextRev: page.nextRev, hasMore: page.hasMore });
 });
 
-/** One calendar day in the baby's timezone, for the home and calendar screens. */
+/**
+ * The events counted on one local day, by `local_date`.
+ *
+ * Not what the calendar screen reads. Both screens read their day out of
+ * IndexedDB, because the app has to open a day with no network (spec 6.2),
+ * and the calendar's day is a different question anyway: it includes the
+ * sleep that began the evening before, which is counted on that evening
+ * (spec 3.4.1). `calendarDay` in the web store answers that one.
+ *
+ * This stays as the plain per-`local_date` read it has always been, and
+ * has no client: it is here for the contract and its tests.
+ */
 babyEventRoutes.get('/:babyId/events/day/:date', requireBabyAccess(), async (c) => {
   const date = c.req.param('date');
   if (!isRealLocalDate(date)) {

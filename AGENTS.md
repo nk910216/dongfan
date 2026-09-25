@@ -99,6 +99,66 @@ first.
 | 4 | PWA: manifest, service worker, update flow, the iOS add-to-home prompt | **done** |
 | 5 | Members and invite codes (spec 6.5) | **done** |
 
+**M3 is in progress**, in stages, each one reviewed before the next. The
+order follows the dependencies rather than spec 12's wording, as M2's did:
+the calendar and `duration_sum` both stand on the same midnight split, and
+the stats endpoint cannot be shown to be correct — or cheap — before there
+is a year of data to point it at.
+
+| | | |
+|---|---|---|
+| 1 | The day boundary: what a day's calendar contains (spec 3.4.1, 7.5) | **done** |
+| 2 | The single-day calendar screen: date picker, back to today, the FAB | |
+| 3 | A year of synthetic data in its own database, the D1 query-count guardrail (spec 11.2), and `GET /stats` for `count`/`sum`/`last`/`max`/`avg` | |
+| 4 | `duration_sum`: the midnight split in SQL, `UNION ALL`, excluding running timers | |
+| 5 | The stats screen: type, range, chart kind, axis density, the two warnings | |
+| 6 | The M3 measurement (see below) | |
+
+### A day's calendar is not a day's list
+
+`local_date` comes from `started_at`, so a sleep from 23:00 to 07:00 is
+counted on the earlier evening. A calendar for the morning that asks only
+`local_date = D` loses seven hours of that morning and says nothing
+(spec 3.4.1).
+
+So there are two questions and the repository answers both, separately:
+
+- `eventsOnDate` — what is **counted** on this day. The home screen shows
+  this, because the figures printed beside it are computed the same way,
+  and a list that disagreed with the numbers next to it would be worse
+  than an incomplete one.
+- `calendarDay` — what was **happening** on this day: the above, plus
+  anything that ran into it from the day before, each entry saying whether
+  it was carried over and how many of its milliseconds belong here.
+
+They differ by exactly that one case, and `sync.test.ts` pins the
+difference rather than leaving it to be discovered.
+
+Only the previous day is read, and that is a consequence rather than an
+assumption: an event lasts at most 24 hours, so it crosses midnight at
+most once (spec 3.4.1 rule 1). If that limit moves, this widens with it.
+
+An unfinished event contributes **zero** duration to every day, including
+its own (spec 3.4.1 rule 3) — but zero duration is not absence. A running
+timer still belongs on the day it started, and on no other, or it appears
+twice for as long as it runs.
+
+`GET /events/day/:date` was commented as serving the calendar screen. It
+does not, and never did: both screens read their day out of IndexedDB
+because a day has to open with no network (spec 6.2). The endpoint has no
+client at all.
+
+### Two things spec.md is not consistent about
+
+- **Which milestone owns the `/stats` CPU measurement.** 5.6 says M4,
+  12.1's acceptance table says M3. The table wins here; the prose is
+  probably older.
+- **The D1 query-count guardrail 11.2 asks for does not exist.** There is
+  no helper counting calls per request and failing past 30. Locally that
+  is the *only* half of "performance" that can be measured at all — the
+  10 ms CPU limit is not enforced by Miniflare — so it belongs with the
+  stats endpoint rather than with a later tidy-up.
+
 The queue lives in `packages/web/src/lib/outbox.ts`, with its storage in
 `db.ts` under `outbox`. An entry is put in doubt by `beginSend` *before*
 its request leaves, not after one comes back badly: the window between the
@@ -238,34 +298,34 @@ asserts only that the shell still carries the treatment, and says so,
 because that is how this would come back: silently, on the one device
 nobody develops on.
 
-### Where the phone acceptance got to
+### The phone acceptance, and what it actually proved
 
-Carried out on a real iPhone, over `cloudflared` against the local
-Worker on 8787. Confirmed against the server rather than against the
-screen, because the screen is what was being tested:
+Carried out on a real iPhone on 2026-09-24, over `cloudflared` against
+the local Worker on 8787, and **signed off by the owner**. The tunnel is
+closed; it was a throwaway address and nothing was deployed.
+
+Confirmed against the server rather than against the screen, because the
+screen was the thing under test:
 
 - **An add made with no signal reaches the server exactly once.** Three
-  offline records, three `201`s, three distinct ids, no duplicates.
+  offline records, three `201`s, three distinct ids, no duplicates
+  (spec 12.1's M2 condition).
 - **A stop pressed offline keeps the moment it was pressed.** The
   confirmed event ended at 22:58:14 and was written at 23:00:32 — 137
-  seconds apart (spec 7.2). A timer stopped online has the two equal.
+  seconds apart (spec 7.2). A timer stopped online has the two equal,
+  which is the control.
 - **A record the server refused can be retried by hand.** A second timer
   of the same type came back `409 ACTIVE_TIMER_EXISTS`, the queue gave up
-  and kept it, and retrying after the first timer was stopped landed it
-  once (spec 11.2).
-- **Installing to the home screen.**
-- **The safe area**, after the fix above. Reported fixed on the device;
-  the per-screen list — settings, the event form, the save button, the
-  bottom of a long list — was not gone through item by item.
+  and kept the content, and retrying once the first timer was stopped
+  landed it exactly once (spec 11.2).
+- **Installing to the home screen**, and the safe area after the fix
+  above.
 
-Still **not** carried out, and not to be described as passed:
-
-- **Taking an update by pressing the strip.** The strip was unreachable
-  for the reason above, so this round changed build by closing the app.
-- **A half-typed form, a queued add and a stop draft surviving an
-  update.** The queue and the draft had been cleared by the time the
-  build changed.
-- **A cold start with no network**, on the phone, was not reported back.
+Accepted without being exercised one by one, so do not cite them as
+evidence: the per-screen safe-area list, taking an update by pressing the
+strip (it was unreachable at the time, so that round changed build by
+closing the app), a half-typed form and a queued add surviving that
+update, and a cold start with no network.
 
 Everything in spec 12.1 that needs a deployment is outstanding as well.
 

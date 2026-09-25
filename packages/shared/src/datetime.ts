@@ -145,6 +145,55 @@ export function splitByLocalDate(startedAt: number, endedAt: number, timeZone: s
 }
 
 /**
+ * How much of an interval falls inside one local day.
+ *
+ * The day question, asked of the split. A calendar showing the 21st has to
+ * be able to say how many minutes of the sleep that began at 23:10 on the
+ * 20th belong to it, and the answer is not the length of the sleep
+ * (spec 3.4.1).
+ *
+ * An unfinished event answers zero, without exception. Its length changes
+ * with the clock, so counting it would make a figure that moves while
+ * nobody touches anything, and no test could pin it (spec 3.4.1 rule 3).
+ * That is a statement about *duration* only: whether an unfinished event
+ * is shown on a day is a separate question, answered by `coversLocalDate`.
+ */
+export function msOnLocalDate(
+  startedAt: number,
+  endedAt: number | null,
+  date: LocalDate,
+  timeZone: string,
+): number {
+  if (endedAt === null) return 0;
+  return splitByLocalDate(startedAt, endedAt, timeZone).find((s) => s.date === date)?.ms ?? 0;
+}
+
+/**
+ * Whether a day's calendar should show this event at all.
+ *
+ * Two separate reasons to appear, and the second is the one that gets
+ * forgotten: the day it is counted on (`local_date`, derived from
+ * `started_at`), and any later day it actually runs into. Sleep from 23:00
+ * to 07:00 is counted on the earlier day, and a calendar for the later one
+ * that asks only `local_date = D` loses seven hours of that day without
+ * saying anything (spec 3.4.1).
+ *
+ * `localDate` is passed rather than derived, because the stored one is the
+ * server's and is what the rest of the app counts by. Deriving it here
+ * would put a second opinion next to it.
+ */
+export function coversLocalDate(
+  localDate: LocalDate,
+  startedAt: number,
+  endedAt: number | null,
+  date: LocalDate,
+  timeZone: string,
+): boolean {
+  if (localDate === date) return true;
+  return msOnLocalDate(startedAt, endedAt, date, timeZone) > 0;
+}
+
+/**
  * Duration in whole minutes.
  *
  * Totals are summed in milliseconds and rounded once at the end; rounding
