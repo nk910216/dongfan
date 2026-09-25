@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -1214,18 +1214,30 @@ describe('writing something up afterwards', () => {
   it('moves the date and keeps the time of day', async () => {
     // Spec 7.3 in as many words: the day being looked at, at the current
     // time of day. Not midday, and not today.
-    const day = daysAgo(4);
-    openSignedIn(`/add/bottle?on=${day}`);
+    //
+    // The clock is pinned for this one test and let go again straight
+    // after. The form reads it when it opens and the assertion works out
+    // what it should have shown; a minute turning over between the two
+    // fails with nothing wrong, a few times an hour, which is worse than
+    // no test. Freezing the suite is not the answer -- at least one test
+    // needs time to actually pass between opening a page and a tap.
+    const at = 9 * 3_600_000 + 37 * 60_000;
+    const pinned = startOfLocalDay(toLocalDate(Date.now(), BABY.timezone), BABY.timezone) + at;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(pinned);
 
-    const shown = (await screen.findByTestId('started-at')) as HTMLInputElement;
-    const now = Date.now();
-    const sinceMidnight = now - startOfLocalDay(toLocalDate(now, BABY.timezone), BABY.timezone);
+    try {
+      const day = addLocalDays(toLocalDate(pinned, BABY.timezone), -4);
+      openSignedIn(`/add/bottle?on=${day}`);
 
-    expect(shown.value.slice(0, 10)).toBe(day);
-    // To the minute, which is all the control shows.
-    expect(shown.value).toBe(
-      toLocalInput(startOfLocalDay(day, BABY.timezone) + sinceMidnight, BABY.timezone),
-    );
+      const shown = (await screen.findByTestId('started-at')) as HTMLInputElement;
+
+      expect(shown.value.slice(0, 10)).toBe(day);
+      expect(shown.value).toBe(
+        toLocalInput(startOfLocalDay(day, BABY.timezone) + at, BABY.timezone),
+      );
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('comes back to the day it was written for', async () => {

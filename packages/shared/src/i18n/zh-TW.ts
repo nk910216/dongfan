@@ -337,6 +337,7 @@ export const zhTW = {
     TOO_LONG: '最多 {maxLength} 個字',
     NOT_INTEGER: '請輸入整數',
     INVALID_ENUM: '請從清單中選擇',
+    NOT_SUPPORTED_YET: '這個版本還不支援這個項目',
     UNKNOWN_FIELD: '不支援的欄位',
     INVALID_FORMAT: '格式不正確',
     END_BEFORE_START: '結束時間不可早於開始時間',

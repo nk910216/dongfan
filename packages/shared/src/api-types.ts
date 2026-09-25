@@ -1,3 +1,5 @@
+import type { Aggregation } from './types.js';
+
 /**
  * What the API sends back.
  *
@@ -72,6 +74,43 @@ export type SummaryDto = {
   today: { totalBottleMl: number; diaper: DiaperCountsDto };
   /** Not limited to today: at half past midnight the last feed was yesterday. */
   lastFeedAt: number | null;
+};
+
+export type StatPointDto = {
+  /** `YYYY-MM-DD` in the baby's timezone, as stored. */
+  date: string;
+  /**
+   * Always an integer, in the type's stored unit (spec 5.3).
+   *
+   * `avg` is rounded to that unit, so a mean temperature comes back as 365
+   * and is displayed as 36.5 -- the same contract as every other value the
+   * API returns, and the reason no chart has to know about scaling.
+   */
+  value: number;
+};
+
+export type StatSeriesDto = {
+  typeId: string;
+  aggregation: Aggregation;
+  /** The stored unit's symbol, or null for a type that has no value. */
+  unit: string | null;
+  /**
+   * One point per local date, oldest first.
+   *
+   * Whether a day with nothing recorded appears here at all depends on the
+   * aggregation, and the rule is spec 7.7's: a day with no feeds really had
+   * no feeds, so `count` and `sum` carry a zero; a day nobody weighed the
+   * baby is not a day the baby weighed nothing, so `last`, `avg` and `max`
+   * leave it out and let the line join the points either side. Filling it
+   * with zero there drops the weight curve to the floor.
+   */
+  points: StatPointDto[];
+};
+
+export type StatsDto = {
+  from: string;
+  to: string;
+  series: StatSeriesDto[];
 };
 
 export type TagDto = { id: string; name: string; createdAt: number };

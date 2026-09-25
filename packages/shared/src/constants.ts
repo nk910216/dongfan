@@ -54,3 +54,13 @@ export const MAX_PASSWORD_LENGTH = 200;
  * revisiting (spec 5.3).
  */
 export const SUPPORTED_TIMEZONES = ['Asia/Taipei'] as const;
+
+/**
+ * The longest span `GET /stats` will aggregate, in days.
+ *
+ * One leap year, inclusive of both ends, which is what makes spec 5.6's
+ * "at most 366 points" a fact rather than a hope: the response has one
+ * point per local date, so the only way to bound it is to bound the range.
+ * The year view in spec 7.7 is the widest thing that asks for it.
+ */
+export const MAX_STATS_DAYS = 366;

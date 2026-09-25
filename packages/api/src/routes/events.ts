@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import {
   MAX_EVENTS_PER_DAY,
-  createEventRequest, deleteEventRequest, syncQuery, updateEventRequest,
+  createEventRequest, deleteEventRequest, statsQuery, syncQuery, updateEventRequest,
   getEventType, isRealLocalDate, resolveEventTimes, toLocalDate, validateEvent,
 } from '@dongfan/shared';
 import type { EventIntent, FieldError } from '@dongfan/shared';
@@ -11,6 +11,7 @@ import {
 } from '../lib/events.js';
 import type { EventRow } from '../lib/events.js';
 import { fail, failValidation, zodToFieldErrors } from '../lib/errors.js';
+import { isDirect, statsFor } from '../lib/stats.js';
 import { buildSummary } from '../lib/summary.js';
 import { requireBabyAccess, requireEventAccess } from '../middleware/permissions.js';
 import type { Env } from '../lib/types.js';
@@ -278,6 +279,40 @@ babyEventRoutes.get('/:babyId/events/day/:date', requireBabyAccess(), async (c) 
     return failValidation(c, [{ field: 'date', code: 'INVALID_FORMAT', params: {} }]);
   }
   return c.json({ date, events: await eventsOnDate(c.get('db'), c.get('babyId'), date) });
+});
+
+/**
+ * Daily figures for a chart (spec 5.6, 7.7).
+ *
+ * `duration_sum` is not served here yet: it needs the midnight split done in
+ * SQL, which is its own piece of work. Asking for a type that aggregates
+ * that way is refused rather than answered with a plausible-looking series
+ * computed the wrong way -- a chart that is quietly missing every night's
+ * sleep before midnight looks exactly like a chart.
+ */
+babyEventRoutes.get('/:babyId/stats', requireBabyAccess(), async (c) => {
+  const parsed = statsQuery.safeParse(c.req.query());
+  if (!parsed.success) return failValidation(c, zodToFieldErrors(parsed.error.issues));
+
+  const { types, from, to } = parsed.data;
+
+  const unsupported = types.filter((id) => {
+    const aggregation = getEventType(id)?.aggregation;
+    return aggregation !== undefined && !isDirect(aggregation) && aggregation !== 'last';
+  });
+  if (unsupported.length > 0) {
+    return failValidation(c, unsupported.map((id) => ({
+      field: 'types',
+      code: 'NOT_SUPPORTED_YET',
+      params: { typeId: id },
+    })));
+  }
+
+  return c.json({
+    from,
+    to,
+    series: await statsFor(c.env.DB, c.get('babyId'), types, from, to),
+  });
 });
 
 babyEventRoutes.get('/:babyId/events/summary', requireBabyAccess(), async (c) => {

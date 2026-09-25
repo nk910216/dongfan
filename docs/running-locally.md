@@ -321,6 +321,31 @@ finding new assets, and `GET /api/version` reporting a build the running
 one is not. The second is what catches a phone that has been open since
 Tuesday.
 
+### A year of data for the statistics
+
+```sh
+npm run db:stats-fixture
+```
+
+`GET /stats` is the one endpoint whose cost depends on how much history a
+baby has, so there has to be a year of it to point at. This writes about
+4,500 invented events across 365 days — six bottles and six nappies a day,
+a weighing every Monday, a temperature now and then — and then aggregates
+them and prints how long the database took and how many rows came back.
+
+**It is not `dongfan-dev`.** It has its own configuration file and its own
+database, `dongfan-stats`, because burying the handful of records you
+develop against under 4,500 invented ones would make the app useless to
+look at. It never reads or writes anything else, and it is safe to run
+twice: it looks its own account and baby up rather than assuming they are
+absent.
+
+What it can tell you is that the aggregation happens in SQL and hands back
+at most one row per day — 365 rows out of 4,500 events, in about a
+millisecond. What it **cannot** tell you is anything about the 10 ms CPU
+limit, because Miniflare does not enforce it (spec 11.2). That measurement
+needs a deployed Worker and is still outstanding.
+
 ### A restore drill
 
 ```sh

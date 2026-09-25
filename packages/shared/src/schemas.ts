@@ -1,6 +1,8 @@
 import { z } from 'zod';
-import { MAX_NOTE_LENGTH, MAX_PASSWORD_LENGTH } from './constants.js';
+import { MAX_NOTE_LENGTH, MAX_PASSWORD_LENGTH, MAX_STATS_DAYS } from './constants.js';
 import { passwordLength } from './crypto.js';
+import { daysBetween, isRealLocalDate } from './datetime.js';
+import { getEventType } from './event-types.js';
 
 /**
  * Request contracts shared by both sides.
@@ -142,6 +144,38 @@ export const syncQuery = z.object({
   since: z.coerce.number().int().nonnegative().default(0),
   limit: z.coerce.number().int().positive().max(1000).default(200),
 });
+
+/**
+ * `GET /babies/:id/stats?types=a,b&from=&to=`
+ *
+ * The range is closed at both ends and capped at `MAX_STATS_DAYS`, which is
+ * what makes spec 5.6's "at most 366 points" true rather than hoped for.
+ *
+ * `types` is a comma-separated list, checked against the event type config
+ * rather than passed to SQL as it arrives. That is what bounds it: the
+ * number of configured types is fixed at build time, so the parameter list
+ * cannot grow with anything a client sends (spec 2.5's 100-parameter
+ * limit).
+ */
+export const statsQuery = z
+  .object({
+    types: z
+      .string()
+      .transform((raw) => [...new Set(raw.split(',').map((t) => t.trim()).filter((t) => t !== ''))])
+      .refine((list) => list.length > 0, { message: 'at least one type' })
+      .refine((list) => list.every((id) => getEventType(id) !== undefined), {
+        message: 'unknown event type',
+      }),
+    from: z.string().refine(isRealLocalDate, { message: 'not a real date' }),
+    to: z.string().refine(isRealLocalDate, { message: 'not a real date' }),
+  })
+  .refine((q) => q.from <= q.to, { message: 'from is after to', path: ['from'] })
+  .refine((q) => daysBetween(q.from, q.to) <= MAX_STATS_DAYS, {
+    message: 'range too wide',
+    path: ['to'],
+  });
+
+export type StatsQuery = z.infer<typeof statsQuery>;
 
 export type LoginRequest = z.infer<typeof loginRequest>;
 export type CreateBabyRequest = z.infer<typeof createBabyRequest>;

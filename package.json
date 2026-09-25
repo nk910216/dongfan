@@ -23,6 +23,7 @@
     "test:web": "vitest run",
     "test:api": "npm run test -w @dongfan/api",
     "backup": "scripts/backup.sh",
+    "db:stats-fixture": "npm run build -w @dongfan/shared && node scripts/stats-fixture.mjs",
     "restore:drill": "npm run build -w @dongfan/shared && node scripts/restore-drill.mjs",
     "deploy": "npm run build -w @dongfan/web && npm run deploy -w @dongfan/api",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote --config packages/api/wrangler.jsonc --env production"

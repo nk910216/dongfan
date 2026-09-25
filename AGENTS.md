@@ -109,7 +109,7 @@ is a year of data to point it at.
 |---|---|---|
 | 1 | The day boundary: what a day's calendar contains (spec 3.4.1, 7.5) | **done** |
 | 2 | The single-day calendar screen: date picker, back to today, the FAB, writing something up afterwards | **done** |
-| 3 | A year of synthetic data in its own database, the D1 query-count guardrail (spec 11.2), and `GET /stats` for `count`/`sum`/`last`/`max`/`avg` | |
+| 3 | A year of synthetic data in its own database, the D1 query-count guardrail (spec 11.2), and `GET /stats` for `count`/`sum`/`last`/`max`/`avg` | **done** |
 | 4 | `duration_sum`: the midnight split in SQL, `UNION ALL`, excluding running timers | |
 | 5 | The stats screen: type, range, chart kind, axis density, the two warnings | |
 | 6 | The M3 measurement (see below) | |
@@ -218,6 +218,87 @@ would sink under every feed of the day instead of heading it.
 The menu button at the top left had no handler at all until the calendar
 existed — there was no way in. `PageMenu` is the page list spec 7.10 asks
 for.
+
+### The statistics endpoint
+
+`GET /babies/:id/stats?types=a,b&from=&to=` aggregates **in SQL**, and
+spec 5.6 is explicit that this is architecture and not optimisation: a year
+is around 7,300 events, and reading those into the Worker to add up in
+JavaScript would very likely exceed the 10 ms budget — a failure that only
+appears once a year of data exists, long after the code was reviewed.
+
+Two statements at most, whatever is asked for. One `GROUP BY type_id,
+local_date` serves `count`, `sum`, `max` and `avg` together, because the row
+set is identical and the query budget is per request rather than per type. A
+second, using `ROW_NUMBER()`, serves `last`. Neither grows with the number
+of days or the number of types, and `stats.test.ts` asserts that a one-day
+request and a one-year request cost the same.
+
+**Zero-filling is a rule about meaning and it is easy to get backwards**
+(spec 7.7). A day with no feeds really had no feeds, so `count` and `sum`
+carry a zero. A day nobody weighed the baby is not a day the baby weighed
+nothing, so `last`, `avg` and `max` leave it out and let the chart join the
+points either side — filling those with zero drops a growth curve to the
+floor. Done on the server so there is one implementation of it, testable
+against a real database.
+
+The range is capped at `MAX_STATS_DAYS`, which is what makes spec 5.6's "at
+most 366 points" a fact: the response has one point per local date, so the
+only way to bound it is to bound the range.
+
+**`avg` has no configured type.** Every aggregation in the event type config
+is `count`, `sum`, `last`, `duration_sum` or `max`. `avg` is implemented
+because spec 5.6 names it, and its SQL runs on every request alongside the
+others, but the branch that *selects* the mean cannot be reached through the
+endpoint and therefore has no end-to-end test. Said here rather than left
+looking covered.
+
+`duration_sum` is refused with `NOT_SUPPORTED_YET` until stage 4 rather than
+answered with a series computed without the midnight split. A chart quietly
+missing every hour of sleep before midnight looks exactly like a chart.
+Delete that code and that error together.
+
+### The D1 query-count guardrail
+
+`test/query-count.ts` wraps the binding and counts every statement a request
+executes, failing past 30 (spec 11.2). The free plan allows 50 per
+invocation and **the local runtime enforces none of them**, so a handler that
+had quietly become N+1 would pass every other test and fail in production
+against a baby with a year of records.
+
+Wrapped at the binding rather than inside Drizzle, because handlers reach the
+database both ways — reads through the query builder, writes as raw
+statements through `batch()` (spec 4.3) — and a counter blind to one of those
+reports half the work. `batch()` counts once per statement, which is what D1
+charges for it.
+
+It has been shown to bite: a deliberate query-per-day in the stats handler
+takes the count from 5 to 369 and fails.
+
+**The 10 ms CPU limit is not this.** Miniflare does not enforce it, so no
+local number says anything about it. That measurement needs a deployed
+Worker and remains outstanding, as spec 12.1 lists it for M3.
+
+### A year of data, in a database of its own
+
+`npm run db:stats-fixture` writes about 4,500 invented events across 365
+days into `dongfan-stats`, which has its own configuration file
+(`scripts/wrangler.stats.jsonc`) for the same reason the restore drill does:
+a binding in `packages/api/wrangler.jsonc` would make `wrangler deploy` look
+for a deployed database of that name.
+
+It is deliberately **not** `dongfan-dev`. Burying the handful of records the
+owner develops against under 4,500 invented ones would make the app useless
+to look at, and this database exists to be filled and emptied freely. The
+script looks its own account and baby up rather than assuming they are
+absent, so a run that failed partway through does not make the next one
+impossible — which is exactly what the first version did.
+
+The integration tests do not use it. Their D1 is created for the run and
+thrown away, so the year-scale test seeds its own rows directly into the
+table; going through the API would mean thousands of POSTs and would hit the
+500-a-day circuit breaker (spec 5.7), which is about runaway loops and not
+about a year of history.
 
 ### Two things spec.md is not consistent about
 

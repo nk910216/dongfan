@@ -117,6 +117,22 @@ export function addLocalDays(date: LocalDate, days: number): LocalDate {
   return shifted.toISOString().slice(0, 10);
 }
 
+/**
+ * Whole local days from one date to another, counting both ends.
+ *
+ * Calendar arithmetic, not a subtraction of instants: `(to - from) / DAY`
+ * is off by one for any range that crosses a daylight-saving boundary, and
+ * rounding it hides that rather than fixing it. Both dates are treated as
+ * UTC midnights here, which is safe because only the *difference* is asked
+ * for and both ends move together.
+ */
+export function daysBetween(from: LocalDate, to: LocalDate): number {
+  const a = parseLocalDate(from);
+  const b = parseLocalDate(to);
+  const ms = Date.UTC(b.year, b.month - 1, b.day) - Date.UTC(a.year, a.month - 1, a.day);
+  return ms / 86_400_000 + 1;
+}
+
 export type DurationSegment = { date: LocalDate; ms: number };
 
 /**
