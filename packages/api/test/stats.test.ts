@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  MAX_STATS_DAYS, addLocalDays, daysBetween, startOfLocalDay,
+  MAX_EVENT_DURATION_MS, MAX_STATS_DAYS, addLocalDays, daysBetween, startOfLocalDay,
 } from '@dongfan/shared';
 import type { StatsDto } from '@dongfan/shared';
 import { createBaby, createEvent, deleteEvent, json, request, signedInUser } from './helpers.js';
@@ -65,13 +65,26 @@ function series(body: StatsDto, typeId: string): { date: string; value: number }
  * The endpoint still reads them back through the real database.
  */
 async function seed(
-  rows: { typeId: string; startedAt: number; value: number; baby?: string }[],
+  rows: {
+    typeId: string;
+    startedAt: number;
+    value?: number;
+    /** Left out for a record with no end; `active` for a running timer. */
+    endedAt?: number;
+    active?: boolean;
+    deletedAt?: number;
+    baby?: string;
+  }[],
 ): Promise<void> {
   let rev = 1_000_000;
   const statements = rows.map((row) => {
     rev += 1;
+    // The same rule the server applies: the local date comes from the start,
+    // in the baby's timezone (spec 5.3). Written out here because a fixture
+    // that disagreed with the server about which day an event is filed under
+    // would make every assertion below meaningless.
     const date = new Date(row.startedAt + 8 * 3_600_000).toISOString().slice(0, 10);
-    return `INSERT INTO events (id, baby_id, type_id, created_by, created_at, updated_at, started_at, ended_at, local_date, value, note, metadata, version, rev, active, deleted_at) VALUES ('${crypto.randomUUID()}', '${row.baby ?? babyId}', '${row.typeId}', '${userId}', ${row.startedAt}, ${row.startedAt}, ${row.startedAt}, NULL, '${date}', ${row.value}, '', '{}', 1, ${rev}, NULL, NULL);`;
+    return `INSERT INTO events (id, baby_id, type_id, created_by, created_at, updated_at, started_at, ended_at, local_date, value, note, metadata, version, rev, active, deleted_at) VALUES ('${crypto.randomUUID()}', '${row.baby ?? babyId}', '${row.typeId}', '${userId}', ${row.startedAt}, ${row.startedAt}, ${row.startedAt}, ${row.endedAt ?? 'NULL'}, '${date}', ${row.value ?? 1}, '', '{}', 1, ${rev}, ${row.active ? 1 : 'NULL'}, ${row.deletedAt ?? 'NULL'});`;
   });
   await env.DB.exec(statements.join('\n'));
 }
@@ -167,14 +180,6 @@ describe('what it will not accept', () => {
     expect(response.status).toBe(422);
   });
 
-  it('refuses a duration type rather than charting it wrongly', async () => {
-    // `duration_sum` needs the midnight split, which is the next stage. A
-    // series computed without it would quietly omit every hour of sleep
-    // before midnight and would look exactly like a chart (spec 3.4.1).
-    const response = await request(statsUrl('sleep', DAY, DAY), {}, token);
-    expect(response.status).toBe(422);
-    expect(await response.text()).toContain('NOT_SUPPORTED_YET');
-  });
 });
 
 describe('adding up a day', () => {
@@ -274,6 +279,198 @@ describe('adding up a day', () => {
   });
 });
 
+describe('time spent, split at midnight', () => {
+  const MINUTE = 60_000;
+
+  it('gives each day only the part of the night that fell in it', async () => {
+    // 23:10 to 07:05. Counted on the 15th, but seven of its hours are the
+    // 16th's, and putting all of it on either day shows one night at zero
+    // and the next at sixteen (spec 3.4).
+    await seed([{
+      typeId: 'sleep',
+      startedAt: at('2026-06-15', 23, 10),
+      endedAt: at('2026-06-16', 7, 5),
+    }]);
+
+    expect(series(await stats('sleep', '2026-06-15', '2026-06-16'), 'sleep')).toEqual([
+      { date: '2026-06-15', value: 50 },
+      { date: '2026-06-16', value: 7 * 60 + 5 },
+    ]);
+  });
+
+  it('is in minutes, and says so', async () => {
+    await seed([{
+      typeId: 'sleep',
+      startedAt: at(DAY, 13),
+      endedAt: at(DAY, 14, 30),
+    }]);
+
+    const body = await stats('sleep', DAY, DAY);
+    expect(body.series[0]?.unit).toBe('min');
+    expect(body.series[0]?.aggregation).toBe('duration_sum');
+    expect(series(body, 'sleep')).toEqual([{ date: DAY, value: 90 }]);
+  });
+
+  it('rounds the day’s total once, not each nap', async () => {
+    // Three naps of 40 seconds are two minutes, not zero. Rounding each one
+    // first loses them all, and the error accumulates across a day of naps
+    // (spec 5.3).
+    await seed([
+      { typeId: 'sleep', startedAt: at(DAY, 9), endedAt: at(DAY, 9) + 40_000 },
+      { typeId: 'sleep', startedAt: at(DAY, 10), endedAt: at(DAY, 10) + 40_000 },
+      { typeId: 'sleep', startedAt: at(DAY, 11), endedAt: at(DAY, 11) + 40_000 },
+    ]);
+
+    expect(series(await stats('sleep', DAY, DAY), 'sleep')).toEqual([{ date: DAY, value: 2 }]);
+  });
+
+  it('gives a night ending exactly at midnight entirely to the earlier day', async () => {
+    // And no empty segment on the next one, which is what
+    // `splitByLocalDate` does too -- the two have to agree or the chart and
+    // the calendar disagree about the same night.
+    await seed([{
+      typeId: 'sleep',
+      startedAt: at('2026-06-15', 23),
+      endedAt: at('2026-06-16', 0),
+    }]);
+
+    expect(series(await stats('sleep', '2026-06-15', '2026-06-16'), 'sleep')).toEqual([
+      { date: '2026-06-15', value: 60 },
+      { date: '2026-06-16', value: 0 },
+    ]);
+  });
+
+  it('gives a night starting exactly at midnight entirely to the new day', async () => {
+    await seed([{
+      typeId: 'sleep',
+      startedAt: at('2026-06-16', 0),
+      endedAt: at('2026-06-16', 0, 30),
+    }]);
+
+    expect(series(await stats('sleep', '2026-06-15', '2026-06-16'), 'sleep')).toEqual([
+      { date: '2026-06-15', value: 0 },
+      { date: '2026-06-16', value: 30 },
+    ]);
+  });
+
+  it('splits the longest event there can be across exactly two days', async () => {
+    // 24 hours is the limit, and it is the limit precisely so that one
+    // midnight is the most anything can cross -- which is what makes two
+    // parts enough (spec 3.4.1 rule 1).
+    await seed([{
+      typeId: 'sleep',
+      startedAt: at('2026-06-15', 12),
+      endedAt: at('2026-06-15', 12) + MAX_EVENT_DURATION_MS,
+    }]);
+
+    const points = series(await stats('sleep', '2026-06-15', '2026-06-17'), 'sleep');
+    expect(points).toEqual([
+      { date: '2026-06-15', value: 12 * 60 },
+      { date: '2026-06-16', value: 12 * 60 },
+      { date: '2026-06-17', value: 0 },
+    ]);
+    expect(points[0]!.value + points[1]!.value).toBe(MAX_EVENT_DURATION_MS / MINUTE);
+  });
+
+  it('finds the morning hours of a night that started before the range', async () => {
+    // The whole reason the lower bound is widened by a day. Asked about the
+    // 16th alone, this sleep is filed under the 15th and would be missed
+    // entirely -- the 16th would lose seven hours without a word
+    // (spec 3.4.1 rule 2).
+    await seed([{
+      typeId: 'sleep',
+      startedAt: at('2026-06-15', 23, 10),
+      endedAt: at('2026-06-16', 7, 5),
+    }]);
+
+    expect(series(await stats('sleep', '2026-06-16', '2026-06-16'), 'sleep'))
+      .toEqual([{ date: '2026-06-16', value: 7 * 60 + 5 }]);
+  });
+
+  it('does not let a night reach past the end of the range', async () => {
+    // The other edge: the 16th's share exists but was not asked for.
+    await seed([{
+      typeId: 'sleep',
+      startedAt: at('2026-06-15', 23, 10),
+      endedAt: at('2026-06-16', 7, 5),
+    }]);
+
+    expect(series(await stats('sleep', '2026-06-15', '2026-06-15'), 'sleep'))
+      .toEqual([{ date: '2026-06-15', value: 50 }]);
+  });
+
+  it('leaves a running timer out of every day, including its own', async () => {
+    // Its length changes with the clock, so counting it makes a figure that
+    // moves while nobody touches anything (spec 3.4.1 rule 3). This is why
+    // the chart has to say it shows finished records only (spec 7.7).
+    await seed([
+      { typeId: 'sleep', startedAt: at(DAY, 13), endedAt: at(DAY, 14) },
+      { typeId: 'sleep', startedAt: at(DAY, 20), active: true },
+    ]);
+
+    expect(series(await stats('sleep', DAY, DAY), 'sleep')).toEqual([{ date: DAY, value: 60 }]);
+  });
+
+  it('leaves out a record that was never given an end time', async () => {
+    // Not a running timer -- a back-filled record waiting to be completed
+    // (spec 3.5). It has no length either.
+    await seed([{ typeId: 'sleep', startedAt: at(DAY, 13) }]);
+
+    expect(series(await stats('sleep', DAY, DAY), 'sleep')).toEqual([{ date: DAY, value: 0 }]);
+  });
+
+  it('leaves out a deleted night, which keeps its times', async () => {
+    await seed([
+      { typeId: 'sleep', startedAt: at(DAY, 13), endedAt: at(DAY, 14) },
+      { typeId: 'sleep', startedAt: at(DAY, 15), endedAt: at(DAY, 17), deletedAt: at(DAY, 18) },
+    ]);
+
+    expect(series(await stats('sleep', DAY, DAY), 'sleep')).toEqual([{ date: DAY, value: 60 }]);
+  });
+
+  it('counts only the baby that was asked about', async () => {
+    const second = await createBaby(token, { nickname: 'Sibling' });
+    await seed([
+      { typeId: 'sleep', startedAt: at(DAY, 13), endedAt: at(DAY, 14) },
+      { typeId: 'sleep', startedAt: at(DAY, 13), endedAt: at(DAY, 20), baby: second },
+    ]);
+
+    expect(series(await stats('sleep', DAY, DAY), 'sleep')).toEqual([{ date: DAY, value: 60 }]);
+  });
+
+  it('carries a zero for a day with nothing recorded', async () => {
+    // A day with no sleep recorded really had none recorded, so the zero is
+    // a fact (spec 7.7) -- unlike a day nobody weighed the baby.
+    expect(series(await stats('sleep', '2026-06-15', '2026-06-17'), 'sleep')).toEqual([
+      { date: '2026-06-15', value: 0 },
+      { date: '2026-06-16', value: 0 },
+      { date: '2026-06-17', value: 0 },
+    ]);
+  });
+
+  it('keeps each duration type apart', async () => {
+    await seed([
+      { typeId: 'sleep', startedAt: at(DAY, 13), endedAt: at(DAY, 14) },
+      { typeId: 'walk', startedAt: at(DAY, 16), endedAt: at(DAY, 16, 30) },
+    ]);
+
+    const body = await stats('sleep,walk', DAY, DAY);
+    expect(series(body, 'sleep')).toEqual([{ date: DAY, value: 60 }]);
+    expect(series(body, 'walk')).toEqual([{ date: DAY, value: 30 }]);
+  });
+
+  it('adds up alongside the other aggregations in one request', async () => {
+    await seed([
+      { typeId: 'sleep', startedAt: at(DAY, 13), endedAt: at(DAY, 14) },
+      { typeId: 'bottle', startedAt: at(DAY, 8), value: 120 },
+    ]);
+
+    const body = await stats('sleep,bottle', DAY, DAY);
+    expect(series(body, 'sleep')).toEqual([{ date: DAY, value: 60 }]);
+    expect(series(body, 'bottle')).toEqual([{ date: DAY, value: 120 }]);
+  });
+});
+
 describe('a year of it', () => {
   /**
    * A year of invented records, in its own database by construction.
@@ -286,7 +483,7 @@ describe('a year of it', () => {
   const TO = '2026-12-31';
 
   beforeEach(async () => {
-    const rows: { typeId: string; startedAt: number; value: number }[] = [];
+    const rows: { typeId: string; startedAt: number; value?: number; endedAt?: number }[] = [];
     for (let date = FROM; date <= TO; date = addLocalDays(date, 1)) {
       // Six feeds and six nappies a day, which is a quiet day in practice.
       for (let i = 0; i < 6; i += 1) {
@@ -297,6 +494,14 @@ describe('a year of it', () => {
       if (date.endsWith('01') || date.endsWith('08')) {
         rows.push({ typeId: 'weight', startedAt: at(date, 9), value: 7000 + rows.length });
       }
+      // A night across midnight every night, which is the case the split
+      // exists for, plus a nap that stays inside the day.
+      rows.push({
+        typeId: 'sleep',
+        startedAt: at(date, 23, 10),
+        endedAt: at(addLocalDays(date, 1), 7, 5),
+      });
+      rows.push({ typeId: 'sleep', startedAt: at(date, 13), endedAt: at(date, 14, 30) });
     }
     await seed(rows);
   });
@@ -307,6 +512,34 @@ describe('a year of it', () => {
 
     expect(points).toHaveLength(365);
     expect(points[0]).toEqual({ date: FROM, value: 100 + 101 + 102 + 103 + 104 + 105 });
+  });
+
+  it('splits a year of nights without growing the number of points', async () => {
+    const points = series(await stats('sleep', FROM, TO), 'sleep');
+
+    expect(points).toHaveLength(365);
+    // The first day has only its own evening and nap, because the fixture
+    // starts here and there is no night before it. Every later day also
+    // carries the morning hours of the night before -- which is the split
+    // working at scale. Whether the *widened lower bound* works is a
+    // separate question, tested on its own above; this fixture has nothing
+    // outside the range for it to reach.
+    expect(points[0]).toEqual({ date: FROM, value: 50 + 90 });
+    expect(points[1]).toEqual({ date: '2026-01-02', value: 7 * 60 + 5 + 50 + 90 });
+  });
+
+  it('asks the database no more times for durations than for anything else', async () => {
+    const { response, queries } = await requestCounting(
+      statsUrl('sleep', FROM, TO),
+      {},
+      token,
+    );
+
+    expect(response.status).toBe(200);
+    expect(queries).toBeLessThanOrEqual(MAX_QUERIES_PER_REQUEST);
+    // The session, the permission check, and one statement for the split --
+    // not one per day and not one per night.
+    expect(queries).toBeLessThanOrEqual(4);
   });
 
   it('leaves the weeks nobody weighed out of the growth series', async () => {
@@ -330,7 +563,7 @@ describe('a year of it', () => {
    */
   it('asks the database a handful of times, not once per day', async () => {
     const { response, queries } = await requestCounting(
-      `/api/babies/${babyId}/stats?types=bottle,diaper,weight&from=${FROM}&to=${TO}`,
+      statsUrl('bottle,diaper,weight,sleep', FROM, TO),
       {},
       token,
     );
@@ -341,12 +574,13 @@ describe('a year of it', () => {
     // have to be looked at instead of sliding under the threshold: the
     // session, the permission check, and one statement per aggregation
     // family however many types are asked for.
-    expect(queries).toBeLessThanOrEqual(6);
+    expect(queries).toBeLessThanOrEqual(7);
   });
 
   it('does not grow its query count with the number of days', async () => {
-    const oneDay = await requestCounting(statsUrl('bottle,diaper,weight', FROM, FROM), {}, token);
-    const oneYear = await requestCounting(statsUrl('bottle,diaper,weight', FROM, TO), {}, token);
+    const types = 'bottle,diaper,weight,sleep';
+    const oneDay = await requestCounting(statsUrl(types, FROM, FROM), {}, token);
+    const oneYear = await requestCounting(statsUrl(types, FROM, TO), {}, token);
 
     expect(oneDay.response.status).toBe(200);
     expect(oneYear.response.status).toBe(200);

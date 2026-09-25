@@ -11,7 +11,7 @@ import {
 } from '../lib/events.js';
 import type { EventRow } from '../lib/events.js';
 import { fail, failValidation, zodToFieldErrors } from '../lib/errors.js';
-import { isDirect, statsFor } from '../lib/stats.js';
+import { statsFor } from '../lib/stats.js';
 import { buildSummary } from '../lib/summary.js';
 import { requireBabyAccess, requireEventAccess } from '../middleware/permissions.js';
 import type { Env } from '../lib/types.js';
@@ -284,34 +284,22 @@ babyEventRoutes.get('/:babyId/events/day/:date', requireBabyAccess(), async (c) 
 /**
  * Daily figures for a chart (spec 5.6, 7.7).
  *
- * `duration_sum` is not served here yet: it needs the midnight split done in
- * SQL, which is its own piece of work. Asking for a type that aggregates
- * that way is refused rather than answered with a plausible-looking series
- * computed the wrong way -- a chart that is quietly missing every night's
- * sleep before midnight looks exactly like a chart.
+ * Every aggregation the config uses is served: `count`, `sum`, `last`, `max`
+ * and `duration_sum`. The timezone comes from the baby record and never from
+ * the request, because it is what decides which day a night belongs to
+ * (spec 3.4).
  */
 babyEventRoutes.get('/:babyId/stats', requireBabyAccess(), async (c) => {
   const parsed = statsQuery.safeParse(c.req.query());
   if (!parsed.success) return failValidation(c, zodToFieldErrors(parsed.error.issues));
 
   const { types, from, to } = parsed.data;
-
-  const unsupported = types.filter((id) => {
-    const aggregation = getEventType(id)?.aggregation;
-    return aggregation !== undefined && !isDirect(aggregation) && aggregation !== 'last';
-  });
-  if (unsupported.length > 0) {
-    return failValidation(c, unsupported.map((id) => ({
-      field: 'types',
-      code: 'NOT_SUPPORTED_YET',
-      params: { typeId: id },
-    })));
-  }
+  const baby = c.get('baby');
 
   return c.json({
     from,
     to,
-    series: await statsFor(c.env.DB, c.get('babyId'), types, from, to),
+    series: await statsFor(c.env.DB, baby.id, baby.timezone, types, from, to),
   });
 });
 

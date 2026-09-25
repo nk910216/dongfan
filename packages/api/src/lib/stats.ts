@@ -1,4 +1,4 @@
-import { addLocalDays, getEventType } from '@dongfan/shared';
+import { addLocalDays, getEventType, msToMinutes, startOfLocalDay } from '@dongfan/shared';
 import type { Aggregation, StatSeriesDto } from '@dongfan/shared';
 
 /**
@@ -16,7 +16,7 @@ import type { Aggregation, StatSeriesDto } from '@dongfan/shared';
  * meaning rather than a computation over rows.
  */
 
-/** The aggregations served here. `duration_sum` needs the midnight split. */
+/** The aggregations that are a plain group-by over the stored value. */
 const DIRECT: readonly Aggregation[] = ['count', 'sum', 'max', 'avg'];
 
 export function isDirect(aggregation: Aggregation): boolean {
@@ -76,6 +76,117 @@ SELECT typeId, date, CAST(value AS INTEGER) AS value FROM (
 ) WHERE rank = 1
  ORDER BY date`;
 
+/**
+ * Time spent per day, with the night that crossed midnight split in two.
+ *
+ * A sleep from 23:10 to 07:05 is *counted* on the earlier evening, because
+ * `local_date` comes from `started_at`. Its duration belongs to both days,
+ * and attributing all of it to either one makes a chart showing one night at
+ * zero hours and the next at sixteen (spec 3.4).
+ *
+ * The shape spec 5.6 asks for: `UNION ALL` over "before midnight" and "after
+ * midnight", which is enough because an event lasts at most 24 hours and so
+ * crosses midnight at most once (spec 3.4.1 rule 1). **That invariant is
+ * what makes two parts sufficient.** It is enforced when an event is
+ * written; a row that broke it would have its whole tail attributed to the
+ * following day.
+ *
+ * Two of the conditions change the answer and one does not, which is worth
+ * separating rather than listing them as though all three were load-bearing:
+ *
+ * - `deleted_at IS NULL` — a tombstone keeps its times, so without this a
+ *   deleted night still counts. **Dropping it fails a test.**
+ * - the lower bound is **one day earlier than asked for**, because the sleep
+ *   that gives this morning its first seven hours is filed under last night
+ *   (spec 3.4.1 rule 2). The segments are filtered back to the range after
+ *   the split, not before it. **Dropping it fails a test.**
+ * - `ended_at IS NOT NULL` — an unfinished event has no length (spec 3.4.1
+ *   rule 3), which is why the chart says it shows finished records only
+ *   (spec 7.7). **This one is not observable**: `MIN(NULL, boundary)` is
+ *   NULL, NULL minus anything is NULL, and `SUM` skips it, so SQLite
+ *   already leaves those rows out. Removing the condition passes every
+ *   test. It stays because the intent should be readable here rather than
+ *   inferred from NULL arithmetic, and because a later edit to the `MIN`
+ *   could make it matter — not because anything checks it.
+ *
+ * `boundary` is the start of the day after the one the event is filed under,
+ * as an instant. SQLite's `unixepoch` gives UTC midnight of a date; the
+ * baby's offset turns that into local midnight. `offsetMs` is bound, and
+ * `offsetFor` refuses to guess it when a zone could have more than one.
+ */
+const DURATION_SQL = (placeholders: string): string => `
+WITH spans AS (
+  SELECT type_id,
+         local_date,
+         started_at,
+         ended_at,
+         unixepoch(local_date, '+1 day') * 1000 - ? AS boundary
+    FROM events
+   WHERE baby_id = ?
+     AND deleted_at IS NULL
+     AND ended_at IS NOT NULL
+     AND type_id IN (${placeholders})
+     AND local_date >= ? AND local_date <= ?
+),
+parts AS (
+  SELECT type_id, local_date AS date, MIN(ended_at, boundary) - started_at AS ms
+    FROM spans
+  UNION ALL
+  SELECT type_id, date(local_date, '+1 day') AS date, ended_at - boundary AS ms
+    FROM spans
+   WHERE ended_at > boundary
+)
+SELECT type_id AS typeId, date, CAST(SUM(ms) AS INTEGER) AS ms
+  FROM parts
+ WHERE date >= ? AND date <= ?
+ GROUP BY type_id, date
+ ORDER BY date`;
+
+/*
+ * A note on that last `WHERE`, so nobody takes it for a correctness guard.
+ *
+ * It keeps the widened day, and any day a night spilled into past the end,
+ * out of what comes back. It cannot change the response: `withGaps` builds
+ * the points from `from` to `to` and reads the map by date, so a row outside
+ * the range is never looked at. No assertion about a response can tell the
+ * two apart, and removing it passes every test.
+ *
+ * What it does is bound the rows crossing from the database to the Worker,
+ * which is the number spec 5.6 caps at 366. Kept for that, and said here
+ * rather than left looking tested.
+ */
+
+type DurationRow = { typeId: string; date: string; ms: number };
+
+/**
+ * The baby's offset from UTC, in milliseconds, for this range.
+ *
+ * The SQL above needs one number to turn a UTC midnight into a local one,
+ * which only exists if the offset does not change inside the range. v1
+ * supports `Asia/Taipei` alone and it has no daylight saving (spec 5.3), so
+ * this never refuses today.
+ *
+ * It is here so that the day somebody adds a zone with daylight saving, the
+ * split fails loudly instead of quietly losing or inventing an hour on two
+ * days a year. Unreachable as things stand, and said plainly rather than
+ * dressed up as a tested branch.
+ */
+export function offsetFor(timeZone: string, from: string, to: string): number {
+  const offsetAt = (date: string): number => {
+    const [y, m, d] = date.split('-').map(Number);
+    return Date.UTC(y as number, (m as number) - 1, d as number) - startOfLocalDay(date, timeZone);
+  };
+
+  const at = offsetAt(from);
+  if (at !== offsetAt(to)) {
+    throw new Error(
+      `${timeZone} changes offset between ${from} and ${to}; `
+      + 'the duration split cannot be done with a single offset',
+    );
+  }
+  return at;
+}
+
 type DirectRow = { typeId: string; date: string; n: number; total: number; high: number; mean: number };
 type LastRow = { typeId: string; date: string; value: number };
 
@@ -98,23 +209,26 @@ function placeholdersFor(count: number): string {
  * Fills in the days nothing was recorded on, where that means zero.
  *
  * Spec 7.7 splits these two cases and the split is the whole point: a day
- * with no feeds really had no feeds, so `count` and `sum` carry a zero. A
- * day nobody weighed the baby is not a day the baby weighed nothing, so
- * `last`, `avg` and `max` leave it out and let the chart join the points
- * either side. Zero-filling a weight curve drops it to the floor.
+ * with no feeds really had no feeds, so `count`, `sum` and `duration_sum`
+ * carry a zero. A day nobody weighed the baby is not a day the baby weighed
+ * nothing, so `last`, `avg` and `max` leave it out and let the chart join
+ * the points either side. Zero-filling a weight curve drops it to the
+ * floor.
  *
  * Done here rather than in the browser so there is one implementation of a
  * rule that is easy to get backwards, and so it can be tested against a
  * real database. It is not aggregation: no rows are read, the range is
  * already capped at 366 days, and the array is built once.
  */
+const FILLED: readonly Aggregation[] = ['count', 'sum', 'duration_sum'];
+
 function withGaps(
   aggregation: Aggregation,
   found: Map<string, number>,
   from: string,
   to: string,
 ): { date: string; value: number }[] {
-  if (aggregation !== 'count' && aggregation !== 'sum') {
+  if (!FILLED.includes(aggregation)) {
     return [...found.entries()]
       .sort(([a], [b]) => (a < b ? -1 : 1))
       .map(([date, value]) => ({ date, value }));
@@ -137,6 +251,7 @@ function withGaps(
 export async function statsFor(
   db: D1Database,
   babyId: string,
+  timeZone: string,
   typeIds: readonly string[],
   from: string,
   to: string,
@@ -149,6 +264,7 @@ export async function statsFor(
 
   const direct = [...kinds].filter(([, a]) => isDirect(a)).map(([id]) => id);
   const last = [...kinds].filter(([, a]) => a === 'last').map(([id]) => id);
+  const spans = [...kinds].filter(([, a]) => a === 'duration_sum').map(([id]) => id);
 
   const values = new Map<string, Map<string, number>>();
   for (const id of kinds.keys()) values.set(id, new Map());
@@ -172,6 +288,30 @@ export async function statsFor(
     for (const row of results) values.get(row.typeId)?.set(row.date, row.value);
   }
 
+  if (spans.length > 0) {
+    const { results } = await db
+      .prepare(DURATION_SQL(placeholdersFor(spans.length)))
+      .bind(
+        offsetFor(timeZone, from, to),
+        babyId,
+        ...spans,
+        // One day earlier than asked for, because last night's sleep is
+        // filed under last night and gives this morning its first hours
+        // (spec 3.4.1 rule 2). The segments are filtered back to the range
+        // inside the query, after the split.
+        addLocalDays(from, -1),
+        to,
+        from,
+        to,
+      )
+      .all<DurationRow>();
+
+    // Summed in milliseconds and converted once per day, through the shared
+    // helper so the API and the app round the same way. Rounding each event
+    // first accumulates error across a day of naps (spec 5.3).
+    for (const row of results) values.get(row.typeId)?.set(row.date, msToMinutes(row.ms));
+  }
+
   // In the order they were asked for, so a screen can pair the series with
   // its own list of types without matching on ids.
   return typeIds
@@ -181,7 +321,9 @@ export async function statsFor(
       return {
         typeId: id,
         aggregation,
-        unit: getEventType(id)?.value?.unit ?? null,
+        // Minutes, not milliseconds and not seconds (spec 5.6). A duration
+        // type has no value spec to take a unit from.
+        unit: aggregation === 'duration_sum' ? 'min' : getEventType(id)?.value?.unit ?? null,
         points: withGaps(aggregation, values.get(id) ?? new Map(), from, to),
       };
     });

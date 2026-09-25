@@ -33,17 +33,6 @@ export const FIELD_ERROR_CODES = [
   'DURATION_TOO_LONG',
   'TOO_FAR_IN_FUTURE',
   'BEFORE_BIRTH',
-  /**
-   * Asked for something this build cannot chart yet.
-   *
-   * Temporary, and deliberately loud. `duration_sum` needs the midnight
-   * split done in SQL; until that exists, answering with a plausible series
-   * computed the wrong way would give a chart quietly missing every hour of
-   * sleep before midnight, and a chart missing data looks exactly like a
-   * chart. Delete this along with the check in the stats route once every
-   * aggregation is served.
-   */
-  'NOT_SUPPORTED_YET',
 ] as const;
 
 export type FieldErrorCode = (typeof FIELD_ERROR_CODES)[number];

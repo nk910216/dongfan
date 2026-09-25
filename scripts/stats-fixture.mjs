@@ -104,6 +104,24 @@ function* events() {
       yield { rev, date, typeId: 'diaper', at: midnight + (3 + feed * 3) * HOUR, value: 1 };
     }
 
+    // A night that crosses midnight, every night, because that is the case
+    // `duration_sum` exists for: filed under the evening, but most of its
+    // hours belong to the morning after (spec 3.4.1). A fixture of naps that
+    // all finish before bedtime would never exercise the split.
+    rev += 1;
+    yield {
+      rev,
+      date,
+      typeId: 'sleep',
+      at: midnight + 23 * HOUR + 10 * 60_000,
+      ends: midnight + 24 * HOUR + 7 * HOUR + 5 * 60_000,
+      value: 1,
+    };
+
+    // And a daytime nap, so each day has something that does not cross.
+    rev += 1;
+    yield { rev, date, typeId: 'sleep', at: midnight + 13 * HOUR, ends: midnight + 14 * HOUR + 30 * 60_000, value: 1 };
+
     if (new Date(midnight).getUTCDay() === 1) {
       rev += 1;
       yield { rev, date, typeId: 'weight', at: midnight + 9 * HOUR, value: 5000 + (DAYS - i) * 6 };
@@ -147,7 +165,7 @@ function insert(userId, babyId) {
     + ' ended_at, local_date, value, note, metadata, version, rev, active, deleted_at) VALUES ('
     + [
       literal(randomUUID()), literal(babyId), literal(row.typeId), literal(userId),
-      row.at, row.at, row.at, 'NULL', literal(row.date), row.value,
+      row.at, row.at, row.at, row.ends ?? 'NULL', literal(row.date), row.value,
       literal(''), literal('{}'), 1, row.rev, 'NULL', 'NULL',
     ].join(', ')
     + ');');
@@ -217,6 +235,24 @@ function main() {
   const from = addLocalDays(today, -DAYS);
 
   console.log('\nAggregating a year, in SQL:');
+
+  // The split, in the shape the endpoint uses (spec 5.6). Widened by a day
+  // at the lower end, because last night's sleep gives this morning its
+  // first hours.
+  const split = run(
+    "WITH spans AS (SELECT type_id, local_date, started_at, ended_at,"
+    + " unixepoch(local_date, '+1 day') * 1000 - 28800000 AS boundary FROM events"
+    + ` WHERE baby_id = ${literal(babyId)} AND deleted_at IS NULL AND ended_at IS NOT NULL`
+    + ` AND type_id = 'sleep' AND local_date >= ${literal(addLocalDays(from, -1))}`
+    + ` AND local_date <= ${literal(today)}),`
+    + ' parts AS (SELECT type_id, local_date AS date, MIN(ended_at, boundary) - started_at AS ms FROM spans'
+    + " UNION ALL SELECT type_id, date(local_date, '+1 day') AS date, ended_at - boundary AS ms"
+    + ' FROM spans WHERE ended_at > boundary)'
+    + ' SELECT date, SUM(ms) AS ms FROM parts'
+    + ` WHERE date >= ${literal(from)} AND date <= ${literal(today)}`
+    + ' GROUP BY type_id, date ORDER BY date');
+  console.log(`  ${'duration_sum (sleep)'.padEnd(20)} ${String(split.results.length).padStart(4)} rows  ${split.duration} ms`);
+
   for (const [label, typeId] of [['count (diaper)', 'diaper'], ['sum (bottle)', 'bottle'], ['max (temperature)', 'temperature']]) {
     const { results, duration } = run(
       `SELECT local_date, COUNT(*) AS n, SUM(value) AS total, MAX(value) AS high FROM events`

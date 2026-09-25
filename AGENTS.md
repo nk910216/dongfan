@@ -110,7 +110,7 @@ is a year of data to point it at.
 | 1 | The day boundary: what a day's calendar contains (spec 3.4.1, 7.5) | **done** |
 | 2 | The single-day calendar screen: date picker, back to today, the FAB, writing something up afterwards | **done** |
 | 3 | A year of synthetic data in its own database, the D1 query-count guardrail (spec 11.2), and `GET /stats` for `count`/`sum`/`last`/`max`/`avg` | **done** |
-| 4 | `duration_sum`: the midnight split in SQL, `UNION ALL`, excluding running timers | |
+| 4 | `duration_sum`: the midnight split in SQL, `UNION ALL`, excluding running timers | **done** |
 | 5 | The stats screen: type, range, chart kind, axis density, the two warnings | |
 | 6 | The M3 measurement (see below) | |
 
@@ -246,17 +246,47 @@ The range is capped at `MAX_STATS_DAYS`, which is what makes spec 5.6's "at
 most 366 points" a fact: the response has one point per local date, so the
 only way to bound it is to bound the range.
 
+**The midnight split is done in SQL**, as `UNION ALL` over "before midnight"
+and "after midnight" (spec 5.6). Two parts are enough only because an event
+lasts at most 24 hours and so crosses midnight at most once (spec 3.4.1
+rule 1) — that invariant is enforced when an event is written, and a row
+breaking it would have its whole tail attributed to the following day.
+
+The boundary is the start of the day after the one the event is filed under.
+SQLite's `unixepoch` gives UTC midnight of a date and the baby's offset turns
+that into a local one, so one bound number does the whole range.
+`offsetFor` refuses to guess when the zone's offset is not the same at both
+ends of the range — unreachable while `SUPPORTED_TIMEZONES` holds one
+fixed-offset zone, and there so that adding a zone with daylight saving fails
+loudly instead of quietly losing an hour twice a year.
+
+**The lower bound is a day earlier than asked for** (spec 3.4.1 rule 2), and
+the segments are filtered back to the range *after* the split. Without it,
+asking about this morning loses the seven hours of sleep that are filed under
+last night, and says nothing about it.
+
+Durations are summed in milliseconds and converted **once per day** through
+the shared `msToMinutes`, so the API and the app round the same way and three
+forty-second naps are two minutes rather than zero (spec 5.3). The unit is
+`min`, never milliseconds and never the type's value unit — a duration type
+has no value spec to take one from.
+
+**Two conditions in that query are not observable, and saying so is the
+point.** `ended_at IS NOT NULL` changes nothing, because `MIN(NULL, boundary)`
+is NULL, NULL minus anything is NULL and `SUM` skips it — SQLite already
+leaves unfinished events out, and removing the condition passes every test.
+The final `WHERE date BETWEEN` cannot change a response either, because
+`withGaps` builds the points from `from` to `to` and never looks at a row
+outside it; what it does is bound the rows crossing from the database to the
+Worker, which is the number spec 5.6 caps at 366. Both stay, both are
+labelled in place, and neither is counted as covered.
+
 **`avg` has no configured type.** Every aggregation in the event type config
 is `count`, `sum`, `last`, `duration_sum` or `max`. `avg` is implemented
 because spec 5.6 names it, and its SQL runs on every request alongside the
 others, but the branch that *selects* the mean cannot be reached through the
 endpoint and therefore has no end-to-end test. Said here rather than left
 looking covered.
-
-`duration_sum` is refused with `NOT_SUPPORTED_YET` until stage 4 rather than
-answered with a series computed without the midnight split. A chart quietly
-missing every hour of sleep before midnight looks exactly like a chart.
-Delete that code and that error together.
 
 ### A failed Zod refinement does not stop the next one
 
@@ -330,6 +360,12 @@ last week no longer covers the range being asked about.
 The script only runs `main` when it is the entry point. A test that imported
 it to reach `fixturePlan` shelled out to wrangler and filled a database as a
 side effect of reading a pure function.
+
+Every night in it crosses midnight, deliberately: that is the case
+`duration_sum` exists for, and a fixture of naps that all finished before
+bedtime would never exercise the split. Adding them changed the expected row
+count, which made the completeness check rebuild the database on its own —
+the mechanism working rather than being trusted.
 
 The integration tests do not use it. Their D1 is created for the run and
 thrown away, so the year-scale test seeds its own rows directly into the
