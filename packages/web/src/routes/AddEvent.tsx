@@ -7,7 +7,7 @@ import {
 import { EventIcon, EventIconBadge } from '../components/EventIcon.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { useCreateEvent } from '../lib/create-event.js';
-import { askedDay, dayAfterAdding, daySuffix, startFor } from '../lib/dated-add.js';
+import { askedDay, dayView, daySuffix, startFor } from '../lib/dated-add.js';
 import { useStore } from '../lib/store.js';
 
 /**
@@ -59,7 +59,9 @@ export function AddEvent(): React.JSX.Element {
       navigate(`/event/${result.eventId}`);
       return;
     }
-    navigate(day === null ? '/' : dayAfterAdding(startedAt, baby.timezone, Date.now()));
+    // Back to the screen this was entered from, on the day it was
+    // showing -- never to today (spec 7.3).
+    navigate(day === null ? '/' : dayView(day, baby.timezone, Date.now()));
   };
 
   return (

@@ -1154,6 +1154,30 @@ describe('looking back at one day', () => {
     expect(screen.queryByTestId('back-to-today')).not.toBeInTheDocument();
   });
 
+  it('can be told to pull by hand, like the home screen', async () => {
+    // Spec 6.1 asks for this on both screens. Sitting on last Tuesday
+    // while the other parent adds something to it is exactly what the
+    // automatic pulls do not cover.
+    const day = daysAgo(2);
+    const user = openSignedIn(`/day/${day}`);
+    await screen.findByText(zhTW.calendar.empty);
+
+    api.add({ typeId: 'bottle', startedAt: onDay(day, 9) });
+    await user.click(screen.getByRole('button', { name: zhTW.a11y.sync }));
+
+    await waitFor(() => expect(screen.getAllByTestId('event-row-bottle')).toHaveLength(1));
+  });
+
+  it('says its figures are out of date here too, rather than pretending', async () => {
+    const user = openSignedIn(`/day/${daysAgo(2)}`);
+    await screen.findByTestId('sync-state');
+
+    server.use(http.get('*/events', () => HttpResponse.error()));
+    await user.click(screen.getByRole('button', { name: zhTW.a11y.sync }));
+
+    await waitFor(() => expect(screen.getByTestId('sync-state')).toHaveTextContent(zhTW.home.syncFailed));
+  });
+
   it('is reachable at all', async () => {
     // The menu button had no handler until this screen existed, so there
     // was no way in (spec 7.10).
@@ -1187,15 +1211,21 @@ describe('writing something up afterwards', () => {
     expect(toLocalDate(Number(sent['startedAt']), BABY.timezone)).toBe(day);
   });
 
-  it('starts the time at midday rather than at a plausible-looking now', async () => {
-    // Midday reads as a placeholder. The current time of day transplanted
-    // onto an earlier date reads as an observation, and gets saved without
-    // being looked at.
+  it('moves the date and keeps the time of day', async () => {
+    // Spec 7.3 in as many words: the day being looked at, at the current
+    // time of day. Not midday, and not today.
     const day = daysAgo(4);
     openSignedIn(`/add/bottle?on=${day}`);
 
-    const field = await screen.findByTestId('started-at');
-    expect(field).toHaveValue(toLocalInput(startOfLocalDay(day, BABY.timezone) + 12 * 3_600_000, BABY.timezone));
+    const shown = (await screen.findByTestId('started-at')) as HTMLInputElement;
+    const now = Date.now();
+    const sinceMidnight = now - startOfLocalDay(toLocalDate(now, BABY.timezone), BABY.timezone);
+
+    expect(shown.value.slice(0, 10)).toBe(day);
+    // To the minute, which is all the control shows.
+    expect(shown.value).toBe(
+      toLocalInput(startOfLocalDay(day, BABY.timezone) + sinceMidnight, BABY.timezone),
+    );
   });
 
   it('comes back to the day it was written for', async () => {
@@ -1210,24 +1240,49 @@ describe('writing something up afterwards', () => {
     expect(await screen.findByTestId('calendar-date')).toHaveValue(day);
   });
 
-  it('follows the record when the time is moved to another day', async () => {
-    // Returning to the day it was written for would show a day without it,
-    // and "it did not save" is the wrong thing to learn from a screen.
+  it('comes back to the day being looked at even when the time was moved', async () => {
+    // Spec 7.3 decides this: back to the view it was entered from, on the
+    // date it was showing. Never today.
     const from = daysAgo(4);
-    const landed = daysAgo(6);
+    const moved = daysAgo(6);
     const user = openSignedIn(`/add/bottle?on=${from}`);
 
     // Set in one go rather than typed: a datetime control halfway through
     // being typed is not a moment, and nothing should read one.
     fireEvent.change(await screen.findByTestId('started-at'), {
       target: {
-        value: toLocalInput(startOfLocalDay(landed, BABY.timezone) + 9 * 3_600_000, BABY.timezone),
+        value: toLocalInput(startOfLocalDay(moved, BABY.timezone) + 9 * 3_600_000, BABY.timezone),
       },
     });
     await user.type(screen.getByLabelText(valueLabel('bottle')), '150');
     await user.click(screen.getByTestId('submit'));
 
-    expect(await screen.findByTestId('calendar-date')).toHaveValue(landed);
+    expect(await screen.findByTestId('calendar-date')).toHaveValue(from);
+    expect(api.events[0]?.localDate).toBe(moved);
+  });
+
+  it('does not start a timer when writing up an earlier day', async () => {
+    // Saved as a timer it would store a sleep that began four days ago and
+    // is still running: instantly past the 24-hour limit, so the stop
+    // button becomes the correction form, while holding the only
+    // `active = 1` slot sleep has -- so tonight's cannot be started
+    // either (spec 3.5, 7.2).
+    const user = openSignedIn(`/add/sleep?on=${daysAgo(4)}`);
+
+    await user.click(await screen.findByTestId('submit'));
+
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    expect((api.lastRequest('/events')?.body as Record<string, unknown>)['intent']).toBe('record');
+    expect(api.events[0]?.active).toBe(false);
+  });
+
+  it('still starts a timer for today, where that is what the button is for', async () => {
+    const user = openSignedIn('/add/sleep');
+
+    await user.click(await screen.findByTestId('submit'));
+
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    expect((api.lastRequest('/events')?.body as Record<string, unknown>)['intent']).toBe('start_timer');
   });
 
   it('gives up on the day rather than on the app when cancelled', async () => {

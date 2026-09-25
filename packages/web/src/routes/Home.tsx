@@ -8,14 +8,13 @@ import { EmptyDay, EventRow, WaitingRow } from '../components/EventRow.js';
 import { InstallHint } from '../components/InstallHint.js';
 import { PageMenu } from '../components/PageMenu.js';
 import { QuickActions } from '../components/QuickActions.js';
-import { relativeTime, syncedAgo } from '../lib/format.js';
+import { SyncState } from '../components/SyncState.js';
+import { relativeTime } from '../lib/format.js';
 import { draftFor, typeSummary, useStore } from '../lib/store.js';
 import { useSession } from '../lib/session.js';
 
 export function Home(): React.JSX.Element {
-  const {
-    baby, summary, events, now, stale, syncing, syncedAt, refresh, unsynced, stopDrafts,
-  } = useStore();
+  const { baby, summary, events, now, unsynced, stopDrafts } = useStore();
 
   /**
    * The waiting records that belong on today's list.
@@ -55,20 +54,7 @@ export function Home(): React.JSX.Element {
         {/* Until now this had no handler at all, so the calendar had no
             way in. Spec 7.10 asks for a page list behind it. */}
         <PageMenu />
-        {/* Tappable, because the automatic pulls cover coming back to the
-            app and coming back online, and neither covers standing in the
-            kitchen wondering whether the other parent has recorded the
-            feed yet (spec 6.1). */}
-        <button
-          type="button"
-          onClick={() => void refresh()}
-          disabled={syncing}
-          aria-label={zhTW.a11y.sync}
-          className="text-[13px] text-ink-faint disabled:opacity-60"
-          data-testid="sync-state"
-        >
-          {syncing ? zhTW.home.syncing : stale ? zhTW.home.syncFailed : syncedAgo(syncedAt, now)}
-        </button>
+        <SyncState now={now} />
         <Link
           to="/settings"
           aria-label={zhTW.a11y.openSettings}

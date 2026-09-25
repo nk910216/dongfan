@@ -9,7 +9,7 @@ import type { EventDraft } from '../components/EventFields.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { useCreateEvent } from '../lib/create-event.js';
 import type { SubmitResult } from '../lib/create-event.js';
-import { askedDay, dayAfterAdding, daySuffix, startFor } from '../lib/dated-add.js';
+import { askedDay, dayView, daySuffix, startFor } from '../lib/dated-add.js';
 import { clearForm, formKey, readForm, saveForm } from '../lib/form-draft.js';
 import { typeSummary, useStore } from '../lib/store.js';
 
@@ -77,7 +77,15 @@ export function EventForm({ typeId: given, entryId }: {
   const [intent, setIntent] = useState<EventIntent>(
     // A resumed add keeps the intent it was sent with, or a timer would
     // come back as a back-filled record and vice versa.
-    restored?.intent ?? create.pending?.intent ?? (type?.timerEnabled ? 'start_timer' : 'record'),
+    restored?.intent ??
+      create.pending?.intent ??
+      // Writing up an earlier day is never starting a timer. Saved as one
+      // it would store a sleep that began four days ago and is still
+      // running: instantly past the 24-hour limit, so the stop button
+      // turns into the correction form, while holding the only
+      // `active = 1` slot its type has -- so tonight's sleep cannot be
+      // started either (spec 3.5, 7.2).
+      (type?.timerEnabled && day === null ? 'start_timer' : 'record'),
   );
   const [draft, setDraft] = useState<EventDraft>(() => {
     // What was being typed when the page went away wins over everything
@@ -155,9 +163,9 @@ export function EventForm({ typeId: given, entryId }: {
       navigate(`/event/${result.eventId}`);
       return;
     }
-    // Back to the day it was written for, and to the day it actually
-    // landed on if the time was changed to another one.
-    navigate(day === null ? '/' : dayAfterAdding(draft.startedAt, baby.timezone, Date.now()));
+    // Back to the day the calendar was showing, whatever time was
+    // finally entered. Spec 7.3 is explicit: not today.
+    navigate(day === null ? '/' : dayView(day, baby.timezone, Date.now()));
   };
 
   const submit = async (): Promise<void> => {

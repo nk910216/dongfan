@@ -4,6 +4,7 @@ import { Plus } from 'lucide-react';
 import { isRealLocalDate, toLocalDate, zhTW } from '@dongfan/shared';
 import { EmptyDay, EventRow, WaitingRow } from '../components/EventRow.js';
 import { PageMenu } from '../components/PageMenu.js';
+import { SyncState } from '../components/SyncState.js';
 import { calendarDay } from '../lib/db.js';
 import type { DayEntry } from '../lib/db.js';
 import { draftFor, useStore } from '../lib/store.js';
@@ -71,40 +72,49 @@ export function Calendar(): React.JSX.Element {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <header className="flex shrink-0 items-center gap-1 px-2 pt-2.5 pb-1.5">
-        <PageMenu />
+      <header className="flex shrink-0 flex-col px-2 pt-2.5 pb-1.5">
+        <div className="flex items-center gap-1">
+          <PageMenu />
 
-        {/* The date is the control. A native date input is the sliding
-            year/month/day picker spec 7.5 asks for on a phone, and it is
-            the one a parent already knows how to use. */}
-        <input
-          type="date"
-          aria-label={zhTW.calendar.date}
-          data-testid="calendar-date"
-          value={date}
-          onChange={(e) => {
+          {/* The date is the control. A native date input is the sliding
+              year/month/day picker spec 7.5 asks for on a phone, and it is
+              the one a parent already knows how to use. */}
+          <input
+            type="date"
+            aria-label={zhTW.calendar.date}
+            data-testid="calendar-date"
+            value={date}
+            onChange={(e) => {
             // Navigated rather than held in state, so the day being looked
             // at survives a reload and can be shared. Replaced rather than
             // pushed: spinning the wheel fires this for every day it
             // passes, and Back should return to where the parent came
             // from, not step through the dates they scrolled over.
-            const picked = e.target.value;
-            if (isRealLocalDate(picked)) navigate(`/day/${picked}`, { replace: true });
-          }}
-          className="min-h-11 flex-1 bg-transparent text-center font-numeric text-base outline-none"
-        />
+              const picked = e.target.value;
+              if (isRealLocalDate(picked)) navigate(`/day/${picked}`, { replace: true });
+            }}
+            className="min-h-11 flex-1 bg-transparent text-center font-numeric text-base outline-none"
+          />
 
-        {date === today && asked === undefined ? (
-          <span className="size-11" />
-        ) : (
-          <Link
-            to="/day"
-            data-testid="back-to-today"
-            className="flex min-h-11 items-center px-2 text-[13px] text-accent"
-          >
-            {zhTW.calendar.today}
-          </Link>
-        )}
+          {date === today && asked === undefined ? (
+            <span className="size-11" />
+          ) : (
+            <Link
+              to="/day"
+              data-testid="back-to-today"
+              className="flex min-h-11 items-center px-2 text-[13px] text-accent"
+            >
+              {zhTW.calendar.today}
+            </Link>
+          )}
+        </div>
+
+        {/* Spec 6.1 asks for a manual sync here as well as on the home
+            screen. Sitting on last Tuesday while the other parent adds
+            something to it is exactly the case the automatic pulls miss. */}
+        <div className="flex justify-center">
+          <SyncState now={now} />
+        </div>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-24">

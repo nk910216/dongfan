@@ -154,45 +154,70 @@ The day an add is for travels in the query string — `/add?on=2026-09-18`,
 `/add/bottle?on=2026-09-18` — and not in router state. State is gone after
 a reload, and the screen would carry on looking identical while meaning
 something else: a record for the 18th quietly becoming a record for now
-(spec 2.1). `lib/dated-add.ts` holds the four small decisions so both
-screens make them the same way.
+(spec 2.1). `lib/dated-add.ts` holds the decisions so both screens make
+them the same way.
 
-- **The time starts at midday**, not at the current time of day moved onto
-  that date. A time carried over from the clock reads as something that was
-  observed and gets saved without being looked at; midday reads as a
-  placeholder, and the field it sits in is the one thing a parent writing
-  from memory has to fill in. Today is still `now`, which is the ordinary
-  case and needs no placeholder.
-- **The form draft is named with the day.** Without that, a half-typed feed
-  for the 18th is offered back on the 19th's form, holding the 18th's
-  instant while the heading says the 19th — and the wrong one of those two
-  is the one that gets saved.
-- **Afterwards it returns to the day the record landed on**, which is the
-  day it was written for unless the parent changed the time to another one.
-  Returning to the day they were browsing regardless would show them a day
-  without the record they just made, and "it did not save" is the wrong
-  thing to learn from a screen. Today returns to `/day`, not to today's
-  date, so it keeps meaning today after midnight.
-- **Both screens say which day they are filing under.** A form for the 18th
-  looks exactly like a form for now.
+**Spec 7.3 decides two of them, and an earlier version of this got both
+wrong by reasoning from first principles instead of reading it:**
 
-`/day` and `/day/:date` are deliberately different: without a date it is
-today and stays today when the clock passes midnight under a phone on a
-bedside table; with one it is that day and does not move. "Back to today"
-goes to `/day`.
+- **The default time is the day being looked at, at the current time of
+  day.** Not midday. The argument for midday — that a time carried over
+  from the clock reads as observed and gets saved unlooked at — only ever
+  applied to the form. The nappy shortcut has no time field, so midday was
+  written there with nothing to confirm it against: a nappy at 12:00 the
+  app invented.
+- **Afterwards it returns to the day the calendar was showing**, whatever
+  time was finally entered, and never to today. Spec 7.3 spells out the
+  sequence it exists to prevent: pick yesterday, press add, be handed a
+  form defaulting to today, and be dropped back on today after saving.
+  That is the one place in the whole flow where people misremember which
+  day they filed something under.
 
-Rows are shared rather than copied. `components/EventRow.tsx` holds
-`EventRow`, `WaitingRow` and `describeQueued`, because spec 7.5 asks for
-the calendar's events to look like the home screen's, and two copies would
-answer that on the day they were written and then drift.
+Today returns to `/day`, not to today's date, so it keeps meaning today
+after midnight.
+
+**A dated add defaults to `record`, never `start_timer`.** Saved as a timer
+it stores a sleep that began four days ago and is still running: instantly
+past the 24-hour limit, so the stop button turns into the correction form
+(spec 7.2), while holding the only `active = 1` slot its type has — so
+tonight's sleep cannot be started either (spec 3.5). A resumed draft or a
+queued entry keeps the intent it was written with; only the default moves.
+
+**The form draft is named with the day.** Without that, a half-typed feed
+for the 18th is offered back on the 19th's form, holding the 18th's instant
+while the heading says the 19th — and the wrong one of those two is what
+gets saved.
+
+**Both screens say which day they are filing under.** A form for the 18th
+looks exactly like a form for now.
+
+### One sync control, on both screens
+
+Spec 6.1 asks for a manual sync on the home screen **and** the calendar.
+The calendar shipped without one: it read IndexedDB and had no way to ask
+for anything, so somebody sitting on last Tuesday while the other parent
+added to it had to leave the screen to find out.
+
+`components/SyncState.tsx` is that control, shared, so the two cannot end
+up disagreeing about what "synced" looks like. It drives the store's
+`refresh` rather than fetching anything itself: the calendar is a reader,
+and a second way of pulling would be a second cursor to get wrong
+(spec 5.4).
+
+### Rows are shared, not copied
+
+`components/EventRow.tsx` holds `EventRow`, `WaitingRow` and
+`describeQueued`, because spec 7.5 asks for the calendar's events to look
+like the home screen's, and two copies would answer that on the day they
+were written and then drift apart a badge at a time.
 
 An all-day event sorts **above** everything, in `calendarDay` rather than
 in a screen. It is stored at local midnight (spec 3.9), so by the clock it
 would sink under every feed of the day instead of heading it.
 
-The menu button at the top left had no handler at all until this screen
-existed — there was no way into the calendar. `PageMenu` is the page list
-spec 7.10 asks for.
+The menu button at the top left had no handler at all until the calendar
+existed — there was no way in. `PageMenu` is the page list spec 7.10 asks
+for.
 
 ### Two things spec.md is not consistent about
 

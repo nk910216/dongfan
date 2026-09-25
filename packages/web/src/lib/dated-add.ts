@@ -9,9 +9,6 @@ import { isRealLocalDate, startOfLocalDay, toLocalDate } from '@dongfan/shared';
  * meaning something else (spec 2.1).
  */
 
-/** Midday, as a starting point for a day that has already happened. */
-const MIDDAY_MS = 12 * 3_600_000;
-
 /** The day an add was started from, if it was started from one. */
 export function askedDay(search: string): string | null {
   const on = new URLSearchParams(search).get('on');
@@ -26,32 +23,33 @@ export function daySuffix(day: string | null, separator = '?'): string {
 /**
  * When a record added from a given day should start.
  *
- * Today is now: that is the ordinary case and the clock is the best answer
- * there is. Any other day is **midday**, and deliberately not the current
- * time of day transplanted onto it. A time carried over from the clock
- * looks like something that was observed and gets accepted without a
- * glance; midday is obviously a placeholder, and the field it sits in is
- * the one thing the parent has to fill in for a record they are writing
- * from memory.
+ * The day being looked at, **at the current time of day** -- spec 7.3 in as
+ * many words. Today is simply now.
+ *
+ * An earlier version of this used midday, on the reasoning that a time
+ * carried over from the clock looks like something observed and gets saved
+ * unlooked at. That argument only ever applied to the form: the nappy
+ * shortcut has no time field at all, so midday was written there with
+ * nothing to confirm it against -- a nappy at 12:00 that the app invented.
+ * Whatever else is true of the spec's rule, it is the same rule in both
+ * places.
+ *
+ * The time of day is carried as the offset from local midnight. v1 is
+ * `Asia/Taipei` only (spec 5.3), which has no daylight saving; in a zone
+ * that had it, a day whose midnight had moved would land an hour out.
  */
 export function startFor(day: string | null, timeZone: string, now: number): number {
-  if (day === null || day === toLocalDate(now, timeZone)) return now;
-  return startOfLocalDay(day, timeZone) + MIDDAY_MS;
+  const todayHere = toLocalDate(now, timeZone);
+  if (day === null || day === todayHere) return now;
+  return startOfLocalDay(day, timeZone) + (now - startOfLocalDay(todayHere, timeZone));
 }
 
 /**
- * Where to go once a record has been written, having come from a day.
+ * The calendar path for a day.
  *
- * The day the record actually landed on, which is the day it was added
- * from unless the parent changed the time to another one. Returning to the
- * day they were browsing regardless would show them a day without the
- * record they just made, and "it did not save" is the wrong thing to learn
- * from a screen.
- *
- * Today goes to `/day`, which keeps meaning today after midnight, rather
- * than to today's date, which does not.
+ * Today is `/day`, which goes on meaning today after midnight, rather than
+ * today's date, which does not.
  */
-export function dayAfterAdding(startedAt: number, timeZone: string, now: number): string {
-  const landed = toLocalDate(startedAt, timeZone);
-  return landed === toLocalDate(now, timeZone) ? '/day' : `/day/${landed}`;
+export function dayView(day: string, timeZone: string, now: number): string {
+  return day === toLocalDate(now, timeZone) ? '/day' : `/day/${day}`;
 }
