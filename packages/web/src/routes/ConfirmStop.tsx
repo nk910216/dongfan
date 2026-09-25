@@ -10,6 +10,7 @@ import { checkDraft, draftForValue } from '../components/EventFields.js';
 import { ErrorLine, describeFailure } from '../components/FieldErrors.js';
 import { Message } from '../components/Message.js';
 import { formatClock, formatDuration } from '../lib/format.js';
+import { useReturnTo } from '../lib/return-to.js';
 import { draftFor, useStore } from '../lib/store.js';
 
 /**
@@ -28,6 +29,9 @@ import { draftFor, useStore } from '../lib/store.js';
 export function ConfirmStop(): React.JSX.Element {
   const { eventId = '' } = useParams();
   const navigate = useNavigate();
+  // Back to the screen this was opened from, so a card on the timeline
+  // behaves like the ones beside it whatever state it is in.
+  const back = useReturnTo();
   const { baby, stopDrafts, findEvent, updateEvent, discardStop } = useStore();
 
   // Looked up once. Confirming removes it, and a screen that followed the
@@ -83,7 +87,7 @@ export function ConfirmStop(): React.JSX.Element {
   }, []);
 
   // Nothing to confirm: already dealt with, or a link followed too late.
-  if (!draft) return <Navigate to="/" replace />;
+  if (!draft) return <Navigate to={back} replace />;
 
   const type = event ? getEventType(event.typeId) : undefined;
 
@@ -118,7 +122,7 @@ export function ConfirmStop(): React.JSX.Element {
       // answers this draft when it is *this* one -- a note corrected
       // elsewhere must leave the moment alone (spec 7.2).
       await discardStop(eventId);
-      navigate('/');
+      navigate(back);
     } catch (error) {
       setBusy(false);
       if (error instanceof ApiFailure && error.code === 'VERSION_CONFLICT') {
@@ -134,13 +138,13 @@ export function ConfirmStop(): React.JSX.Element {
 
   const discard = async (): Promise<void> => {
     await discardStop(eventId);
-    navigate('/');
+    navigate(back);
   };
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <header className="flex shrink-0 items-center border-b border-line-soft px-2 py-2">
-        <Link to="/" aria-label={zhTW.a11y.back} className="flex size-11 items-center justify-center text-ink-muted">
+        <Link to={back} aria-label={zhTW.a11y.back} className="flex size-11 items-center justify-center text-ink-muted">
           <ChevronLeft size={22} />
         </Link>
         <div className="-ml-11 flex flex-1 items-center justify-center gap-2">

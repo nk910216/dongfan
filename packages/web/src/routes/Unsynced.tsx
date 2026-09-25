@@ -7,6 +7,7 @@ import { EventIconBadge, FALLBACK_COLOR } from '../components/EventIcon.js';
 import { describeQueued } from '../components/EventRow.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { EventForm } from './EventForm.js';
+import { useReturnTo } from '../lib/return-to.js';
 import { useStore } from '../lib/store.js';
 
 /**
@@ -50,9 +51,14 @@ export function Unsynced(): React.JSX.Element {
 }
 
 function Header({ title }: { title: string }): React.JSX.Element {
+  // Back to wherever this was opened from. Reached from the home screen's
+  // strip that is home; reached from a card on the timeline it is the day
+  // being read, so a queued record behaves like the ones beside it.
+  const back = useReturnTo();
+
   return (
     <header className="flex shrink-0 items-center border-b border-line-soft px-2 py-2">
-      <Link to="/" aria-label={zhTW.a11y.back} className="flex size-11 items-center justify-center text-ink-muted">
+      <Link to={back} aria-label={zhTW.a11y.back} className="flex size-11 items-center justify-center text-ink-muted">
         <ChevronLeft size={22} />
       </Link>
       <span className="-ml-11 flex-1 text-center text-base font-medium">{title}</span>

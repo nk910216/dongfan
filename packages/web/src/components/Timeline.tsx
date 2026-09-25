@@ -79,8 +79,8 @@ function detailOf(item: TimelineItem, timezone: string): string {
  * home screen, on today.
  */
 function linkFor(item: TimelineItem, from: string): string {
-  if (item.kind === 'queued') return '/unsynced';
-  if (item.drafted) return `/stop/${item.eventId ?? ''}`;
+  if (item.kind === 'queued') return linkBack('/unsynced', from);
+  if (item.drafted) return linkBack(`/stop/${item.eventId ?? ''}`, from);
   return linkBack(`/event/${item.eventId ?? ''}`, from);
 }
 

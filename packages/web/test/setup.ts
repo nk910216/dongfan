@@ -5,6 +5,7 @@ import { cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { api, server } from './server.js';
 import { closeDb } from '../src/lib/db.js';
+import { forgetScrollPositions } from '../src/routes/Calendar.js';
 import { resetLanes } from '../src/lib/lane.js';
 import { resetMigration } from '../src/lib/outbox.js';
 import { resetUpdate } from '../src/lib/update.js';
@@ -142,6 +143,10 @@ afterEach(async () => {
   // taken away from underneath it.
   cleanup();
   await settleInFlight();
+
+  // Where each day was left is module state that outlives a render, which
+  // in a browser is the point and between tests is contamination.
+  forgetScrollPositions();
 
   server.resetHandlers();
   api.reset();

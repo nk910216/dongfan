@@ -181,10 +181,15 @@ confirmation that cannot succeed.
 ### The clock ticks every second, so nothing may depend on it by accident
 
 `now` in the store moves once a second. The timeline passed it straight
-through, so every card on the day was rebuilt sixty times a minute -- which on
-a busy day is the difference between a screen that answers a tap and one that
-does not. `nowMinutes` is whole minutes now, the hour rules and each cluster
-are memoised, and the line cannot move by less than a pixel anyway.
+through, so every card on the day was re-rendered once a second -- sixty times
+a minute -- for a line that cannot move by less than a pixel in that time.
+`nowMinutes` is whole minutes now, and the hour rules and each cluster are
+memoised.
+
+**That is unnecessary work removed, not a diagnosis.** A React render is not a
+repaint, and no measurement was taken: when jank was reported on a real phone
+this was found by reading the code, and it may or may not have been the cause.
+Do not write it up as one without a profile or a phone that got better.
 
 ### Where a screen goes back to
 
@@ -198,6 +203,21 @@ had been opened on the day being read closed again -- which is what a crowded
 stretch collapsing "by itself" actually was. Whether such a stretch is open
 lives in the URL for the same reason: the component that held it is unmounted
 by the navigation.
+
+**All three kinds of card carry it**, not only the ordinary one. A queued
+record goes to the unsynced list and a stop draft to the confirmation screen,
+and both of those returned home while the card beside them came back to the
+day -- so the same timeline behaved differently depending on what state a
+record happened to be in. Both screens take `useReturnTo()` and fall back to
+home when nothing said otherwise, which is what reaching them from the home
+screen's own strips does.
+
+**And where the day was left is remembered** for as long as the app is open,
+in module state rather than a ref, because the point is to survive the screen
+being unmounted. Coming back is not a first visit: re-deciding dropped
+somebody reading last night's cluster back at the morning's first feed, with
+the list they had opened still open and somewhere off the screen. A reload
+forgets, which is right -- that is a fresh look at the day.
 
 ### Four ways the timeline was wrong and looked right
 

@@ -1394,6 +1394,78 @@ describe('looking back at one day', () => {
     await waitFor(() => expect(scroller.scrollTop).toBe(0));
   });
 
+  it('comes back to where the day was left, not to where it opens', async () => {
+    // A record in the morning and a crowded stretch at night. Opening the
+    // stretch, tapping in and coming back had the list still open and the
+    // page back at the morning, with it somewhere off the screen.
+    const day = daysAgo(2);
+    api.add({ typeId: 'diaper', startedAt: onDay(day, 7) });
+    for (let i = 0; i < 4; i += 1) {
+      api.add({ typeId: 'bottle', startedAt: onDay(day, 21, i), value: 100 + i });
+    }
+
+    const user = openSignedIn(`/day/${day}`);
+    await screen.findByTestId('crowded');
+
+    // Opens on the first record of the day, in the morning.
+    const scroller = screen.getByTestId('day-scroller');
+    await waitFor(() => expect(scroller.scrollTop).toBeCloseTo(7 * 64 - 80, 0));
+
+    // Somebody scrolls down to the evening and opens the stretch.
+    fireEvent.scroll(scroller, { target: { scrollTop: 21 * 64 } });
+    await user.click(screen.getByTestId('crowded'));
+
+    await user.click(screen.getAllByTestId('slot-bottle')[0] as HTMLElement);
+    await screen.findByTestId('submit');
+    await user.click(screen.getByLabelText(zhTW.addEvent.cancel));
+
+    await screen.findByTestId('crowded-open');
+    expect(screen.getByTestId('day-scroller').scrollTop).toBe(21 * 64);
+  });
+
+  it('takes a queued record back to the day it was opened from', async () => {
+    // Every card on the timeline behaves the same way, whatever state it is
+    // in. A record still on this phone went to the unsynced list and then
+    // home, while the one beside it came back to the day.
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') }));
+    await screen.findByTestId('unsynced-count');
+
+    await user.click(screen.getByTestId('open-menu'));
+    await user.click(screen.getByRole('link', { name: zhTW.nav.calendar }));
+    await user.click(await screen.findByTestId('slot-diaper'));
+
+    await screen.findByText(zhTW.unsynced.title);
+    await user.click(screen.getByLabelText(zhTW.a11y.back));
+
+    expect(await screen.findByTestId('calendar-date')).toBeInTheDocument();
+  });
+
+  it('takes a stop draft back to the day it was opened from', async () => {
+    const started = earlierToday(2 * HOUR);
+    api.add({ typeId: 'sleep', startedAt: started, active: true });
+
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(await screen.findByRole('button', { name: zhTW.timer.stop }));
+    await screen.findByTestId('stop-drafts');
+
+    await user.click(screen.getByTestId('open-menu'));
+    await user.click(screen.getByRole('link', { name: zhTW.nav.calendar }));
+    await user.click(await screen.findByTestId('slot-sleep'));
+
+    await screen.findByText(zhTW.stopDraft.title);
+    await user.click(screen.getByLabelText(zhTW.a11y.back));
+
+    expect(await screen.findByTestId('calendar-date')).toBeInTheDocument();
+  });
+
   it('keeps a crowded stretch open after going into one of its records', async () => {
     // Opening the list, tapping in and coming back collapsed it again,
     // because the state lived in a component the navigation unmounted.

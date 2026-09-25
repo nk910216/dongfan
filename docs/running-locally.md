@@ -402,8 +402,11 @@ it at arm's length with the lights off.
     all still work, and the add button still files under the day being looked
     at (spec 7.3).
 17. **Tap a record, then come back without saving.** You land on the day you
-    were reading, not on the home screen and not on today — and a crowded
-    stretch you had opened is still open.
+    were reading, not on the home screen and not on today; a crowded stretch
+    you had opened is still open, **and the page is still scrolled where you
+    left it** rather than back at the day's first record.
+    - Do the same with a record still waiting to sync, and with a timer you
+      stopped offline. All three kinds of card come back the same way.
 18. Switch from a busy evening to a day with nothing on the hours. The page
     goes back to the top rather than staying at the bottom with the day's one
     record out of sight.

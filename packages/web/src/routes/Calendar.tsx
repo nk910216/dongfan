@@ -26,6 +26,22 @@ import { useStore } from '../lib/store.js';
  * phone left on a bedside table; with one it is that day and does not move.
  * So "back to today" goes to `/day` rather than to today's date.
  */
+/**
+ * Where each day was last left, for as long as the app is open.
+ *
+ * Module state rather than a ref, because the point is to survive this
+ * screen being unmounted: tapping a record navigates away, and coming back
+ * to the morning's first feed when you were reading last night is the whole
+ * complaint. Not persisted -- a reload is a fresh look at the day, and the
+ * default positioning is right for that.
+ */
+const remember = new Map<string, number>();
+
+/** For tests, which share a module registry between them. */
+export function forgetScrollPositions(): void {
+  remember.clear();
+}
+
 export function Calendar(): React.JSX.Element {
   const { baby, scope, now, events, unsynced, stopDrafts } = useStore();
   const params = useParams();
@@ -49,12 +65,12 @@ export function Calendar(): React.JSX.Element {
   const entries = loaded !== null && loaded.date === date ? loaded.rows : null;
   const scroller = useRef<HTMLDivElement | null>(null);
   /**
-   * Which day has already been scrolled into place.
+   * Which day has already been scrolled into place *this time round*.
    *
-   * Once per day looked at, and never again. Spec 7.5 is explicit that a
-   * background sync or the clock ticking must not keep taking the scroll
-   * position back: somebody reading last night's feeds at 3am would find the
-   * page snapping to the current hour under their thumb.
+   * Once per day looked at, and never again while it is open. Spec 7.5 is
+   * explicit that a background sync or the clock ticking must not keep
+   * taking the scroll position back: somebody reading last night's feeds at
+   * 3am would find the page snapping to the current hour under their thumb.
    */
   const placed = useRef<string | null>(null);
 
@@ -100,14 +116,24 @@ export function Calendar(): React.JSX.Element {
     const element = scroller.current;
     if (!element) return;
 
-    const target = openingMinute(isToday, nowMinutes, layout);
     placed.current = date;
 
-    // A day with nothing on the hour axis -- empty, or only a milestone in
-    // the band above -- goes to the top. Leaving the scroll where the last
-    // day left it kept the page at the bottom with the day's one event out
-    // of sight. Only on a change of day: a background sync never reaches
-    // here, because the date has already been marked.
+    // Where this day was left, if it has been read before. Tapping a record
+    // and coming back is not a first visit: re-deciding would drop somebody
+    // reading last night's cluster back at the morning's first feed, with
+    // the list they had opened still open, somewhere off the screen.
+    const remembered = remember.get(`${scope}\u0000${date}`);
+    if (remembered !== undefined) {
+      element.scrollTop = remembered;
+      return;
+    }
+
+    // Otherwise: today near the current hour, another day on its first
+    // record, and a day with nothing on the hour axis -- empty, or only a
+    // milestone in the band above -- at the top. Leaving the scroll where
+    // the last day left it kept the page at the bottom with the day's one
+    // record out of sight.
+    const target = openingMinute(isToday, nowMinutes, layout);
     element.scrollTop = target === null
       ? 0
       : Math.max((target / 60) * DEFAULT_METRICS.hourHeight - 80, 0);
@@ -169,7 +195,12 @@ export function Calendar(): React.JSX.Element {
         </div>
       </header>
 
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto pb-24" data-testid="day-scroller">
+      <div
+        ref={scroller}
+        onScroll={(e) => remember.set(`${scope}\u0000${date}`, e.currentTarget.scrollTop)}
+        className="min-h-0 flex-1 overflow-y-auto pb-24"
+        data-testid="day-scroller"
+      >
         {nothing ? (
           <div className="px-3.5 pt-2">
             <EmptyDay title={zhTW.calendar.empty} />
