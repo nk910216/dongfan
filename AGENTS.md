@@ -204,6 +204,19 @@ stretch collapsing "by itself" actually was. Whether such a stretch is open
 lives in the URL for the same reason: the component that held it is unmounted
 by the navigation.
 
+**It has to be carried the whole way, not just the first step.** Correcting a
+queued record goes calendar → unsynced list → correction form → and, if the
+queue sent the original while the form was open, on to the edit screen. Each
+of those was a separate place to drop it, and dropping it at any one of them
+put somebody back on the home screen at the moment they had just finished
+dealing with the record -- which is what they opened the list to do. A
+correction has no day of its own, so it returns to wherever it was opened
+from; falling back to home is what reaching the list from the home screen's
+own strip already does, and nothing is invented when nothing said otherwise.
+
+Cancelling a correction goes back the same way rather than to the type
+picker. There is no type to choose again.
+
 **All three kinds of card carry it**, not only the ordinary one. A queued
 record goes to the unsynced list and a stop draft to the confirmation screen,
 and both of those returned home while the card beside them came back to the

@@ -7,7 +7,7 @@ import { EventIconBadge, FALLBACK_COLOR } from '../components/EventIcon.js';
 import { describeQueued } from '../components/EventRow.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { EventForm } from './EventForm.js';
-import { useReturnTo } from '../lib/return-to.js';
+import { linkBack, useReturnTo } from '../lib/return-to.js';
 import { useStore } from '../lib/store.js';
 
 /**
@@ -69,6 +69,9 @@ function Header({ title }: { title: string }): React.JSX.Element {
 /** A one-line description of what is in an entry, so it can be recognised. */
 function Row({ entry }: { entry: QueuedCreate }): React.JSX.Element {
   const { baby, retryUnsynced, abandonUnsynced } = useStore();
+  // Handed on, so correcting a record does not lose the day it was opened
+  // from -- which is the one place the chain used to break.
+  const back = useReturnTo();
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [failure, setFailure] = useState<unknown>(null);
@@ -183,7 +186,7 @@ function Row({ entry }: { entry: QueuedCreate }): React.JSX.Element {
           </button>
           {entry.outcomeUnknown ? null : (
             <Link
-              to={`/unsynced/${entry.eventId}`}
+              to={linkBack(`/unsynced/${entry.eventId}`, back)}
               data-testid="unsynced-correct"
               className="flex min-h-11 flex-1 items-center justify-center rounded-xl border border-line text-sm text-ink-muted"
             >
@@ -213,6 +216,7 @@ function Row({ entry }: { entry: QueuedCreate }): React.JSX.Element {
 export function CorrectUnsynced(): React.JSX.Element {
   const { eventId = '' } = useParams();
   const { unsynced } = useStore();
+  const back = useReturnTo();
 
   /**
    * Looked up once, at mount.
@@ -230,7 +234,7 @@ export function CorrectUnsynced(): React.JSX.Element {
 
   // Never here in the first place: the link was followed after it had
   // already gone.
-  if (!entry) return <Navigate to={`/event/${eventId}`} replace />;
+  if (!entry) return <Navigate to={linkBack(`/event/${eventId}`, back)} replace />;
 
   return <EventForm typeId={entry.input.typeId} entryId={entry.eventId} />;
 }

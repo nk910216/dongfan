@@ -10,6 +10,7 @@ import { ErrorLine } from '../components/FieldErrors.js';
 import { useCreateEvent } from '../lib/create-event.js';
 import type { SubmitResult } from '../lib/create-event.js';
 import { askedDay, dayView, daySuffix, startFor } from '../lib/dated-add.js';
+import { linkBack, useReturnTo } from '../lib/return-to.js';
 import { clearForm, formKey, readForm, saveForm } from '../lib/form-draft.js';
 import { typeSummary, useStore } from '../lib/store.js';
 
@@ -44,6 +45,16 @@ export function EventForm({ typeId: given, entryId }: {
    * first written (spec 6.1).
    */
   const day = entryId === undefined ? askedDay(search.toString()) : null;
+
+  /**
+   * Where this was opened from, for a correction.
+   *
+   * A correction is reached from the unsynced list, which is itself reached
+   * from the home screen or from a card on the calendar. Without carrying it
+   * the whole way, dealing with the record -- the thing somebody opened the
+   * list to do -- put them back on the home screen, on today.
+   */
+  const back = useReturnTo();
 
   // Where what is being typed is kept, so that a reload does not throw it
   // away. Named by the account, the type, and which entry it is correcting,
@@ -137,7 +148,9 @@ export function EventForm({ typeId: given, entryId }: {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 px-6">
         <p className="text-sm text-ink-muted">{zhTW.eventType.unknown}</p>
-        <Link to={`/add${daySuffix(day)}`} className="text-sm text-accent">{zhTW.addEvent.cancel}</Link>
+        <Link to={entryId === undefined ? `/add${daySuffix(day)}` : back} className="text-sm text-accent">
+          {zhTW.addEvent.cancel}
+        </Link>
       </div>
     );
   }
@@ -160,12 +173,16 @@ export function EventForm({ typeId: given, entryId }: {
     // typed here is now an edit to a stored event and has to carry a
     // version. That is the edit screen's job (spec 6.3).
     if (result.kind === 'gone') {
-      navigate(`/event/${result.eventId}`);
+      // Handed on again: the record is the server's now, and the screen
+      // after this one still has to know where all this started.
+      navigate(linkBack(`/event/${result.eventId}`, back));
       return;
     }
     // Back to the day the calendar was showing, whatever time was
-    // finally entered. Spec 7.3 is explicit: not today.
-    navigate(day === null ? '/' : dayView(day, baby.timezone, Date.now()));
+    // finally entered. Spec 7.3 is explicit: not today. A correction has no
+    // day of its own -- it carries whatever the queue holds -- so it goes
+    // back to wherever it was opened from.
+    navigate(day === null ? back : dayView(day, baby.timezone, Date.now()));
   };
 
   const submit = async (): Promise<void> => {
@@ -210,7 +227,14 @@ export function EventForm({ typeId: given, entryId }: {
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <header className="flex shrink-0 items-center border-b border-line-soft px-2 py-2">
-        <Link to={`/add${daySuffix(day)}`} aria-label={zhTW.addEvent.cancel} className="flex size-11 items-center justify-center text-ink-muted">
+        {/* A new record goes back to the type picker; a correction goes back
+            to where the list was opened from, because there is no type to
+            pick again. */}
+        <Link
+          to={entryId === undefined ? `/add${daySuffix(day)}` : back}
+          aria-label={zhTW.addEvent.cancel}
+          className="flex size-11 items-center justify-center text-ink-muted"
+        >
           <ChevronLeft size={22} />
         </Link>
         <div className="-ml-11 flex flex-1 items-center justify-center gap-2">

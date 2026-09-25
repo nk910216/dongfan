@@ -407,6 +407,10 @@ it at arm's length with the lights off.
     left it** rather than back at the day's first record.
     - Do the same with a record still waiting to sync, and with a timer you
       stopped offline. All three kinds of card come back the same way.
+    - From a waiting record, go on into **correct and retry**. Give up on it,
+      and then do it again and save it. Both end up back on the day you were
+      reading, not on the home screen — which is the moment it matters most,
+      because dealing with the record is what you opened the list to do.
 18. Switch from a busy evening to a day with nothing on the hours. The page
     goes back to the top rather than staying at the bottom with the day's one
     record out of sight.

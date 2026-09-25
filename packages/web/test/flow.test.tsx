@@ -1466,6 +1466,85 @@ describe('looking back at one day', () => {
     expect(await screen.findByTestId('calendar-date')).toBeInTheDocument();
   });
 
+  describe('correcting a record opened from the day it is on', () => {
+    /** Offline, one queued nappy, on the calendar, into the correction. */
+    async function intoTheCorrection(): Promise<ReturnType<typeof userEvent.setup>> {
+      const user = openSignedIn();
+      await waitForHome();
+
+      goOffline();
+      await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+      await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') }));
+      await screen.findByTestId('unsynced-count');
+
+      await user.click(screen.getByTestId('open-menu'));
+      await user.click(screen.getByRole('link', { name: zhTW.nav.calendar }));
+      await user.click(await screen.findByTestId('slot-diaper'));
+
+      await screen.findByText(zhTW.unsynced.title);
+      await user.click(await screen.findByTestId('unsynced-correct'));
+      await screen.findByTestId('submit');
+      return user;
+    }
+
+    it('comes back to the day when the correction is given up on', async () => {
+      // And not to the type picker: there is no type to choose again.
+      const user = await intoTheCorrection();
+
+      await user.click(screen.getByLabelText(zhTW.addEvent.cancel));
+
+      expect(await screen.findByTestId('calendar-date')).toBeInTheDocument();
+    });
+
+    it('comes back to the day once the correction has been made', async () => {
+      // Dealing with the record is the thing somebody opened the list to
+      // do, so it is the worst moment to be put back on the home screen.
+      const user = await intoTheCorrection();
+
+      await user.type(screen.getByLabelText(zhTW.addEvent.note), 'again');
+      await user.click(screen.getByTestId('submit'));
+
+      expect(await screen.findByTestId('calendar-date')).toBeInTheDocument();
+    });
+
+    it('still knows the day after the queue sends the original first', async () => {
+      // The correction becomes an edit, because the server already holds
+      // the record (spec 6.1, 6.3) -- and that screen has to know where all
+      // of this started too.
+      const user = await intoTheCorrection();
+
+      comeBack();
+      await waitFor(() => expect(api.events).toHaveLength(1));
+
+      await user.type(screen.getByLabelText(zhTW.addEvent.note), 'again');
+      await user.click(screen.getByTestId('submit'));
+
+      await screen.findByText(zhTW.event.edit);
+      await user.click(screen.getByLabelText(zhTW.addEvent.cancel));
+
+      expect(await screen.findByTestId('calendar-date')).toBeInTheDocument();
+    });
+
+    it('still goes to the home screen when the list was opened from there', async () => {
+      // Nothing said otherwise, so nothing is invented.
+      const user = openSignedIn();
+      await waitForHome();
+
+      goOffline();
+      await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+      await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') }));
+
+      await user.click(await screen.findByTestId('unsynced-count'));
+      await user.click(await screen.findByTestId('unsynced-correct'));
+      await screen.findByTestId('submit');
+
+      await user.click(screen.getByLabelText(zhTW.addEvent.cancel));
+
+      await waitForHome();
+      expect(screen.queryByTestId('calendar-date')).not.toBeInTheDocument();
+    });
+  });
+
   it('keeps a crowded stretch open after going into one of its records', async () => {
     // Opening the list, tapping in and coming back collapsed it again,
     // because the state lived in a component the navigation unmounted.
