@@ -263,10 +263,15 @@ function main() {
   }
 
   const total = run('SELECT COUNT(*) AS n FROM events').results[0]?.n ?? 0;
-  console.log(`\n  ${total} events in the table, at most 366 rows out of each query.`);
-  console.log('\n  This says nothing about the 10 ms CPU limit. Miniflare does not');
-  console.log('  enforce it, so that measurement still needs a deployed Worker and');
-  console.log('  is outstanding (spec 9.3, 11.2, 12.1).');
+  console.log(`\n  ${total} events in the table.`);
+  console.log('  Each query above asks about one type, so it returns at most one');
+  console.log('  row per day. Spec 5.6 caps a *series* at 366 points; a request for');
+  console.log('  several types is several series, and the SQL behind it returns a');
+  console.log('  row per type per day.');
+  console.log('\n  The times above are SQL on a laptop with no limit applied.');
+  console.log('  They say nothing about the 10 ms CPU limit: Miniflare does not');
+  console.log('  enforce it, so that measurement needs a deployed Worker and is');
+  console.log('  outstanding (spec 9.3, 11.2, 12.1). Do not report it as passed.');
 }
 
 // Only when run, never when imported. `fixturePlan` is unit-tested, and a

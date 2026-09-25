@@ -577,6 +577,41 @@ describe('a year of it', () => {
     expect(queries).toBeLessThanOrEqual(7);
   });
 
+  it('costs one statement per aggregation family, not one per type', async () => {
+    // The bound that actually holds, pinned here rather than left as a
+    // number somebody measured once. Two types that aggregate the same way
+    // share a statement; a third family adds one. Nothing here is per type
+    // and nothing is per day.
+    const one = await requestCounting(statsUrl('bottle', FROM, TO), {}, token);
+    const sameFamily = await requestCounting(statsUrl('bottle,diaper', FROM, TO), {}, token);
+    const twoFamilies = await requestCounting(statsUrl('bottle,weight', FROM, TO), {}, token);
+    const threeFamilies = await requestCounting(statsUrl('bottle,weight,sleep', FROM, TO), {}, token);
+    const threeFamiliesMoreTypes = await requestCounting(
+      statsUrl('bottle,diaper,weight,height,sleep,walk', FROM, TO), {}, token);
+
+    expect(sameFamily.queries).toBe(one.queries);
+    expect(twoFamilies.queries).toBe(one.queries + 1);
+    expect(threeFamilies.queries).toBe(one.queries + 2);
+    expect(threeFamiliesMoreTypes.queries).toBe(threeFamilies.queries);
+
+    // And there are only three families to have, so the whole request is
+    // bounded however many types are asked about.
+    expect(threeFamilies.queries).toBeLessThanOrEqual(MAX_QUERIES_PER_REQUEST);
+  });
+
+  it('returns at most one point per day per series, not per request', async () => {
+    // Spec 5.6's cap is per series. A request for four types over a year is
+    // four series of up to 366 points, and the SQL behind it returns up to
+    // four rows per day -- which is the thing the cap does not bound.
+    const body = await stats('bottle,diaper,weight,sleep', FROM, TO);
+
+    expect(body.series).toHaveLength(4);
+    for (const one of body.series) {
+      expect(one.points.length, one.typeId).toBeLessThanOrEqual(366);
+    }
+    expect(body.series.reduce((n, one) => n + one.points.length, 0)).toBeGreaterThan(366);
+  });
+
   it('does not grow its query count with the number of days', async () => {
     const types = 'bottle,diaper,weight,sleep';
     const oneDay = await requestCounting(statsUrl(types, FROM, FROM), {}, token);

@@ -463,12 +463,18 @@ what the no-zero-filling rule asks for.
 
 Checked here, and automated:
 
-- **The aggregation is the database's.** A year of four types costs **5 D1
-  statements**; one type over one day and the same type over one year both
-  cost **3**. The query count does not move with the range or the number of
-  types, which is the architectural claim spec 5.6 makes.
-- **At most one row per day comes back.** 5,183 events in the fixture, 365 or
-  366 rows out of each query.
+- **The aggregation is the database's, and its cost follows the aggregation
+  families rather than the request.** Two types that aggregate the same way
+  share one statement; a third family adds one; there are only three
+  families, so the whole request is bounded however many types are asked
+  about, and it does not move with the range at all. Pinned in
+  `stats.test.ts`, not measured once and written down: asking for six types
+  across three families costs the same as asking for three.
+- **Spec 5.6's cap is per series, not per request.** A year of one type is at
+  most 366 points; a year of four types is four series of up to 366 each, and
+  the SQL behind it returns up to four rows per day. An earlier version of
+  this note said "366 rows out of each query", which is only true of the
+  single-type queries the fixture script happens to run.
 - **The midnight split, the zero-filling rules, the units and the range
   arithmetic**, against a real D1 and across every day of three years for the
   window.

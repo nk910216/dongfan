@@ -368,21 +368,36 @@ the top left: the page list has home, calendar, statistics and settings.
 
 **The states**
 
-9. Record something with the phone in flight mode, then open the statistics
-   page. The chart still loads if the app is already open, and a line says
-   how many records are still on this phone and missing from the figures. It
-   appears **even when the chart is empty** — pick weight, which has nothing
-   to show unless you have weighed the baby, and the reason is still there.
-10. Stop the worker with Ctrl-C. The page says it could not read the figures
-    and offers a retry; it does not draw an empty chart, because an empty
-    chart is a claim that nothing happened. Start the worker again and press
-    the retry.
-11. Press the sync line at the top. The chart asks again rather than sitting
+9. **With no network at all**, the page cannot show a chart. There is no
+   cached copy of the figures — they are the server's, and computing them
+   here is exactly what the app must not do (spec 5.6) — so it says it could
+   not read them and offers a retry. Turn flight mode off and press the
+   retry; the chart appears.
+10. **Stopping the worker does not change what is already on screen.**
+    Nothing re-asks by itself. After Ctrl-C, change the type or press the
+    sync line to make a new request, and then the failure and its retry
+    appear. Start the worker again and press the retry.
+11. **The "still on this phone" line needs a record the queue is holding
+    while the network works**, which is not the same as being offline. The
+    reliable way to make one:
+    - Start a sleep timer.
+    - Turn flight mode on, and start a second sleep timer.
+    - Turn flight mode off. The second one is refused for good — only one
+      timer of a type may run (spec 3.5) — so it stays in the unsynced list
+      with its content, and the home screen still says one record is
+      waiting.
+    - Open the statistics page. A line says how many records are on this
+      phone and missing from the figures.
+    - Pick **weight**, which has nothing to show unless you have weighed the
+      baby. **The line is still there under the empty chart** — that is the
+      case it matters most in, because otherwise the screen says there is
+      nothing and gives no reason.
+12. Press the sync line at the top. The chart asks again rather than sitting
     on yesterday's figures under a heading saying it has just synced.
 
 **One-handed, in the dark**
 
-12. Every control is reachable with a thumb, and the chart is legible at
+13. Every control is reachable with a thumb, and the chart is legible at
     arm's length with the screen dim. 365 bars on a phone is the hard case.
 
 ### What this page cannot tell you
