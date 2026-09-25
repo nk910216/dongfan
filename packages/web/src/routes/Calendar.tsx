@@ -1,27 +1,30 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { Plus } from 'lucide-react';
-import { isRealLocalDate, toLocalDate, zhTW } from '@dongfan/shared';
-import { EmptyDay, EventRow, WaitingRow } from '../components/EventRow.js';
+import { isRealLocalDate, startOfLocalDay, toLocalDate, zhTW } from '@dongfan/shared';
+import { EmptyDay } from '../components/EventRow.js';
 import { PageMenu } from '../components/PageMenu.js';
 import { SyncState } from '../components/SyncState.js';
+import { Timeline } from '../components/Timeline.js';
 import { calendarDay } from '../lib/db.js';
 import type { DayEntry } from '../lib/db.js';
-import { draftFor, useStore } from '../lib/store.js';
+import { DEFAULT_METRICS, MINUTES_IN_DAY, itemsFor, layOut } from '../lib/timeline.js';
+import { useStore } from '../lib/store.js';
 
 /**
- * One day, looked back at (spec 7.5).
+ * One day, on a fixed 00:00-24:00 axis (spec 7.5).
  *
- * Read out of IndexedDB rather than fetched. A day already on the device
- * has to open with no network, and the events are all here anyway
- * (spec 6.2) -- going to the server for a screen whose data is already
- * local would make looking back the one thing the app cannot do on a
- * train.
+ * Read out of IndexedDB rather than fetched. A day already on the device has
+ * to open with no network, and the events are all here anyway (spec 6.2) --
+ * going to the server for a screen whose data is already local would make
+ * looking back the one thing the app cannot do on a train. The layout adds
+ * no request of its own and recomputes no summary or statistic from what it
+ * draws.
  *
  * `/day` and `/day/2026-09-20` mean different things on purpose. Without a
- * date it is "today", and stays today when the clock passes midnight under
- * a phone left on a bedside table; with one it is that day and does not
- * move. So "back to today" goes to `/day` rather than to today's date.
+ * date it is "today", and stays today when the clock passes midnight under a
+ * phone left on a bedside table; with one it is that day and does not move.
+ * So "back to today" goes to `/day` rather than to today's date.
  */
 export function Calendar(): React.JSX.Element {
   const { baby, scope, now, events, unsynced, stopDrafts } = useStore();
@@ -31,8 +34,19 @@ export function Calendar(): React.JSX.Element {
   const today = toLocalDate(now, baby.timezone);
   const asked = params['date'];
   const date = asked ?? today;
+  const isToday = date === today;
 
   const [entries, setEntries] = useState<DayEntry[] | null>(null);
+  const scroller = useRef<HTMLDivElement | null>(null);
+  /**
+   * Which day has already been scrolled into place.
+   *
+   * Once per day looked at, and never again. Spec 7.5 is explicit that a
+   * background sync or the clock ticking must not keep taking the scroll
+   * position back: somebody reading last night's feeds at 3am would find the
+   * page snapping to the current hour under their thumb.
+   */
+  const placed = useRef<string | null>(null);
 
   useEffect(() => {
     if (!isRealLocalDate(date)) return;
@@ -49,26 +63,42 @@ export function Calendar(): React.JSX.Element {
     // store's own state rather than re-syncing keeps this screen a reader.
   }, [scope, date, baby.timezone, events, unsynced, stopDrafts]);
 
-  /**
-   * The waiting records that belong to this day.
-   *
-   * Same rule as the home screen: a record the parent made and cannot see
-   * gets made again (spec 6.2). Counted by the day it starts on, because
-   * that is the day the server will file it under.
-   */
-  const waiting = useMemo(() => {
-    const known = new Set((entries ?? []).map((entry) => entry.event.id));
-    return unsynced.filter(
-      (entry) =>
-        !known.has(entry.eventId) &&
-        toLocalDate(entry.input.startedAt, baby.timezone) === date,
-    );
-  }, [unsynced, entries, baby.timezone, date]);
+  const layout = useMemo(
+    () => layOut(itemsFor(entries ?? [], unsynced, stopDrafts, isRealLocalDate(date) ? date : today, baby.timezone)),
+    [entries, unsynced, stopDrafts, date, today, baby.timezone],
+  );
 
-  // A date typed into the address bar, or one left behind by an older
-  // build. Today is the honest fallback, and it is one the screen can
-  // always show.
+  /** Minutes into the day, from the baby's clock. Null on any other day. */
+  const nowMinutes = isToday
+    ? Math.min((now - startOfLocalDay(today, baby.timezone)) / 60_000, MINUTES_IN_DAY)
+    : null;
+
+  useEffect(() => {
+    if (entries === null || placed.current === date) return;
+    const element = scroller.current;
+    if (!element) return;
+
+    // Today opens near the current hour; any other day opens on its first
+    // record, because the top of an empty night is not where the day is.
+    const firstMin = layout.clusters[0]?.fromMin ?? null;
+    const target = isToday ? (nowMinutes ?? 0) : firstMin;
+    if (target === null) {
+      placed.current = date;
+      return;
+    }
+
+    element.scrollTop = Math.max((target / 60) * DEFAULT_METRICS.hourHeight - 80, 0);
+    placed.current = date;
+    // `nowMinutes` deliberately absent: it changes every second, and this
+    // must happen once per day looked at.
+  }, [entries, date, isToday, layout]);
+
+  // A date typed into the address bar, or one left behind by an older build.
   if (!isRealLocalDate(date)) return <Navigate to="/day" replace />;
+
+  const nothing = entries !== null
+    && layout.allDay.length === 0
+    && layout.clusters.length === 0;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -85,18 +115,18 @@ export function Calendar(): React.JSX.Element {
             data-testid="calendar-date"
             value={date}
             onChange={(e) => {
-            // Navigated rather than held in state, so the day being looked
-            // at survives a reload and can be shared. Replaced rather than
-            // pushed: spinning the wheel fires this for every day it
-            // passes, and Back should return to where the parent came
-            // from, not step through the dates they scrolled over.
+              // Navigated rather than held in state, so the day being looked
+              // at survives a reload and can be shared. Replaced rather than
+              // pushed: spinning the wheel fires this for every day it
+              // passes, and Back should return to where the parent came
+              // from, not step through the dates they scrolled over.
               const picked = e.target.value;
               if (isRealLocalDate(picked)) navigate(`/day/${picked}`, { replace: true });
             }}
             className="min-h-11 flex-1 bg-transparent text-center font-numeric text-base outline-none"
           />
 
-          {date === today && asked === undefined ? (
+          {isToday && asked === undefined ? (
             <span className="size-11" />
           ) : (
             <Link
@@ -117,26 +147,13 @@ export function Calendar(): React.JSX.Element {
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-24">
-        {entries !== null && entries.length === 0 && waiting.length === 0 ? (
-          <EmptyDay title={zhTW.calendar.empty} />
-        ) : (
-          <>
-            {waiting.map((entry) => (
-              <WaitingRow key={entry.eventId} entry={entry} timezone={baby.timezone} />
-            ))}
-            {(entries ?? []).map(({ event, carriedOver, msOnDay }) => (
-              <EventRow
-                key={event.id}
-                event={event}
-                timezone={baby.timezone}
-                drafted={draftFor(stopDrafts, event.id) !== null}
-                carriedOver={carriedOver}
-                msOnDay={msOnDay}
-              />
-            ))}
-          </>
-        )}
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto pb-24" data-testid="day-scroller">
+        {nothing ? (
+          <div className="px-3.5 pt-2">
+            <EmptyDay title={zhTW.calendar.empty} />
+          </div>
+        ) : null}
+        <Timeline layout={layout} timezone={baby.timezone} nowMinutes={nowMinutes} />
       </div>
 
       {/* Adds to the day being looked at, not to today. Carried in the URL

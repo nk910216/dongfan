@@ -321,6 +321,88 @@ finding new assets, and `GET /api/version` reporting a build the running
 one is not. The second is what catches a phone that has been open since
 Tuesday.
 
+## The calendar, as a timeline
+
+**No HTTPS needed.** Nothing on this page touches the service worker, so the
+LAN address is enough:
+
+```sh
+npm run dev:all
+```
+
+Open `http://<ip>:5180`, sign in, and reach it from the icon at the top left.
+
+The page is a fixed 00:00–24:00 axis (spec 7.5). Everything below is about
+whether the picture is true, which is the one thing automated tests cannot
+answer: they can prove a card was placed at 09:00, not that anybody can read
+it at arm's length with the lights off.
+
+### The axis
+
+1. Every hour is the same height, and the hours with nothing in them are
+   still there. A quiet afternoon must leave a gap, not close up.
+2. Scroll to both ends. **00:00 and 24:00 are both reachable**, and neither
+   is under the notch or behind the bottom button.
+3. On today there is a line marking the current time; on any other day there
+   is not. Opening today lands near the current hour; opening an older day
+   lands on its first record.
+4. **Scroll somewhere else and leave the phone for a minute**, or press the
+   sync line. The page must stay where you put it. A screen that snaps back
+   to the current hour while you are reading last night is the failure this
+   is written down for.
+
+### Where things sit
+
+5. Record a sleep from 09:00 to 10:00 and a bottle at 09:30 — the case
+   spec 7.5 uses. The sleep occupies one hour of axis; the bottle sits
+   **halfway down it**.
+6. Record something very short, a couple of minutes. Its card is bigger than
+   two minutes, because a smaller one could not be pressed — but the coloured
+   bar down its left edge is the real length. Check the card has not become
+   the duration: a two-minute nap must not look like forty minutes.
+7. An all-day record (a milestone) belongs in the band **above** the hours,
+   not at 00:00 under the night feeds.
+8. A record with no end time that is not a running timer says the end time is
+   unfilled rather than showing a length.
+
+### Two things at once
+
+9. Record two events a few minutes apart. They sit **side by side**, neither
+   covering the other's words, and both can be tapped.
+10. Record four within a few minutes. The stretch collapses to an entry
+    saying how many; tap it and all four are there, each one tappable. The
+    rest of the axis keeps its proportions while that is open.
+
+### Across midnight
+
+11. A sleep from 23:00 to 07:00: the evening shows 23:00 to the bottom of the
+    day and says it continues; the morning shows midnight to 07:00 and says it
+    was carried over. **Tapping either opens the same record.**
+12. A sleep ending exactly at midnight leaves nothing at all on the next day.
+
+### Local state
+
+13. In flight mode, record a nappy. It appears on the timeline at its own
+    time, marked unsynced, and tapping it goes to the unsynced list. Come back
+    online: there is **one** of it, not two.
+14. Start a sleep timer, go into flight mode, press stop. On the calendar the
+    card says it has ended and is awaiting confirmation — **not** that it is
+    still running — and tapping it opens the confirmation screen.
+15. Turn the network off entirely and reopen the day. The events already on
+    the device are still drawn; the timeline asks the server for nothing.
+
+### The rest of the page
+
+16. The date picker, back to today, the manual sync line and the add button
+    all still work, and the add button still files under the day being looked
+    at (spec 7.3).
+
+### Not in this round
+
+Dragging to change a time, resizing a card to change a duration, and tapping
+an empty slot to add are all out of scope, as is the two-day view (spec 7.6,
+M4). If any of them appear to work, that is a bug.
+
 ## The statistics page
 
 **This one does not need HTTPS.** Nothing on it touches the service worker,

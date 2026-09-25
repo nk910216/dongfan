@@ -109,44 +109,78 @@ is a year of data to point it at.
 |---|---|---|
 | 1 | The day boundary: what a day's calendar contains (spec 3.4.1, 7.5) | **done** |
 | 2 | The single-day calendar screen: date picker, back to today, the FAB, writing something up afterwards | **done** |
+| 7 | The single-day timeline: fixed 00:00-24:00 axis, positions and durations, overlap, drafts (spec 7.5, revised) | **done** |
 | 3 | A year of synthetic data in its own database, the D1 query-count guardrail (spec 11.2), and `GET /stats` for `count`/`sum`/`last`/`max`/`avg` | **done** |
 | 4 | `duration_sum`: the midnight split in SQL, `UNION ALL`, excluding running timers | **done** |
 | 5 | The stats screen: type, range, chart kind, axis density, the two warnings | **done** |
 | 6 | The M3 acceptance: what can be checked locally, and the steps for the rest | **done** |
 
-### A day's calendar is not a day's list
+### A day's calendar is a timeline, not a list
 
-`local_date` comes from `started_at`, so a sleep from 23:00 to 07:00 is
-counted on the earlier evening. A calendar for the morning that asks only
-`local_date = D` loses seven hours of that morning and says nothing
-(spec 3.4.1).
+Spec 7.5 is now explicit: the page is a **fixed 00:00-24:00 axis**, every hour
+the same height, and an empty stretch stays empty. Nothing compresses a quiet
+afternoon or stretches a busy hour, because the shape of a day — where the
+gaps are, how long the night was — is the thing the page exists to show. A
+layout that tidied that away would be a list with gridlines drawn on it.
 
-So there are two questions and the repository answers both, separately:
+"Event UI the same as the home screen" in that section means the colours,
+icons, content format and status wording, **not** the home screen's list row.
+`components/EventRow.tsx` is still shared by the home screen and the unsynced
+list; the calendar draws its own cards, and that is the spec's intent rather
+than drift.
+
+**Two measurements per record, and they are different numbers.** The anchor
+and the bar are real: a twenty-minute nap is twenty minutes of axis. The card
+carrying the words has a minimum height, because a tap target smaller than a
+fingertip is no use at three in the morning — so it is drawn *beside* the bar
+rather than *as* the bar, and its height can never be read as a duration. That
+is the trap spec 7.5 names, and `timeline.test.ts` pins both halves.
+
+**Overlap is decided on the card's extent, not the duration.** Both kinds the
+spec names are then the same problem: ranges that genuinely intersect, and two
+bottles four minutes apart whose cards would sit on top of one another.
+Columns are assigned greedily and a column is reused as soon as the card above
+it has finished. Past three at once there is no width left for words, so the
+stretch offers an "N of them" entry that expands — and every one of them is
+behind it, because nothing may be silently dropped.
+
+### Which day a record belongs to has not changed
+
+`calendarDay` still decides that, and the timeline adds nothing to it: the
+night before that ran into this morning is included, an unfinished event
+appears only on the day it started, and no query was widened for the redesign
+(spec 7.5 says so in as many words). Duration statistics were not touched.
 
 - `eventsOnDate` — what is **counted** on this day. The home screen shows
-  this, because the figures printed beside it are computed the same way,
-  and a list that disagreed with the numbers next to it would be worse
-  than an incomplete one.
-- `calendarDay` — what was **happening** on this day: the above, plus
-  anything that ran into it from the day before, each entry saying whether
-  it was carried over and how many of its milliseconds belong here.
+  this, because the figures printed beside it are computed the same way.
+- `calendarDay` — what was **happening**: the above plus whatever ran into it,
+  each entry saying whether it was carried over.
 
-They differ by exactly that one case, and `sync.test.ts` pins the
-difference rather than leaving it to be discovered.
+A completed event draws only the part that falls on the day being looked at,
+and tapping either half opens the same event. Ending exactly at midnight makes
+no zero-length piece on the next day — the closed-interval rule for day
+queries does not mean the midnight end is drawn twice.
 
-Only the previous day is read, and that is a consequence rather than an
-assumption: an event lasts at most 24 hours, so it crosses midnight at
-most once (spec 3.4.1 rule 1). If that limit moves, this widens with it.
+An unfinished event contributes **zero length** everywhere, including its own
+day (spec 3.4.1 rule 3), and zero length is not absence: it still has a time
+marker. A back-filled record with no end time says so rather than being given
+a length nobody entered.
 
-An unfinished event contributes **zero** duration to every day, including
-its own (spec 3.4.1 rule 3) — but zero duration is not absence. A running
-timer still belongs on the day it started, and on no other, or it appears
-twice for as long as it runs.
+A timer stopped here and not yet confirmed is drawn **ending where the button
+was pressed**, dashed, leading to the confirmation screen — not as a timer
+still running, because a parent who cannot tell those apart either stops it
+twice or leaves it going all night. If the draft asks for longer than an event
+may be, the card says the time needs correcting rather than offering a
+confirmation that cannot succeed.
 
-`GET /events/day/:date` was commented as serving the calendar screen. It
-does not, and never did: both screens read their day out of IndexedDB
-because a day has to open with no network (spec 6.2). The endpoint has no
-client at all.
+### Scroll position belongs to whoever is holding the phone
+
+Today opens near the current hour and any other day opens on its first record,
+**once per day looked at and never again**. Spec 7.5 is explicit that a
+background sync or the clock ticking must not keep taking the position back:
+somebody reading last night's feeds at 3am would find the page snapping to the
+current hour under their thumb. The current-time line is on today only, from
+the baby's clock rather than the device's.
 
 ### Writing something up afterwards
 

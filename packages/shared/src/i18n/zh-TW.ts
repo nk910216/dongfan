@@ -192,8 +192,22 @@ export const zhTW = {
     empty: '這天沒有紀錄',
     /** Started before midnight, so it is counted on the previous day. */
     carriedOver: '前一天開始',
+    /** Runs past the end of the day being shown. */
+    continues: '延續到隔天',
     /** How much of it belongs to the day being shown. */
     onThisDay: '這天 {duration}',
+    /** The band above the hours, for events that have no time of day. */
+    allDay: '整天',
+    /** Too many at once to sit side by side; tapping opens the list. */
+    crowded: '{count} 筆',
+    crowdedClose: '收合',
+    /** A record with no end time that is not a running timer (spec 3.5). */
+    noEnd: '未填結束時間',
+    /** A stop pressed here that nobody has confirmed yet (spec 7.2). */
+    draftEndedAt: '待確認 {time} 結束',
+    /** That draft asks for longer than an event may be (spec 3.4.1). */
+    draftTooLong: '時間需要修正',
+    now: '現在',
   },
 
   timer: {

@@ -1096,9 +1096,14 @@ describe('looking back at one day', () => {
   const onDay = (date: string, hour: number, minute = 0): number =>
     startOfLocalDay(date, BABY.timezone) + hour * 3_600_000 + minute * 60_000;
 
-  it('shows the night that ran into the morning, and says where it came from', async () => {
+  /** Pixels from the top of the axis, as the screen actually placed it. */
+  const topOf = (element: HTMLElement): number => Number.parseFloat(element.style.top);
+
+  it('shows the night that ran into the morning, starting at midnight', async () => {
     // Its local_date is the evening before, so a screen asking only for
-    // this morning's date would lose seven hours of it (spec 3.4.1).
+    // this morning's date would lose seven hours of it (spec 3.4.1). On a
+    // timeline it has to start at the top of the day and be seven hours
+    // tall, not sit wherever a list would have put it.
     const evening = daysAgo(3);
     const morning = daysAgo(2);
     api.add({
@@ -1109,35 +1114,176 @@ describe('looking back at one day', () => {
 
     openSignedIn(`/day/${morning}`);
 
-    expect(await screen.findByTestId('event-row-sleep')).toBeInTheDocument();
-    expect(screen.getByTestId('carried-over')).toHaveTextContent(zhTW.calendar.carriedOver);
+    const slot = await screen.findByTestId('slot-sleep');
+    expect(topOf(slot)).toBe(0);
+    expect(slot).toHaveAccessibleName(new RegExp(zhTW.calendar.carriedOver));
   });
 
-  it('does not call a record of the day itself carried over', async () => {
+  it('draws the evening end of that same night on the evening', async () => {
+    const evening = daysAgo(3);
+    api.add({
+      typeId: 'sleep',
+      startedAt: onDay(evening, 23, 10),
+      endedAt: onDay(daysAgo(2), 7, 5),
+    });
+
+    openSignedIn(`/day/${evening}`);
+
+    const slot = await screen.findByTestId('slot-sleep');
+    // 23:10, and fifty minutes of it, on a 64px hour.
+    expect(topOf(slot)).toBeCloseTo((23 * 60 + 10) / 60 * 64, 1);
+    expect(slot).toHaveAccessibleName(new RegExp(zhTW.calendar.continues));
+  });
+
+  it('positions by the clock and sizes a finished range by its duration', async () => {
+    // Spec 7.5's own example: an hour of sleep occupies an hour and a bottle
+    // half an hour in sits in the middle of it.
+    const day = daysAgo(2);
+    api.add({ typeId: 'sleep', startedAt: onDay(day, 9), endedAt: onDay(day, 10) });
+    api.add({ typeId: 'bottle', startedAt: onDay(day, 9, 30) });
+
+    openSignedIn(`/day/${day}`);
+
+    const sleep = await screen.findByTestId('slot-sleep');
+    const bottle = await screen.findByTestId('slot-bottle');
+
+    expect(topOf(sleep)).toBeCloseTo(9 * 64, 1);
+    expect(Number.parseFloat(sleep.style.height)).toBeCloseTo(64, 1);
+    // Half an hour later is half an hour down, whatever the card's height.
+    expect(topOf(bottle) - topOf(sleep)).toBeCloseTo(32, 1);
+  });
+
+  it('keeps an empty afternoon empty rather than closing the gap', async () => {
+    // The shape of a day is what the page is for. Six hours apart must be
+    // six hours apart, however little is in between.
+    const day = daysAgo(2);
+    api.add({ typeId: 'bottle', startedAt: onDay(day, 3) });
+    api.add({ typeId: 'diaper', startedAt: onDay(day, 9) });
+
+    openSignedIn(`/day/${day}`);
+
+    const early = await screen.findByTestId('slot-bottle');
+    const later = await screen.findByTestId('slot-diaper');
+    expect(topOf(later) - topOf(early)).toBeCloseTo(6 * 64, 1);
+  });
+
+  it('does not say a record of the day itself was carried over', async () => {
     const day = daysAgo(2);
     api.add({ typeId: 'bottle', startedAt: onDay(day, 9) });
 
     openSignedIn(`/day/${day}`);
 
-    expect(await screen.findByTestId('event-row-bottle')).toBeInTheDocument();
-    expect(screen.queryByTestId('carried-over')).not.toBeInTheDocument();
+    const slot = await screen.findByTestId('slot-bottle');
+    expect(slot.getAttribute('aria-label')).not.toContain(zhTW.calendar.carriedOver);
   });
 
-  it('puts an all-day event above the rest of the day', async () => {
-    // It is stored at local midnight (spec 3.9), so by the clock it would
-    // sit under every feed instead of heading the day.
+  it('puts an all-day event above the hours instead of at midnight', async () => {
+    // It is stored at local midnight (spec 3.9), so on an hour axis it would
+    // sit under the night feeds rather than heading the day.
     const day = daysAgo(2);
     api.add({ typeId: 'bottle', startedAt: onDay(day, 9) });
     api.add({ typeId: 'milestone', startedAt: onDay(day, 0) });
 
     openSignedIn(`/day/${day}`);
-    await screen.findByTestId('event-row-milestone');
+    await screen.findByTestId('slot-bottle');
 
-    const rows = screen.getAllByTestId(/^event-row-/);
-    expect(rows.map((row) => row.dataset['testid'])).toEqual([
-      'event-row-milestone',
-      'event-row-bottle',
-    ]);
+    const band = screen.getByTestId('all-day');
+    expect(band).toContainElement(screen.getByTestId('slot-milestone'));
+    expect(band).not.toContainElement(screen.getByTestId('slot-bottle'));
+  });
+
+  it('marks the current time on today, and on no other day', async () => {
+    api.add({ typeId: 'bottle', startedAt: earlierToday(HOUR) });
+    openSignedIn('/day');
+    await screen.findByTestId('slot-bottle');
+    expect(screen.getByTestId('now-line')).toBeInTheDocument();
+
+    closeApp();
+    openSignedIn(`/day/${daysAgo(2)}`);
+    await screen.findByTestId('timeline');
+    expect(screen.queryByTestId('now-line')).not.toBeInTheDocument();
+  });
+
+  it('offers a way into a stretch too crowded to lay out side by side', async () => {
+    // Four within a few minutes is past what fits beside each other on a
+    // phone. Nothing may be silently dropped (spec 7.5), so the stretch
+    // offers an entry and every one of them is behind it.
+    const day = daysAgo(2);
+    for (let i = 0; i < 4; i += 1) {
+      api.add({ typeId: 'bottle', startedAt: onDay(day, 9, i), value: 100 + i });
+    }
+
+    const user = openSignedIn(`/day/${day}`);
+
+    const entry = await screen.findByTestId('crowded');
+    expect(entry).toHaveTextContent(interpolate(zhTW.calendar.crowded, { count: 4 }));
+    expect(screen.queryByTestId('slot-bottle')).not.toBeInTheDocument();
+
+    await user.click(entry);
+
+    expect(screen.getAllByTestId('slot-bottle')).toHaveLength(4);
+  });
+
+  it('lays three out side by side rather than hiding them', async () => {
+    const day = daysAgo(2);
+    api.add({ typeId: 'bottle', startedAt: onDay(day, 9) });
+    api.add({ typeId: 'diaper', startedAt: onDay(day, 9, 2) });
+    api.add({ typeId: 'solid_food', startedAt: onDay(day, 9, 4) });
+
+    openSignedIn(`/day/${day}`);
+    await screen.findByTestId('slot-bottle');
+
+    expect(screen.queryByTestId('crowded')).not.toBeInTheDocument();
+    // Three columns, none on top of another.
+    const lefts = ['slot-bottle', 'slot-diaper', 'slot-solid_food']
+      .map((id) => screen.getByTestId(id).style.left);
+    expect(new Set(lefts).size).toBe(3);
+  });
+
+  it('shows a record still on this phone once, and in its own place', async () => {
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') }));
+    await screen.findByTestId('unsynced-count');
+
+    await user.click(screen.getByTestId('open-menu'));
+    await user.click(screen.getByRole('link', { name: zhTW.nav.calendar }));
+
+    const slot = await screen.findByTestId('slot-diaper');
+    expect(slot.dataset['kind']).toBe('queued');
+    expect(slot).toHaveAccessibleName(new RegExp(zhTW.unsynced.badge));
+
+    // And one of it, not two, once the queue has emptied (spec 6.2).
+    comeBack();
+    await waitFor(() => expect(screen.getAllByTestId('slot-diaper')).toHaveLength(1));
+    await waitFor(() =>
+      expect(screen.getByTestId('slot-diaper').dataset['kind']).toBe('event'));
+  });
+
+  it('draws a timer stopped here as ended and awaiting confirmation', async () => {
+    // Not as a timer still running: a parent who cannot tell those apart
+    // either stops it twice or leaves it going all night (spec 7.2).
+    const started = earlierToday(2 * HOUR);
+    api.add({ typeId: 'sleep', startedAt: started, active: true });
+
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(await screen.findByRole('button', { name: zhTW.timer.stop }));
+    await screen.findByTestId('stop-drafts');
+
+    await user.click(screen.getByTestId('open-menu'));
+    await user.click(screen.getByRole('link', { name: zhTW.nav.calendar }));
+
+    const slot = await screen.findByTestId('slot-sleep');
+    expect(slot.dataset['kind']).toBe('draft');
+    expect(slot.getAttribute('aria-label')).not.toContain(zhTW.event.inProgress);
+    // And it leads to the confirmation screen rather than the edit form.
+    expect(slot.getAttribute('href')).toContain('/stop/');
   });
 
   it('says so rather than looking like a day that failed to load', async () => {
@@ -1167,7 +1313,7 @@ describe('looking back at one day', () => {
     api.add({ typeId: 'bottle', startedAt: onDay(day, 9) });
     await user.click(screen.getByRole('button', { name: zhTW.a11y.sync }));
 
-    await waitFor(() => expect(screen.getAllByTestId('event-row-bottle')).toHaveLength(1));
+    await waitFor(() => expect(screen.getAllByTestId('slot-bottle')).toHaveLength(1));
   });
 
   it('says its figures are out of date here too, rather than pretending', async () => {
