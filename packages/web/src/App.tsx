@@ -13,6 +13,7 @@ import { Home } from './routes/Home.js';
 import { Login } from './routes/Login.js';
 import { Settings } from './routes/Settings.js';
 import { Stats } from './routes/Stats.js';
+import { TwoDays } from './routes/TwoDays.js';
 import { ConfirmStop } from './routes/ConfirmStop.js';
 import { CorrectUnsynced, Unsynced } from './routes/Unsynced.js';
 
@@ -67,6 +68,10 @@ function Shell(): React.JSX.Element {
             fixed day. See the comment in Calendar.tsx. */}
         <Route path="/day" element={<Calendar />} />
         <Route path="/day/:date" element={<Calendar />} />
+        {/* The same two meanings again: "today and yesterday", or a fixed
+            pair (spec 7.6). */}
+        <Route path="/two" element={<TwoDays />} />
+        <Route path="/two/:date" element={<TwoDays />} />
         <Route path="/add/:typeId" element={<EventForm />} />
         <Route path="/event/:eventId" element={<EditEvent />} />
         <Route path="/settings" element={<Settings />} />

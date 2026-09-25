@@ -143,9 +143,13 @@ export const zhTW = {
   nav: {
     title: '前往',
     home: '主頁',
-    calendar: '行事曆',
+    calendar: '單日行事曆',
+    twoDays: '雙日行事曆',
     stats: '統計',
+    tags: '標籤',
     settings: '設定',
+    /** Read out for the page already being shown (spec 7.10). */
+    current: '目前所在',
     close: '關閉',
   },
 

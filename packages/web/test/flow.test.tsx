@@ -1295,22 +1295,27 @@ describe('looking back at one day', () => {
   });
 
   it('does not put a card past the right-hand edge of the day', async () => {
-    // The hour labels take a strip off the left. Adding it to the offset
-    // while still dividing the whole width put a single column 40px past
-    // the edge, and the last of any row with it.
+    // The hour labels take a strip off the left. Adding it to each card's
+    // offset while the widths still divided the whole container put a
+    // single column 40px past the edge, and the last of any row with it.
+    //
+    // The strip now belongs to the band a day's cards live in, and the
+    // cards divide the band. So the band carries the offset, and a card's
+    // own geometry is percentages that stay inside it.
     const day = daysAgo(2);
     api.add({ typeId: 'bottle', startedAt: onDay(day, 9) });
     api.add({ typeId: 'diaper', startedAt: onDay(day, 9, 2) });
 
     openSignedIn(`/day/${day}`);
-    await screen.findByTestId('slot-bottle');
+    const first = await screen.findByTestId('slot-bottle');
+
+    expect((first.parentElement as HTMLElement).style.left).toBe('44px');
 
     for (const id of ['slot-bottle', 'slot-diaper']) {
       const { left, width } = screen.getByTestId(id).style;
-      // Both are expressed against the area left after the gutter, so the
-      // full width never appears on its own.
-      expect(`${left} ${width}`, id).toContain('100% - 44px');
-      expect(width, id).not.toBe('calc(100% - 4px)');
+      expect(left, id).toMatch(/^\d+(\.\d+)?%$/);
+      const span = Number.parseFloat(left) + Number.parseFloat(/([\d.]+)%/.exec(width)?.[1] ?? '0');
+      expect(span, id).toBeLessThanOrEqual(100);
     }
   });
 
@@ -1617,6 +1622,144 @@ describe('looking back at one day', () => {
     await user.click(screen.getByRole('link', { name: zhTW.nav.calendar }));
 
     expect(await screen.findByTestId('calendar-date')).toHaveValue(today());
+  });
+});
+
+describe('two days at once', () => {
+  const today = (): string => toLocalDate(Date.now(), BABY.timezone);
+  const daysAgo = (days: number): string => addLocalDays(today(), -days);
+  const onDay = (date: string, hour: number, minute = 0): number =>
+    startOfLocalDay(date, BABY.timezone) + hour * 3_600_000 + minute * 60_000;
+  const topOf = (element: HTMLElement): number => Number.parseFloat(element.style.top);
+
+  it('shows the chosen day and the one before it, oldest on the left', async () => {
+    // Spec 7.6: the columns read by date, so a night begins on the left and
+    // ends on the right.
+    const later = daysAgo(2);
+    const earlier = daysAgo(3);
+
+    openSignedIn(`/two/${later}`);
+
+    expect(await screen.findByTestId('column-earlier')).toHaveTextContent(earlier);
+    expect(screen.getByTestId('column-later')).toHaveTextContent(later);
+  });
+
+  it('draws both days on one set of hours, at the same scale', async () => {
+    // The whole point of showing two. Two columns on two scales would be two
+    // charts side by side rather than a comparison.
+    const later = daysAgo(2);
+    const earlier = daysAgo(3);
+    api.add({ typeId: 'bottle', startedAt: onDay(earlier, 9) });
+    api.add({ typeId: 'diaper', startedAt: onDay(later, 9) });
+
+    openSignedIn(`/two/${later}`);
+    await screen.findByTestId('slot-bottle');
+
+    // One axis: the hour labels are not drawn twice.
+    expect(screen.getAllByText('09:00')).toHaveLength(1);
+    // And 09:00 is 09:00 in both columns.
+    expect(topOf(screen.getByTestId('slot-bottle')))
+      .toBe(topOf(screen.getByTestId('slot-diaper')));
+  });
+
+  it('puts the two days in their own columns, side by side', async () => {
+    const later = daysAgo(2);
+    const earlier = daysAgo(3);
+    api.add({ typeId: 'bottle', startedAt: onDay(earlier, 9) });
+    api.add({ typeId: 'diaper', startedAt: onDay(later, 9) });
+
+    openSignedIn(`/two/${later}`);
+    await screen.findByTestId('slot-bottle');
+
+    const leftBand = (screen.getByTestId('slot-bottle').parentElement as HTMLElement).style;
+    const rightBand = (screen.getByTestId('slot-diaper').parentElement as HTMLElement).style;
+
+    expect(leftBand.left).toBe('44px');
+    expect(rightBand.left).toContain('44px');
+    expect(rightBand.left).not.toBe('44px');
+    expect(leftBand.width).toBe(rightBand.width);
+  });
+
+  it('draws each half of a night in the column its day owns', async () => {
+    // 23:00 to 07:00 across the pair: the evening ends the left column and
+    // the morning begins the right one, and both open the same record.
+    const later = daysAgo(2);
+    const earlier = daysAgo(3);
+    api.add({ typeId: 'sleep', startedAt: onDay(earlier, 23), endedAt: onDay(later, 7) });
+
+    openSignedIn(`/two/${later}`);
+
+    const halves = await screen.findAllByTestId('slot-sleep');
+    expect(halves).toHaveLength(2);
+
+    const [evening, morning] = halves.map((half) => ({
+      top: topOf(half),
+      href: half.getAttribute('href') ?? '',
+    }));
+    expect(evening?.top).toBeCloseTo(23 * 64, 1);
+    expect(morning?.top).toBe(0);
+    // The same event from either side.
+    expect(evening?.href.split('?')[0]).toBe(morning?.href.split('?')[0]);
+  });
+
+  it('gives each column its own all-day band', async () => {
+    const later = daysAgo(2);
+    api.add({ typeId: 'milestone', startedAt: onDay(later, 0) });
+
+    openSignedIn(`/two/${later}`);
+    await screen.findByTestId('slot-milestone');
+
+    // Two bands, and the record is in the one belonging to its day.
+    const bands = screen.getAllByTestId('all-day');
+    expect(bands).toHaveLength(2);
+    expect(bands[1]).toContainElement(screen.getByTestId('slot-milestone'));
+    expect(bands[0]).not.toContainElement(screen.getByTestId('slot-milestone'));
+  });
+
+  it('marks the current time on today only, and in today’s column', async () => {
+    api.add({ typeId: 'bottle', startedAt: earlierToday(HOUR) });
+
+    openSignedIn('/two');
+    await screen.findByTestId('slot-bottle');
+    expect(screen.getAllByTestId('now-line')).toHaveLength(1);
+
+    closeApp();
+    openSignedIn(`/two/${daysAgo(2)}`);
+    await screen.findByTestId('timeline');
+    expect(screen.queryByTestId('now-line')).not.toBeInTheDocument();
+  });
+
+  it('opens on today and yesterday, and comes back to them', async () => {
+    const user = openSignedIn(`/two/${daysAgo(4)}`);
+    await user.click(await screen.findByTestId('back-to-today'));
+
+    expect(await screen.findByTestId('column-later')).toHaveTextContent(today());
+    expect(screen.getByTestId('column-earlier')).toHaveTextContent(daysAgo(1));
+  });
+
+  it('is reachable from the page list, which says where you are', async () => {
+    const user = openSignedIn();
+    await waitForHome();
+
+    await user.click(screen.getByTestId('open-menu'));
+    expect(screen.getByRole('link', { name: new RegExp(zhTW.nav.home) }))
+      .toHaveAttribute('aria-current', 'page');
+
+    await user.click(screen.getByRole('link', { name: zhTW.nav.twoDays }));
+    expect(await screen.findByTestId('column-later')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('open-menu'));
+    expect(screen.getByRole('link', { name: new RegExp(zhTW.nav.twoDays) }))
+      .toHaveAttribute('aria-current', 'page');
+  });
+
+  it('files a new record under the later day', async () => {
+    const later = daysAgo(2);
+    const user = openSignedIn(`/two/${later}`);
+
+    await user.click(await screen.findByRole('link', { name: zhTW.a11y.addEvent }));
+
+    expect(await screen.findByTestId('adding-on')).toHaveTextContent(later);
   });
 });
 

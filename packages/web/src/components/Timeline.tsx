@@ -26,8 +26,15 @@ import type { Cluster, DayLayout, Metrics, Placed, TimelineItem } from '../lib/t
 
 const HOUR_LABEL_WIDTH = 38;
 const RAIL_WIDTH = 6;
-/** Taken off the left once, before the columns divide what is left. */
-const GUTTER = HOUR_LABEL_WIDTH + RAIL_WIDTH;
+/**
+ * Taken off the left once, before the columns divide what is left.
+ *
+ * Exported because the two-day view has to line its headings and its bands
+ * up with the same hour labels; two ideas of how wide they are would show up
+ * as a column half a character out of true.
+ */
+export const TIMELINE_GUTTER = HOUR_LABEL_WIDTH + RAIL_WIDTH;
+const GUTTER = TIMELINE_GUTTER;
 /** Between a card and the next column, and the right-hand edge. */
 const GAP = 4;
 
@@ -172,17 +179,18 @@ const ClusterBody = memo(function ClusterBody({ cluster, timezone, metrics }: {
     setSearch(next, { replace: true });
   };
 
+  // Percentages of the band this day occupies, which the parent positions.
+  // One day's band is everything right of the hour labels; two days split
+  // that between them, and neither this nor the cards below need to know
+  // which it is.
   const place = (placed: Placed): React.CSSProperties => {
     const box = boxOf(placed.item, metrics);
     const { left, width } = columnSpan(placed);
-    // The gutter comes off once and the columns divide what is left, so the
-    // last one ends at the right edge instead of `GUTTER` past it.
-    const area = `(100% - ${GUTTER}px)`;
     return {
       top: `${minutesToPx(box.top, metrics)}px`,
       height: `${minutesToPx(box.bottom - box.top, metrics)}px`,
-      left: `calc(${GUTTER}px + ${area} * ${left})`,
-      width: `calc(${area} * ${width} - ${GAP}px)`,
+      left: `${left * 100}%`,
+      width: `calc(${width * 100}% - ${GAP}px)`,
     };
   };
 
@@ -198,7 +206,7 @@ const ClusterBody = memo(function ClusterBody({ cluster, timezone, metrics }: {
         style={{
           top: `${minutesToPx(cluster.fromMin, metrics)}px`,
           height: `${Math.max(minutesToPx(cluster.toMin - cluster.fromMin, metrics), 44)}px`,
-          left: `${GUTTER}px`,
+          left: 0,
           right: `${GAP}px`,
         }}
         className="absolute flex min-h-11 items-center justify-center rounded-lg border border-line bg-surface-raised text-[12px] text-ink-muted"
@@ -212,7 +220,7 @@ const ClusterBody = memo(function ClusterBody({ cluster, timezone, metrics }: {
   if (cluster.crowded && open) {
     return (
       <div
-        style={{ top: `${minutesToPx(cluster.fromMin, metrics)}px`, left: `${GUTTER}px`, right: `${GAP}px` }}
+        style={{ top: `${minutesToPx(cluster.fromMin, metrics)}px`, left: 0, right: `${GAP}px` }}
         className="absolute z-10 rounded-lg border border-line bg-surface p-1 shadow-lg shadow-black/50"
         data-testid="crowded-open"
       >
@@ -251,8 +259,70 @@ const ClusterBody = memo(function ClusterBody({ cluster, timezone, metrics }: {
   );
 });
 
+/**
+ * Everything belonging to one day, inside the band it was given.
+ *
+ * Absolutely positioned over the full height of the axis, so the cards keep
+ * their `top` in pixels whatever width the band has. That is what lets two
+ * days sit beside each other on **the same hour scale**, which is the whole
+ * point of showing two (spec 7.6).
+ */
+export function DayBand({ layout, timezone, metrics, nowMinutes, style }: {
+  layout: DayLayout;
+  timezone: string;
+  metrics: Metrics;
+  /** Minutes into this column's day, or null when it is not today. */
+  nowMinutes: number | null;
+  style: React.CSSProperties;
+}): React.JSX.Element {
+  return (
+    <div className="absolute top-0 bottom-0" style={style}>
+      {layout.clusters.map((cluster) => (
+        <ClusterBody key={cluster.key} cluster={cluster} timezone={timezone} metrics={metrics} />
+      ))}
+
+      {/* Only on today, and from the baby's clock rather than the
+          device's (spec 3.4). */}
+      {nowMinutes !== null ? (
+        <div
+          className="pointer-events-none absolute right-0 left-0 flex items-center"
+          style={{ top: `${minutesToPx(nowMinutes, metrics)}px` }}
+          data-testid="now-line"
+        >
+          <span className="size-1.5 shrink-0 rounded-full bg-accent" />
+          <span className="h-px flex-1 bg-accent/70" />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** The band above the hours, for events with no time of day (spec 3.9). */
+export function AllDayBand({ items, timezone, metrics, label }: {
+  items: readonly TimelineItem[];
+  timezone: string;
+  metrics: Metrics;
+  /** Shown once on a single day; on two days each column says its date. */
+  label: string;
+}): React.JSX.Element {
+  return (
+    <div className="flex min-w-0 flex-1 flex-col gap-1" data-testid="all-day">
+      <span className="text-[10px] text-ink-dim">{label}</span>
+      {items.map((item) => (
+        <Card
+          key={item.key}
+          item={item}
+          timezone={timezone}
+          metrics={metrics}
+          style={{ position: 'relative' }}
+        />
+      ))}
+    </div>
+  );
+}
+
 /** The rules behind everything. They never change, so they are built once. */
-const Hours = memo(function Hours({ metrics }: { metrics: Metrics }): React.JSX.Element {
+export const Hours = memo(function Hours({ metrics }: { metrics: Metrics }): React.JSX.Element {
   return (
     <>
       {Array.from({ length: 25 }, (_, hour) => hour).map((hour) => (
@@ -280,22 +350,10 @@ export function Timeline({ layout, timezone, nowMinutes, metrics = DEFAULT_METRI
 }): React.JSX.Element {
   return (
     <div>
-      {/* Events with no time of day at all head the day rather than sitting
-          at midnight under the night feeds (spec 3.9). */}
       {layout.allDay.length > 0 ? (
-        <div className="mb-1 flex gap-1 border-b border-line px-2 py-1.5" data-testid="all-day">
+        <div className="mb-1 flex gap-1 border-b border-line px-2 py-1.5">
           <span className="w-8 shrink-0 pt-1 text-[10px] text-ink-dim">{zhTW.calendar.allDay}</span>
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            {layout.allDay.map((item) => (
-              <Card
-                key={item.key}
-                item={item}
-                timezone={timezone}
-                metrics={metrics}
-                style={{ position: 'relative' }}
-              />
-            ))}
-          </div>
+          <AllDayBand items={layout.allDay} timezone={timezone} metrics={metrics} label="" />
         </div>
       ) : null}
 
@@ -305,23 +363,13 @@ export function Timeline({ layout, timezone, nowMinutes, metrics = DEFAULT_METRI
         data-testid="timeline"
       >
         <Hours metrics={metrics} />
-
-        {layout.clusters.map((cluster) => (
-          <ClusterBody key={cluster.key} cluster={cluster} timezone={timezone} metrics={metrics} />
-        ))}
-
-        {/* Only on today, and from the baby's clock rather than the
-            device's (spec 3.4). */}
-        {nowMinutes !== null ? (
-          <div
-            className="pointer-events-none absolute right-0 left-9 flex items-center"
-            style={{ top: `${minutesToPx(nowMinutes, metrics)}px` }}
-            data-testid="now-line"
-          >
-            <span className="size-1.5 shrink-0 rounded-full bg-accent" />
-            <span className="h-px flex-1 bg-accent/70" />
-          </div>
-        ) : null}
+        <DayBand
+          layout={layout}
+          timezone={timezone}
+          metrics={metrics}
+          nowMinutes={nowMinutes}
+          style={{ left: `${GUTTER}px`, right: 0 }}
+        />
       </div>
     </div>
   );

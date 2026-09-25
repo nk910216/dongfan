@@ -7,7 +7,7 @@ import { PageMenu } from '../components/PageMenu.js';
 import { SyncState } from '../components/SyncState.js';
 import { Timeline } from '../components/Timeline.js';
 import { calendarDay } from '../lib/db.js';
-import type { DayEntry } from '../lib/db.js';
+import type { DayEntry, StopDraft } from '../lib/db.js';
 import { DEFAULT_METRICS, MINUTES_IN_DAY, itemsFor, layOut, openingMinute } from '../lib/timeline.js';
 import { useStore } from '../lib/store.js';
 
@@ -26,6 +26,7 @@ import { useStore } from '../lib/store.js';
  * phone left on a bedside table; with one it is that day and does not move.
  * So "back to today" goes to `/day` rather than to today's date.
  */
+
 /**
  * Where each day was last left, for as long as the app is open.
  *
@@ -42,27 +43,48 @@ export function forgetScrollPositions(): void {
   remember.clear();
 }
 
-export function Calendar(): React.JSX.Element {
-  const { baby, scope, now, events, unsynced, stopDrafts } = useStore();
-  const params = useParams();
-  const navigate = useNavigate();
-
-  const today = toLocalDate(now, baby.timezone);
-  const asked = params['date'];
-  const date = asked ?? today;
-  const isToday = date === today;
-
-  /**
-   * What was read, and **which day it was read for**.
-   *
-   * The day travels with the rows because the read is asynchronous: for a
-   * moment after the date changes, the previous day's events are still in
-   * hand. Laying those out under the new date drew the wrong day, and the
-   * scroll below then positioned against them and marked the new date as
-   * done -- so when the right rows arrived, nothing moved.
-   */
+/**
+ * One day's rows, and the day they were read for.
+ *
+ * The day travels with them because the read is asynchronous: for a moment
+ * after the date changes the previous day's events are still in hand. Laying
+ * those out under the new date drew the wrong day, and positioning against
+ * them marked the new date as done, so the right rows arrived to a page that
+ * had stopped listening.
+ *
+ * Shared by both calendar screens, so the two-day view cannot end up with a
+ * second idea of what a day contains.
+ */
+export function useDay(date: string, drafts: readonly StopDraft[]): DayEntry[] | null {
+  const { scope, baby, events, unsynced } = useStore();
   const [loaded, setLoaded] = useState<{ date: string; rows: DayEntry[] } | null>(null);
-  const entries = loaded !== null && loaded.date === date ? loaded.rows : null;
+
+  useEffect(() => {
+    if (!isRealLocalDate(date)) return;
+
+    let cancelled = false;
+    // The drafts go in, so a timer stopped here at 07:00 after a night that
+    // began at 23:00 is known to cover this morning (spec 7.2).
+    void calendarDay(scope, date, baby.timezone, drafts).then((rows) => {
+      if (!cancelled) setLoaded({ date, rows });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // `events` is not read here: it is the signal that the store has been
+    // filled again, which is when this day may have changed. Watching the
+    // store's own state rather than re-syncing keeps this screen a reader.
+  }, [scope, date, baby.timezone, events, unsynced, drafts]);
+
+  return loaded !== null && loaded.date === date ? loaded.rows : null;
+}
+
+/** Remembers where a day was left, and puts it back there. */
+export function useDayScroll(date: string, ready: boolean, decide: () => number | null): {
+  scroller: React.RefObject<HTMLDivElement | null>;
+  onScroll: (event: React.UIEvent<HTMLDivElement>) => void;
+} {
+  const { scope } = useStore();
   const scroller = useRef<HTMLDivElement | null>(null);
   /**
    * Which day has already been scrolled into place *this time round*.
@@ -75,44 +97,7 @@ export function Calendar(): React.JSX.Element {
   const placed = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!isRealLocalDate(date)) return;
-
-    let cancelled = false;
-    // The drafts go in, so a timer stopped here at 07:00 after a night
-    // that began at 23:00 is known to cover this morning (spec 7.2).
-    void calendarDay(scope, date, baby.timezone, stopDrafts).then((rows) => {
-      if (!cancelled) setLoaded({ date, rows });
-    });
-    return () => {
-      cancelled = true;
-    };
-    // `events` is not read here: it is the signal that the store has been
-    // filled again, which is when this day may have changed. Watching the
-    // store's own state rather than re-syncing keeps this screen a reader.
-  }, [scope, date, baby.timezone, events, unsynced, stopDrafts]);
-
-  const layout = useMemo(
-    () => layOut(itemsFor(entries ?? [], unsynced, stopDrafts, isRealLocalDate(date) ? date : today, baby.timezone)),
-    [entries, unsynced, stopDrafts, date, today, baby.timezone],
-  );
-
-  /**
-   * Minutes into the day, from the baby's clock. Null on any other day.
-   *
-   * Whole minutes, so this changes once a minute rather than once a second.
-   * The store's clock ticks every second, and a value that moved with it
-   * rebuilt every card on the day sixty times a minute -- which on a busy
-   * day is the difference between a screen that answers a tap and one that
-   * does not. The line cannot move by less than a pixel anyway.
-   */
-  const nowMinutes = isToday
-    ? Math.min(Math.floor((now - startOfLocalDay(today, baby.timezone)) / 60_000), MINUTES_IN_DAY)
-    : null;
-
-  useEffect(() => {
-    // `entries` is null until the rows for *this* date have arrived, so this
-    // never positions against the day before's.
-    if (entries === null || placed.current === date) return;
+    if (!ready || placed.current === date) return;
     const element = scroller.current;
     if (!element) return;
 
@@ -128,18 +113,57 @@ export function Calendar(): React.JSX.Element {
       return;
     }
 
-    // Otherwise: today near the current hour, another day on its first
-    // record, and a day with nothing on the hour axis -- empty, or only a
-    // milestone in the band above -- at the top. Leaving the scroll where
-    // the last day left it kept the page at the bottom with the day's one
-    // record out of sight.
-    const target = openingMinute(isToday, nowMinutes, layout);
+    const target = decide();
     element.scrollTop = target === null
       ? 0
       : Math.max((target / 60) * DEFAULT_METRICS.hourHeight - 80, 0);
-    // `nowMinutes` deliberately absent: it changes every second, and this
-    // must happen once per day looked at, not every tick (spec 7.5).
-  }, [entries, date, isToday, layout]);
+    // `decide` is read once per day looked at, deliberately: it closes over
+    // the clock, which moves.
+  }, [ready, date, scope]);
+
+  return {
+    scroller,
+    onScroll: (event) => remember.set(`${scope}\u0000${date}`, event.currentTarget.scrollTop),
+  };
+}
+
+export function Calendar(): React.JSX.Element {
+  const { baby, now, unsynced, stopDrafts } = useStore();
+  const params = useParams();
+  const navigate = useNavigate();
+
+  const today = toLocalDate(now, baby.timezone);
+  const asked = params['date'];
+  const date = asked ?? today;
+  const isToday = date === today;
+
+  const entries = useDay(date, stopDrafts);
+
+  const layout = useMemo(
+    () => layOut(itemsFor(entries ?? [], unsynced, stopDrafts, isRealLocalDate(date) ? date : today, baby.timezone)),
+    [entries, unsynced, stopDrafts, date, today, baby.timezone],
+  );
+
+  /**
+   * Minutes into the day, from the baby's clock. Null on any other day.
+   *
+   * Whole minutes, so this changes once a minute rather than once a second.
+   * The store's clock ticks every second, and a value that moved with it
+   * re-rendered every card on the day sixty times a minute for a line that
+   * cannot move by less than a pixel in that time.
+   */
+  const nowMinutes = isToday
+    ? Math.min(Math.floor((now - startOfLocalDay(today, baby.timezone)) / 60_000), MINUTES_IN_DAY)
+    : null;
+
+  const { scroller, onScroll } = useDayScroll(
+    date,
+    entries !== null,
+    // Today near the current hour, another day on its first record, and a
+    // day with nothing on the hour axis -- empty, or only a milestone in the
+    // band above -- at the top.
+    () => openingMinute(isToday, nowMinutes, layout),
+  );
 
   // A date typed into the address bar, or one left behind by an older build.
   if (!isRealLocalDate(date)) return <Navigate to="/day" replace />;
@@ -197,7 +221,7 @@ export function Calendar(): React.JSX.Element {
 
       <div
         ref={scroller}
-        onScroll={(e) => remember.set(`${scope}\u0000${date}`, e.currentTarget.scrollTop)}
+        onScroll={onScroll}
         className="min-h-0 flex-1 overflow-y-auto pb-24"
         data-testid="day-scroller"
       >

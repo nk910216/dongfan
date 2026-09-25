@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { CalendarDays, ChartColumn, House, Menu, Settings } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
+import { CalendarDays, CalendarRange, ChartColumn, House, Menu, Settings } from 'lucide-react';
 import { zhTW } from '@dongfan/shared';
 
 /**
@@ -16,12 +16,21 @@ import { zhTW } from '@dongfan/shared';
  */
 export function PageMenu(): React.JSX.Element {
   const [open, setOpen] = useState(false);
+  const { pathname } = useLocation();
 
+  /**
+   * The six pages spec 7.10 names, in its order.
+   *
+   * The tag page is not built yet and is deliberately absent rather than
+   * present and dead: a list entry that goes nowhere is worse than one that
+   * is not there.
+   */
   const pages = [
-    { to: '/', icon: House, label: zhTW.nav.home },
-    { to: '/day', icon: CalendarDays, label: zhTW.nav.calendar },
-    { to: '/stats', icon: ChartColumn, label: zhTW.nav.stats },
-    { to: '/settings', icon: Settings, label: zhTW.nav.settings },
+    { to: '/', icon: House, label: zhTW.nav.home, match: (p: string) => p === '/' },
+    { to: '/day', icon: CalendarDays, label: zhTW.nav.calendar, match: (p: string) => p.startsWith('/day') },
+    { to: '/two', icon: CalendarRange, label: zhTW.nav.twoDays, match: (p: string) => p.startsWith('/two') },
+    { to: '/stats', icon: ChartColumn, label: zhTW.nav.stats, match: (p: string) => p.startsWith('/stats') },
+    { to: '/settings', icon: Settings, label: zhTW.nav.settings, match: (p: string) => p.startsWith('/settings') },
   ];
 
   return (
@@ -49,17 +58,26 @@ export function PageMenu(): React.JSX.Element {
           />
           <nav className="rounded-t-2xl border-t border-line bg-surface pt-2 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
             <p className="px-5 pb-1 text-xs tracking-widest text-ink-faint">{zhTW.nav.title}</p>
-            {pages.map(({ to, icon: Icon, label }) => (
-              <Link
-                key={to}
-                to={to}
-                onClick={() => setOpen(false)}
-                className="flex min-h-14 items-center gap-3 px-5 text-[15px] text-ink"
-              >
-                <Icon size={20} className="text-ink-faint" />
-                {label}
-              </Link>
-            ))}
+            {pages.map(({ to, icon: Icon, label, match }) => {
+              const here = match(pathname);
+              return (
+                <Link
+                  key={to}
+                  to={to}
+                  onClick={() => setOpen(false)}
+                  aria-current={here ? 'page' : undefined}
+                  className={`flex min-h-14 items-center gap-3 px-5 text-[15px] ${
+                    here ? 'text-accent' : 'text-ink'
+                  }`}
+                >
+                  <Icon size={20} className={here ? 'text-accent' : 'text-ink-faint'} />
+                  {label}
+                  {/* Said as well as coloured: which page you are on is not
+                      something to convey by hue alone (spec 7.10). */}
+                  {here ? <span className="text-[11px] text-ink-dim">{zhTW.nav.current}</span> : null}
+                </Link>
+              );
+            })}
           </nav>
         </div>
       ) : null}

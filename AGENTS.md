@@ -115,6 +115,62 @@ is a year of data to point it at.
 | 5 | The stats screen: type, range, chart kind, axis density, the two warnings | **done** |
 | 6 | The M3 acceptance: what can be checked locally, and the steps for the rest | **done** |
 
+**M4 is in progress**, in stages, each reviewed before the next. The order
+follows the dependencies and the risk, not spec 12's list: the tag write path
+carries a rule that fails silently on other devices, so it gets a stage of its
+own rather than being folded into a screen.
+
+| | | |
+|---|---|---|
+| 1 | The two-day calendar (spec 7.6), on the single-day timeline | **done** |
+| 2 | Renaming and deleting a tag: the `rev` bump before the association goes (spec 7.9) | |
+| 3 | Tags on an event, in the add and edit forms (spec 7.3) | |
+| 4 | The tag page: filtering `GET /events` by tag, with paging (spec 7.9) | |
+| 5 | Data export: the endpoint and the settings entry (spec 5.1, 12) | |
+| 6 | The M4 acceptance: what is checkable locally, and the phone steps | |
+
+**Stage 2 is the one to be careful with.** Incremental sync only watches
+`events.rev` (spec 5.4), so deleting a tag by removing its `event_tags` rows
+leaves every other device showing a tag that no longer exists -- for ever, and
+without a symptom. The bump has to come **first**, in the same transaction,
+because the numbering SQL finds the affected events *through* the associations
+it is about to delete. Renaming a tag and attaching or detaching one on an
+event carry the same rule.
+
+What exists already: `GET` and `POST` for tags. Renaming, deleting, filtering
+by tag, tags anywhere in the UI, and the whole export are all absent.
+
+Spec 7.10 also asks the page list to name six pages and to mark which one is
+showing; it currently names four and marks none.
+
+### Two days, one set of hours
+
+Spec 7.6's point is comparison -- last night against tonight, this
+afternoon's naps against yesterday's -- and that only works if the columns
+share a scale. So there is **one** axis of hour labels and the days are two
+bands drawn over it at the same `hourHeight`. Two columns on two scales would
+be two charts side by side, which is not the same screen.
+
+The chosen date is the **right-hand** column and the day before it is on the
+left: oldest first, which spec 7.6 asks for and which is the order a night
+reads in, beginning on the left and ending on the right. Each column has its
+own all-day band, because an all-day record belongs to one of the days rather
+than to the pair.
+
+`Timeline.tsx` was split for it. A day's cards live in a `DayBand` positioned
+by whoever is drawing it, and their geometry is percentages **of that band**;
+the hour labels' strip belongs to the band's offset, not to each card. The
+single-day screen is one band from the gutter to the right edge, and the
+two-day screen is two halves of the same space. Nothing about placement,
+sizing, overlap or where a tap goes is duplicated -- both screens run the
+same `itemsFor` and `layOut`, and `useDay` reads a day the same way for both
+so they cannot develop separate ideas of what one contains.
+
+Spec 7.10's page list now names five of its six pages and marks the one
+showing, with a word as well as a colour. The tag page is absent rather than
+present and dead until stage 4 builds it: an entry that goes nowhere is worse
+than one that is not there yet.
+
 ### A day's calendar is a timeline, not a list
 
 Spec 7.5 is now explicit: the page is a **fixed 00:00-24:00 axis**, every hour
@@ -594,6 +650,27 @@ kinds of chart over at most 366 points is a few dozen lines of geometry.
 Points the server left out are a gap the line joins across, which is exactly
 what the no-zero-filling rule asks for.
 
+### The M3 phone acceptance
+
+The single-day timeline and the statistics page were taken through a phone by
+the owner on 2026-09-25, over the LAN address -- neither needs HTTPS, since
+nothing on either touches the service worker -- and **signed off**.
+
+The steps are in `docs/running-locally.md`. Which of them were walked through
+one by one was not reported back, so this is a sign-off and not a per-item
+record: do not cite any single line of it as evidence that a particular case
+was exercised. If a specific one matters later, ask before claiming it.
+
+**Still outstanding, and not covered by that sign-off:**
+
+- The 10 ms CPU measurement on `GET /stats`. It cannot be done locally at all
+  (see below), needs a deployed Worker, and spec 12.1 lists it as an M3
+  condition.
+- Everything in spec 12.1 that needs a deployment: the login CPU measurement,
+  a backup of the deployed database, the scheduled workflow.
+- `avg` has no configured type, so that branch of the stats endpoint has no
+  end-to-end test and nothing on a phone reached it either.
+
 ### What M3 can and cannot be shown to do locally
 
 Checked here, and automated:
@@ -622,9 +699,9 @@ prints are a laptop with no limit applied and say nothing about it. Spec 12.1
 lists this as an M3 condition and it has not been carried out. Do not report a
 local number as that acceptance.
 
-The statistics page has **not** been through a phone. `docs/running-locally.md`
-has the steps, and unlike the PWA ones they need no tunnel: nothing on that
-page touches the service worker, so the LAN address is enough.
+Both pages have now been through a phone; see the sign-off above. The steps
+need no tunnel, unlike the PWA ones: nothing on either page touches the
+service worker, so the LAN address is enough.
 
 ### Which milestone owns the CPU measurement
 
