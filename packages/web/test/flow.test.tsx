@@ -1753,17 +1753,26 @@ describe('two days at once', () => {
       .toHaveAttribute('aria-current', 'page');
   });
 
-  it('comes back to the two days after a shortcut add', async () => {
+  it('comes back to the two days after a shortcut add, still where it was', async () => {
     // The nappy shortcut is the fastest path in the app and the easiest one
-    // to drop somebody out of the screen they were on.
+    // to drop somebody out of the screen they were on. The day is not the
+    // whole of "where they were": a stretch they had opened is part of it,
+    // and it rides along in the same query string.
     const later = daysAgo(2);
-    const user = openSignedIn(`/two/${later}`);
+    for (let i = 0; i < 4; i += 1) {
+      api.add({ typeId: 'bottle', startedAt: onDay(later, 21, i), value: 100 + i });
+    }
 
-    await user.click(await screen.findByRole('link', { name: zhTW.a11y.addEvent }));
+    const user = openSignedIn(`/two/${later}`);
+    await user.click(await screen.findByTestId('crowded'));
+    await screen.findByTestId('crowded-open');
+
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
     await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') }));
 
     expect(await screen.findByTestId('column-later')).toHaveTextContent(later);
     expect(screen.getByTestId('column-earlier')).toHaveTextContent(daysAgo(3));
+    expect(screen.getByTestId('crowded-open')).toBeInTheDocument();
   });
 
   it('comes back to the two days when a shortcut turns into an edit', async () => {
@@ -1774,14 +1783,20 @@ describe('two days at once', () => {
     // the record -- so it becomes an edit (spec 6.1, 6.3), and that screen
     // has to know where this started too.
     const later = daysAgo(2);
+    for (let i = 0; i < 4; i += 1) {
+      api.add({ typeId: 'bottle', startedAt: onDay(later, 21, i), value: 100 + i });
+    }
+
     const user = openSignedIn(`/two/${later}`);
-    await screen.findByTestId('column-later');
+    await user.click(await screen.findByTestId('crowded'));
+    await screen.findByTestId('crowded-open');
 
     // Stored, and the reply never arrives.
     api.loseNextResponse = true;
     await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
     await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') }));
-    await waitFor(() => expect(api.events).toHaveLength(1));
+    const nappies = (): unknown[] => api.events.filter((event) => event.typeId === 'diaper');
+    await waitFor(() => expect(nappies()).toHaveLength(1));
     // A lost answer keeps the parent on this screen, saying so, because it
     // is the one thing they can act on (spec 6.1).
     await screen.findByTestId('outcome-unknown');
@@ -1807,7 +1822,12 @@ describe('two days at once', () => {
     }
 
     expect(await screen.findByTestId('column-later')).toHaveTextContent(later);
-    expect(api.events).toHaveLength(1);
+    // The stretch that was open before any of this is open again: the day
+    // is not the whole of where somebody was.
+    expect(screen.getByTestId('crowded-open')).toBeInTheDocument();
+    // And the resend added nothing: the server answered with the record it
+    // already had (spec 5.8).
+    expect(nappies()).toHaveLength(1);
   });
 
   it('comes back to the two days after the form is saved', async () => {
