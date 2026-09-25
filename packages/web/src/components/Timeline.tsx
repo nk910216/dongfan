@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { eventTypeName, formatValue, getEventType, interpolate, zhTW } from '@dongfan/shared';
 import { EventIcon, FALLBACK_COLOR } from './EventIcon.js';
 import { formatClock, formatDuration } from '../lib/format.js';
-import { DEFAULT_METRICS, MINUTES_IN_DAY, boxOf } from '../lib/timeline.js';
+import { DEFAULT_METRICS, MINUTES_IN_DAY, boxOf, columnSpan } from '../lib/timeline.js';
 import type { Cluster, DayLayout, Metrics, Placed, TimelineItem } from '../lib/timeline.js';
 
 /**
@@ -25,6 +25,10 @@ import type { Cluster, DayLayout, Metrics, Placed, TimelineItem } from '../lib/t
 
 const HOUR_LABEL_WIDTH = 38;
 const RAIL_WIDTH = 6;
+/** Taken off the left once, before the columns divide what is left. */
+const GUTTER = HOUR_LABEL_WIDTH + RAIL_WIDTH;
+/** Between a card and the next column, and the right-hand edge. */
+const GAP = 4;
 
 function minutesToPx(minutes: number, metrics: Metrics): number {
   return (minutes / 60) * metrics.hourHeight;
@@ -42,11 +46,13 @@ function detailOf(item: TimelineItem, timezone: string): string {
   const type = getEventType(item.typeId);
 
   if (item.drafted) {
-    const endedAt = item.event === null ? null : item.event.endedAt;
-    parts.push(item.draftTooLong
+    // The draft's own moment. The event the server knows about is a running
+    // timer with no end at all, and formatting that null as a clock printed
+    // the epoch -- 08:00 in Taipei (spec 7.2).
+    parts.push(item.draftTooLong || item.draftEndedAt === null
       ? zhTW.calendar.draftTooLong
       : interpolate(zhTW.calendar.draftEndedAt, {
-        time: formatClock(endedAt ?? 0, timezone),
+        time: formatClock(item.draftEndedAt, timezone),
       }));
   } else if (item.running) {
     parts.push(zhTW.event.inProgress);
@@ -138,12 +144,15 @@ function ClusterBody({ cluster, timezone, metrics }: {
 
   const place = (placed: Placed): React.CSSProperties => {
     const box = boxOf(placed.item, metrics);
-    const width = 100 / placed.columns;
+    const { left, width } = columnSpan(placed);
+    // The gutter comes off once and the columns divide what is left, so the
+    // last one ends at the right edge instead of `GUTTER` past it.
+    const area = `(100% - ${GUTTER}px)`;
     return {
       top: `${minutesToPx(box.top, metrics)}px`,
       height: `${minutesToPx(box.bottom - box.top, metrics)}px`,
-      left: `calc(${HOUR_LABEL_WIDTH + RAIL_WIDTH}px + ${placed.column * width}%)`,
-      width: `calc(${width}% - 4px)`,
+      left: `calc(${GUTTER}px + ${area} * ${left})`,
+      width: `calc(${area} * ${width} - ${GAP}px)`,
     };
   };
 
@@ -159,8 +168,8 @@ function ClusterBody({ cluster, timezone, metrics }: {
         style={{
           top: `${minutesToPx(cluster.fromMin, metrics)}px`,
           height: `${Math.max(minutesToPx(cluster.toMin - cluster.fromMin, metrics), 44)}px`,
-          left: `${HOUR_LABEL_WIDTH + RAIL_WIDTH}px`,
-          right: '4px',
+          left: `${GUTTER}px`,
+          right: `${GAP}px`,
         }}
         className="absolute flex min-h-11 items-center justify-center rounded-lg border border-line bg-surface-raised text-[12px] text-ink-muted"
       >
@@ -173,7 +182,7 @@ function ClusterBody({ cluster, timezone, metrics }: {
   if (cluster.crowded && open) {
     return (
       <div
-        style={{ top: `${minutesToPx(cluster.fromMin, metrics)}px`, left: `${HOUR_LABEL_WIDTH + RAIL_WIDTH}px`, right: '4px' }}
+        style={{ top: `${minutesToPx(cluster.fromMin, metrics)}px`, left: `${GUTTER}px`, right: `${GAP}px` }}
         className="absolute z-10 rounded-lg border border-line bg-surface p-1 shadow-lg shadow-black/50"
         data-testid="crowded-open"
       >

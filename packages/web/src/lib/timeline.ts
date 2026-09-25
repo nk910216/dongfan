@@ -70,6 +70,15 @@ export type TimelineItem = {
   /** Stopped here, awaiting confirmation; `lengthMin` is the draft's. */
   readonly drafted: boolean;
   /**
+   * The moment the stop was pressed, when there is a draft.
+   *
+   * Carried here rather than read off the event, because the event the
+   * server knows about has no end at all -- it is a running timer. Reading
+   * `endedAt` from it gave `null`, and a card that turned that into a clock
+   * printed 08:00 in Taipei: the epoch, formatted (spec 7.2).
+   */
+  readonly draftEndedAt: number | null;
+  /**
    * The draft asks for something longer than an event may be.
    *
    * A timer forgotten overnight stops at a moment the server will refuse, so
@@ -164,6 +173,7 @@ export function itemsFor(
       continues: endedAt !== null && endedAt > dayEnd,
       running: event.active && draft === null,
       drafted: draft !== null,
+      draftEndedAt: draft?.endedAt ?? null,
       draftTooLong: draft !== null && draft.endedAt - event.startedAt > MAX_EVENT_DURATION_MS,
     });
   }
@@ -174,12 +184,22 @@ export function itemsFor(
     // and one feed shown twice is its own small lie (spec 6.2).
     if (entries.some(({ event }) => event.id === entry.eventId)) continue;
 
-    const startMin = minutesInto(day, entry.input.startedAt);
-    if (startMin < 0 || startMin >= MINUTES_IN_DAY) continue;
+    const { startedAt, endedAt } = entry.input;
 
-    const endMin = entry.input.endedAt === null
-      ? null
-      : clampToDay(minutesInto(day, entry.input.endedAt));
+    // Clipped to the day exactly as a stored event is. A sleep written up
+    // offline from 23:00 to 07:00 belongs to both days; keeping only the
+    // ones that *start* here made the morning of it invisible until the
+    // queue drained, and then seven hours appeared out of nowhere.
+    //
+    // The midnight end is strict: something finishing exactly at 00:00 has
+    // nothing on the new day, and the closed-interval rule for day queries
+    // does not mean drawing it twice (spec 7.5).
+    const startsHere = startedAt >= day && startedAt < dayEnd;
+    const runsInto = endedAt !== null && startedAt < day && endedAt > day;
+    if (!startsHere && !runsInto) continue;
+
+    const startMin = clampToDay(minutesInto(day, startedAt));
+    const endMin = endedAt === null ? null : clampToDay(minutesInto(day, endedAt));
 
     items.push({
       key: `queued:${entry.eventId}`,
@@ -188,12 +208,13 @@ export function itemsFor(
       eventId: null,
       queued: entry,
       event: null,
-      startMin: clampToDay(startMin),
-      lengthMin: endMin === null ? 0 : Math.max(endMin - clampToDay(startMin), 0),
-      carriedOver: false,
-      continues: entry.input.endedAt !== null && entry.input.endedAt > dayEnd,
-      running: entry.input.intent === 'start_timer' && entry.input.endedAt === null,
+      startMin,
+      lengthMin: endMin === null ? 0 : Math.max(endMin - startMin, 0),
+      carriedOver: runsInto,
+      continues: endedAt !== null && endedAt > dayEnd,
+      running: entry.input.intent === 'start_timer' && endedAt === null,
       drafted: false,
+      draftEndedAt: null,
       draftTooLong: false,
     });
   }
@@ -272,6 +293,35 @@ export function layOut(
   close();
 
   return { allDay, clusters };
+}
+
+/**
+ * A column's share of the width, as fractions of the **event area**.
+ *
+ * Not of the whole page. The hour labels take a fixed strip off the left, and
+ * an earlier version added that strip to the offset while still dividing the
+ * full width -- so a single column ran 40px past the right edge, and so did
+ * the last of any row. The screen turns these fractions into a `calc` that
+ * subtracts the strip once.
+ */
+export function columnSpan(placed: Placed): { left: number; width: number } {
+  return { left: placed.column / placed.columns, width: 1 / placed.columns };
+}
+
+/**
+ * Where a day should open, in minutes from midnight.
+ *
+ * Today near the current hour; any other day on its first record, because
+ * the top of an empty night is not where the day is. Null when there is
+ * nothing to go to and the top will do.
+ */
+export function openingMinute(
+  isToday: boolean,
+  nowMinutes: number | null,
+  layout: DayLayout,
+): number | null {
+  if (isToday) return nowMinutes;
+  return layout.clusters[0]?.fromMin ?? null;
 }
 
 /** Greedy by start: the first column whose last card has finished. */

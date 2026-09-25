@@ -1284,6 +1284,56 @@ describe('looking back at one day', () => {
     expect(slot.getAttribute('aria-label')).not.toContain(zhTW.event.inProgress);
     // And it leads to the confirmation screen rather than the edit form.
     expect(slot.getAttribute('href')).toContain('/stop/');
+
+    // The moment the button was pressed, printed. The event the server knows
+    // about is a running timer with no end, and formatting that null as a
+    // clock said 08:00 -- the epoch, in Taipei.
+    expect(slot).toHaveAccessibleName(new RegExp(
+      interpolate(zhTW.calendar.draftEndedAt, { time: formatClock(Date.now(), BABY.timezone) })
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+    ));
+  });
+
+  it('does not put a card past the right-hand edge of the day', async () => {
+    // The hour labels take a strip off the left. Adding it to the offset
+    // while still dividing the whole width put a single column 40px past
+    // the edge, and the last of any row with it.
+    const day = daysAgo(2);
+    api.add({ typeId: 'bottle', startedAt: onDay(day, 9) });
+    api.add({ typeId: 'diaper', startedAt: onDay(day, 9, 2) });
+
+    openSignedIn(`/day/${day}`);
+    await screen.findByTestId('slot-bottle');
+
+    for (const id of ['slot-bottle', 'slot-diaper']) {
+      const { left, width } = screen.getByTestId(id).style;
+      // Both are expressed against the area left after the gutter, so the
+      // full width never appears on its own.
+      expect(`${left} ${width}`, id).toContain('100% - 44px');
+      expect(width, id).not.toBe('calc(100% - 4px)');
+    }
+  });
+
+  it('positions the day it switched to, not the one it came from', async () => {
+    // The read is asynchronous, so for a moment after the date changes the
+    // previous day's rows are still in hand. Laying those out under the new
+    // date, scrolling against them and marking the date as done meant the
+    // right rows arrived to a page that had stopped listening.
+    const early = daysAgo(6);
+    const late = daysAgo(2);
+    api.add({ typeId: 'bottle', startedAt: onDay(late, 23) });
+    api.add({ typeId: 'diaper', startedAt: onDay(early, 7) });
+
+    openSignedIn(`/day/${late}`);
+    await screen.findByTestId('slot-bottle');
+    const scroller = screen.getByTestId('day-scroller');
+    await waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(1000));
+
+    fireEvent.change(screen.getByTestId('calendar-date'), { target: { value: early } });
+
+    await screen.findByTestId('slot-diaper');
+    // 07:00 on a 64px hour, less the 80px of context above it.
+    await waitFor(() => expect(scroller.scrollTop).toBeCloseTo(7 * 64 - 80, 0));
   });
 
   it('says so rather than looking like a day that failed to load', async () => {

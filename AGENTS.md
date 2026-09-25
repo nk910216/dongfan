@@ -151,6 +151,11 @@ night before that ran into this morning is included, an unfinished event
 appears only on the day it started, and no query was widened for the redesign
 (spec 7.5 says so in as many words). Duration statistics were not touched.
 
+**Records still in the outbox follow the same clipping**, because they are
+the same records; the only difference is who has heard about them. Filtering
+them on their start day alone made a night written up offline disappear from
+the morning it covered.
+
 - `eventsOnDate` — what is **counted** on this day. The home screen shows
   this, because the figures printed beside it are computed the same way.
 - `calendarDay` — what was **happening**: the above plus whatever ran into it,
@@ -172,6 +177,32 @@ still running, because a parent who cannot tell those apart either stops it
 twice or leaves it going all night. If the draft asks for longer than an event
 may be, the card says the time needs correcting rather than offering a
 confirmation that cannot succeed.
+
+### Four ways the timeline was wrong and looked right
+
+All four passed every test that existed, which is the point of writing them
+down.
+
+- **Cards ran off the right-hand edge.** The hour labels take a fixed strip
+  off the left; the offset added it while the widths still divided the *whole*
+  container, so a single column ended 40px past the edge and so did the last
+  of any row. Columns are fractions of the **event area** now (`columnSpan`),
+  and the screen subtracts the strip once in a `calc`.
+- **A stop draft printed 08:00.** The card read `endedAt` off the event, but
+  the event the server knows about is a running timer with no end at all, and
+  a null formatted as a clock is the epoch in Taipei. The draft's own moment
+  travels on the item.
+- **A queued add that crossed midnight lost its morning.** The outbox was
+  filtered on "starts on this day", so a sleep written up offline from 23:00
+  to 07:00 was invisible on the morning until the queue drained, and then
+  seven hours appeared from nowhere. It is clipped to the day exactly as a
+  stored event is, midnight end strictly excluded.
+- **Switching dates positioned against the day before.** The read is
+  asynchronous, so for a moment the previous day's rows are still in hand;
+  the effect laid those out under the new date, scrolled against them and
+  marked the date as done, so the right rows arrived to a page that had
+  stopped listening. The rows now carry the date they were read for, and
+  anything else counts as not loaded yet.
 
 ### Scroll position belongs to whoever is holding the phone
 
@@ -855,6 +886,12 @@ Three tests on the statistics screen passed that way — offering totals for
 every aggregation and claiming "finished records only" for everything both
 survived being broken. Wait for the new state to be on screen, then assert
 the absence.
+
+**Counting rows in the owner's database is reading the owner's database.**
+Running `SELECT COUNT(*)` against `dongfan-dev` to show that nothing was
+touched is self-contradictory, and it was done twice. There is nothing to
+prove: not running anything against it is the whole of it. Say what was run
+and against what, and leave that database out.
 
 **A mutation that did not reach the running code proves nothing.** The API
 suite resolves `@dongfan/shared` from `dist`, not from source, so breaking

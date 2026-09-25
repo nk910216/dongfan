@@ -8,7 +8,7 @@ import { SyncState } from '../components/SyncState.js';
 import { Timeline } from '../components/Timeline.js';
 import { calendarDay } from '../lib/db.js';
 import type { DayEntry } from '../lib/db.js';
-import { DEFAULT_METRICS, MINUTES_IN_DAY, itemsFor, layOut } from '../lib/timeline.js';
+import { DEFAULT_METRICS, MINUTES_IN_DAY, itemsFor, layOut, openingMinute } from '../lib/timeline.js';
 import { useStore } from '../lib/store.js';
 
 /**
@@ -36,7 +36,17 @@ export function Calendar(): React.JSX.Element {
   const date = asked ?? today;
   const isToday = date === today;
 
-  const [entries, setEntries] = useState<DayEntry[] | null>(null);
+  /**
+   * What was read, and **which day it was read for**.
+   *
+   * The day travels with the rows because the read is asynchronous: for a
+   * moment after the date changes, the previous day's events are still in
+   * hand. Laying those out under the new date drew the wrong day, and the
+   * scroll below then positioned against them and marked the new date as
+   * done -- so when the right rows arrived, nothing moved.
+   */
+  const [loaded, setLoaded] = useState<{ date: string; rows: DayEntry[] } | null>(null);
+  const entries = loaded !== null && loaded.date === date ? loaded.rows : null;
   const scroller = useRef<HTMLDivElement | null>(null);
   /**
    * Which day has already been scrolled into place.
@@ -53,7 +63,7 @@ export function Calendar(): React.JSX.Element {
 
     let cancelled = false;
     void calendarDay(scope, date, baby.timezone).then((rows) => {
-      if (!cancelled) setEntries(rows);
+      if (!cancelled) setLoaded({ date, rows });
     });
     return () => {
       cancelled = true;
@@ -74,23 +84,19 @@ export function Calendar(): React.JSX.Element {
     : null;
 
   useEffect(() => {
+    // `entries` is null until the rows for *this* date have arrived, so this
+    // never positions against the day before's.
     if (entries === null || placed.current === date) return;
     const element = scroller.current;
     if (!element) return;
 
-    // Today opens near the current hour; any other day opens on its first
-    // record, because the top of an empty night is not where the day is.
-    const firstMin = layout.clusters[0]?.fromMin ?? null;
-    const target = isToday ? (nowMinutes ?? 0) : firstMin;
-    if (target === null) {
-      placed.current = date;
-      return;
-    }
+    const target = openingMinute(isToday, nowMinutes, layout);
+    placed.current = date;
+    if (target === null) return;
 
     element.scrollTop = Math.max((target / 60) * DEFAULT_METRICS.hourHeight - 80, 0);
-    placed.current = date;
     // `nowMinutes` deliberately absent: it changes every second, and this
-    // must happen once per day looked at.
+    // must happen once per day looked at, not every tick (spec 7.5).
   }, [entries, date, isToday, layout]);
 
   // A date typed into the address bar, or one left behind by an older build.

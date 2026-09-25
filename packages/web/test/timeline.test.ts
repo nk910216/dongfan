@@ -3,7 +3,8 @@ import { MAX_EVENT_DURATION_MS, localToUtc, startOfLocalDay } from '@dongfan/sha
 import type { EventDto } from '@dongfan/shared';
 import type { DayEntry, QueuedCreate, StopDraft } from '../src/lib/db.js';
 import {
-  DEFAULT_METRICS, MINUTES_IN_DAY, boxOf, itemsFor, layOut, minCardMinutes, splitAllDay,
+  DEFAULT_METRICS, MINUTES_IN_DAY, boxOf, columnSpan, itemsFor, layOut, minCardMinutes,
+  openingMinute, splitAllDay,
 } from '../src/lib/timeline.js';
 
 /**
@@ -317,6 +318,54 @@ describe('records this device is still holding', () => {
   });
 });
 
+describe('an unsent record that crossed midnight', () => {
+  const overnight = queued({
+    typeId: 'sleep',
+    startedAt: at(DAY, 23),
+    endedAt: at(NEXT, 7),
+  }, 'q-night');
+
+  it('shows its morning half on the morning, not only its evening half', () => {
+    // Written up offline, it is in the outbox and nowhere else. Keeping only
+    // the entries that *start* on the day made the morning invisible until
+    // the queue drained, and then seven hours appeared from nowhere.
+    const [morning] = items([], [overnight], [], NEXT);
+
+    expect(morning).toMatchObject({
+      kind: 'queued', startMin: 0, lengthMin: 7 * 60, carriedOver: true,
+    });
+  });
+
+  it('shows its evening half on the evening', () => {
+    const [evening] = items([], [overnight]);
+    expect(evening).toMatchObject({ startMin: 23 * 60, lengthMin: 60, continues: true });
+  });
+
+  it('leaves nothing on the next day when it ends exactly at midnight', () => {
+    const toMidnight = queued({
+      typeId: 'sleep', startedAt: at(DAY, 23), endedAt: at(NEXT, 0),
+    }, 'q-mid');
+
+    expect(items([], [toMidnight], [], NEXT)).toEqual([]);
+    expect(items([], [toMidnight])).toHaveLength(1);
+  });
+
+  it('still leaves out one belonging to another day entirely', () => {
+    const elsewhere = queued({ typeId: 'bottle', startedAt: at(NEXT, 9) }, 'q-other');
+    expect(items([], [elsewhere])).toEqual([]);
+  });
+
+  it('is still shown once when the same record has arrived', () => {
+    const stored = event({
+      id: 'q-night', typeId: 'sleep', startedAt: at(DAY, 23), endedAt: at(NEXT, 7), localDate: DAY,
+    });
+    const both = items([entry(stored, true)], [overnight], [], NEXT);
+
+    expect(both).toHaveLength(1);
+    expect(both[0]?.kind).toBe('event');
+  });
+});
+
 describe('a timer stopped here, with nobody having confirmed when', () => {
   const running = event({ id: 'sleep', typeId: 'sleep', startedAt: at(DAY, 13), active: true });
 
@@ -326,6 +375,11 @@ describe('a timer stopped here, with nobody having confirmed when', () => {
     expect(only).toMatchObject({
       kind: 'draft', drafted: true, running: false, startMin: 13 * 60, lengthMin: 90,
     });
+    // And it carries the draft's own moment. The event the server knows
+    // about is a running timer with no end at all, so reading `endedAt` off
+    // it gives null -- which a clock formats as the epoch.
+    expect(only?.draftEndedAt).toBe(at(DAY, 14, 30));
+    expect(only?.event?.endedAt).toBeNull();
   });
 
   it('is clipped to the day like anything else', () => {
@@ -350,6 +404,48 @@ describe('a timer stopped here, with nobody having confirmed when', () => {
   it('does not say that of a draft inside the limit', () => {
     const [only] = items([entry(running)], [], [draft('sleep', at(DAY, 14))]);
     expect(only?.draftTooLong).toBe(false);
+  });
+});
+
+describe('how wide a column is', () => {
+  it('divides the event area and never reaches past its right edge', () => {
+    // The fractions are of the space left after the hour labels. Adding that
+    // strip to the offset while still dividing the full width put a single
+    // column 40px past the edge, and the last of any row with it.
+    for (const columns of [1, 2, 3, 4]) {
+      for (let column = 0; column < columns; column += 1) {
+        const span = columnSpan({ item: {} as never, column, columns });
+        expect(span.left, `${column}/${columns}`).toBeGreaterThanOrEqual(0);
+        expect(span.left + span.width, `${column}/${columns}`).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it('gives the columns of a row equal, non-overlapping shares', () => {
+    const spans = [0, 1, 2].map((column) => columnSpan({ item: {} as never, column, columns: 3 }));
+    expect(spans.map((s) => s.width)).toEqual([1 / 3, 1 / 3, 1 / 3]);
+    expect(spans[1]!.left).toBeCloseTo(spans[0]!.left + spans[0]!.width, 10);
+    expect(spans[2]!.left).toBeCloseTo(spans[1]!.left + spans[1]!.width, 10);
+  });
+});
+
+describe('where a day opens', () => {
+  const layout = layOut(items([
+    entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 7, 30) })),
+    entry(event({ id: 'b', typeId: 'bottle', startedAt: at(DAY, 15) })),
+  ]));
+
+  it('opens today near the current hour', () => {
+    expect(openingMinute(true, 13 * 60, layout)).toBe(13 * 60);
+  });
+
+  it('opens any other day on its first record', () => {
+    // The top of an empty night is not where the day is.
+    expect(openingMinute(false, null, layout)).toBe(7 * 60 + 30);
+  });
+
+  it('has nowhere in particular to go on an empty day', () => {
+    expect(openingMinute(false, null, layOut([]))).toBeNull();
   });
 });
 
