@@ -1,6 +1,6 @@
 import { openDB } from 'idb';
 import type { DBSchema, IDBPDatabase } from 'idb';
-import { addLocalDays, coversLocalDate, getEventType, msOnLocalDate } from '@dongfan/shared';
+import { addLocalDays, coversLocalDate, getEventType } from '@dongfan/shared';
 import type { EventDto, EventIntent, SummaryDto } from '@dongfan/shared';
 
 /**
@@ -456,9 +456,24 @@ export type DayEntry = {
   readonly event: EventDto;
   /** Started on an earlier day and ran into this one. */
   readonly carriedOver: boolean;
-  /** Milliseconds of it inside this day. Zero while it is still running. */
-  readonly msOnDay: number;
 };
+
+/**
+ * When an event finished, as this device understands it.
+ *
+ * A timer stopped here and not yet confirmed has an end -- the moment the
+ * button was pressed -- even though the server still has it running
+ * (spec 7.2). Without that, a sleep begun at 23:00 and stopped at 07:00 with
+ * no signal had no end at all as far as this day's query was concerned, and
+ * the morning it covered showed nothing.
+ *
+ * A running timer with **no** draft keeps the narrower rule: it appears on
+ * the day it started and on no other, because its length is not a fact yet
+ * (spec 3.4.1 rule 3).
+ */
+function endOf(event: EventDto, drafts: readonly StopDraft[]): number | null {
+  return drafts.find((draft) => draft.eventId === event.id)?.endedAt ?? event.endedAt;
+}
 
 /**
  * One local day for the calendar: its own events, plus what ran into it.
@@ -478,6 +493,7 @@ export async function calendarDay(
   scope: Scope,
   date: string,
   timeZone: string,
+  drafts: readonly StopDraft[] = [],
 ): Promise<DayEntry[]> {
   const store = (await db()).transaction('events').store.index('by-scope-date');
   const [onDay, dayBefore] = await Promise.all([
@@ -489,12 +505,8 @@ export async function calendarDay(
     .map((row) => row.event)
     .filter((event) => event.deletedAt === null)
     .filter((event) =>
-      coversLocalDate(event.localDate, event.startedAt, event.endedAt, date, timeZone))
-    .map((event) => ({
-      event,
-      carriedOver: event.localDate !== date,
-      msOnDay: msOnLocalDate(event.startedAt, event.endedAt, date, timeZone),
-    }))
+      coversLocalDate(event.localDate, event.startedAt, endOf(event, drafts), date, timeZone))
+    .map((event) => ({ event, carriedOver: event.localDate !== date }))
     .sort(byDayOrder);
 }
 

@@ -178,6 +178,27 @@ twice or leaves it going all night. If the draft asks for longer than an event
 may be, the card says the time needs correcting rather than offering a
 confirmation that cannot succeed.
 
+### The clock ticks every second, so nothing may depend on it by accident
+
+`now` in the store moves once a second. The timeline passed it straight
+through, so every card on the day was rebuilt sixty times a minute -- which on
+a busy day is the difference between a screen that answers a tap and one that
+does not. `nowMinutes` is whole minutes now, the hour rules and each cluster
+are memoised, and the line cannot move by less than a pixel anyway.
+
+### Where a screen goes back to
+
+`lib/return-to.ts`: a `?from=` in the query string, not router state and not
+`navigate(-1)`. State is lost on a reload and the history has nothing to go to
+when a link was opened directly.
+
+The edit screen went to the home screen from everywhere. Opening a record from
+the calendar and coming back therefore landed on home, on today, with whatever
+had been opened on the day being read closed again -- which is what a crowded
+stretch collapsing "by itself" actually was. Whether such a stretch is open
+lives in the URL for the same reason: the component that held it is unmounted
+by the navigation.
+
 ### Four ways the timeline was wrong and looked right
 
 All four passed every test that existed, which is the point of writing them
@@ -204,10 +225,26 @@ down.
   stopped listening. The rows now carry the date they were read for, and
   anything else counts as not loaded yet.
 
+### A stop draft is an ending, as far as this device is concerned
+
+`calendarDay` asks `endOf`, which is the draft's moment when there is one and
+the event's own end otherwise. Without it, a sleep begun at 23:00 and stopped
+at 07:00 with no signal had no end at all as far as the day query was
+concerned -- the server still has it running -- so the morning it covered
+showed nothing, and seven hours appeared once the confirmation went through.
+
+**A running timer with no draft keeps the narrower rule**: it belongs to the
+day it started on and to no other, because its length is not a fact yet
+(spec 3.4.1 rule 3). The two are separate tests, because widening the second
+by accident is the easier mistake.
+
 ### Scroll position belongs to whoever is holding the phone
 
-Today opens near the current hour and any other day opens on its first record,
-**once per day looked at and never again**. Spec 7.5 is explicit that a
+Today opens near the current hour, any other day opens on its first record,
+and a day with nothing on the hour axis -- empty, or only a milestone in the
+band above -- goes to the top. Leaving the scroll alone there kept the page at
+the bottom with the day's one record out of sight. All of it **once per day
+looked at and never again**. Spec 7.5 is explicit that a
 background sync or the clock ticking must not keep taking the position back:
 somebody reading last night's feeds at 3am would find the page snapping to the
 current hour under their thumb. The current-time line is on today only, from

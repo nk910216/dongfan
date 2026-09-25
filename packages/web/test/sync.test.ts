@@ -152,8 +152,8 @@ describe('a day on the calendar', () => {
     const day = await calendarDay(MINE, '2026-09-21', TAIPEI);
 
     expect(day.map((e) => e.event.id)).toEqual(['breakfast', 'overnight']);
-    expect(day[1]).toMatchObject({ carriedOver: true, msOnDay: 7 * 3_600_000 + 5 * 60_000 });
-    expect(day[0]).toMatchObject({ carriedOver: false, msOnDay: 20 * 60_000 });
+    expect(day[1]).toMatchObject({ carriedOver: true });
+    expect(day[0]).toMatchObject({ carriedOver: false });
   });
 
   it('puts an all-day event above everything, whatever the clock says', async () => {
@@ -175,13 +175,48 @@ describe('a day on the calendar', () => {
       .toEqual(['milestone', 'breakfast']);
   });
 
-  it('gives the earlier day only the minutes that were actually its own', async () => {
+  it('counts the night on the evening it began, not the morning', async () => {
     await applyPage(MINE, [overnight()], 1);
 
     const day = await calendarDay(MINE, '2026-09-20', TAIPEI);
 
     expect(day.map((e) => e.event.id)).toEqual(['overnight']);
-    expect(day[0]).toMatchObject({ carriedOver: false, msOnDay: 50 * 60_000 });
+    expect(day[0]).toMatchObject({ carriedOver: false });
+  });
+
+  it('brings a timer stopped here into the morning it was stopped in', async () => {
+    // The server still has it running, so its `ended_at` is null and the
+    // plain rule leaves it on the evening alone. The moment the button was
+    // pressed is only on this device, and the morning it covers is the one
+    // somebody is looking at (spec 7.2).
+    const running = event('night', 1, {
+      typeId: 'sleep',
+      localDate: '2026-09-20',
+      startedAt: at(20, 23, 10),
+      endedAt: null,
+      active: true,
+    });
+    await applyPage(MINE, [running], 1);
+
+    expect(await calendarDay(MINE, '2026-09-21', TAIPEI)).toEqual([]);
+
+    const draft = [{ scope: MINE, eventId: 'night', endedAt: at(21, 7, 5), version: 1, createdAt: 0 }];
+    const morning = await calendarDay(MINE, '2026-09-21', TAIPEI, draft);
+
+    expect(morning.map((e) => e.event.id)).toEqual(['night']);
+    expect(morning[0]?.carriedOver).toBe(true);
+  });
+
+  it('does not widen the rule for a timer nobody has stopped', async () => {
+    // Its length is not a fact yet, so it belongs to the day it started on
+    // and to no other (spec 3.4.1 rule 3).
+    await applyPage(MINE, [event('running', 1, {
+      typeId: 'sleep', localDate: '2026-09-20', startedAt: at(20, 23, 10), endedAt: null, active: true,
+    })], 1);
+
+    expect(await calendarDay(MINE, '2026-09-21', TAIPEI, [])).toEqual([]);
+    expect((await calendarDay(MINE, '2026-09-20', TAIPEI, [])).map((e) => e.event.id))
+      .toEqual(['running']);
   });
 
   it('is the one thing it differs from the home screen list by', async () => {

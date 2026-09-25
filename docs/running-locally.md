@@ -387,7 +387,12 @@ it at arm's length with the lights off.
     online: there is **one** of it, not two.
 14. Start a sleep timer, go into flight mode, press stop. On the calendar the
     card says it has ended and is awaiting confirmation — **not** that it is
-    still running — and tapping it opens the confirmation screen.
+    still running — and it prints **the time you pressed stop**, not 08:00.
+    Tapping it opens the confirmation screen.
+    - Do the same across midnight if you can: start a timer late in the
+      evening and stop it the next morning with no signal. The morning must
+      show the dashed piece from 00:00, because the server still thinks that
+      timer is running and only this device knows otherwise.
 15. Turn the network off entirely and reopen the day. The events already on
     the device are still drawn; the timeline asks the server for nothing.
 
@@ -396,6 +401,15 @@ it at arm's length with the lights off.
 16. The date picker, back to today, the manual sync line and the add button
     all still work, and the add button still files under the day being looked
     at (spec 7.3).
+17. **Tap a record, then come back without saving.** You land on the day you
+    were reading, not on the home screen and not on today — and a crowded
+    stretch you had opened is still open.
+18. Switch from a busy evening to a day with nothing on the hours. The page
+    goes back to the top rather than staying at the bottom with the day's one
+    record out of sight.
+19. Leave the page open for a couple of minutes on a busy day and then tap
+    something. It should answer immediately; the clock moving must not make
+    the screen heavy.
 
 ### Not in this round
 

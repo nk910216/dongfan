@@ -48,7 +48,7 @@ function event(over: Partial<EventDto> & { id: string; typeId: string }): EventD
 }
 
 function entry(e: EventDto, carriedOver = false): DayEntry {
-  return { event: e, carriedOver, msOnDay: 0 };
+  return { event: e, carriedOver };
 }
 
 function queued(over: Partial<QueuedCreate['input']> & { typeId: string }, id = 'q1'): QueuedCreate {

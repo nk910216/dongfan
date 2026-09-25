@@ -14,6 +14,7 @@ import type { SavedForm } from '../lib/form-draft.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { Message } from '../components/Message.js';
 import { clearForm, formKey, moveForm, readForm, saveForm } from '../lib/form-draft.js';
+import { useReturnTo } from '../lib/return-to.js';
 import { useStore } from '../lib/store.js';
 
 /**
@@ -27,6 +28,9 @@ import { useStore } from '../lib/store.js';
 export function EditEvent(): React.JSX.Element {
   const { eventId = '' } = useParams();
   const navigate = useNavigate();
+  // Back to the screen this was opened from -- the calendar, on the day
+  // being read -- rather than always to the home screen.
+  const back = useReturnTo();
   const { baby, scope, findEvent, updateEvent, removeEvent } = useStore();
 
   const [event, setEvent] = useState<EventDto | null>(null);
@@ -174,7 +178,7 @@ export function EditEvent(): React.JSX.Element {
         metadata: draft.metadata,
       });
       clearForm(formId);
-      navigate('/');
+      navigate(back);
     } catch (error) {
       if (error instanceof ApiFailure && error.code === 'VERSION_CONFLICT') setConflict(true);
       else setFailure(error);
@@ -187,7 +191,7 @@ export function EditEvent(): React.JSX.Element {
     try {
       await removeEvent(event.id, version);
       clearForm(formId);
-      navigate('/');
+      navigate(back);
     } catch (error) {
       if (error instanceof ApiFailure && error.code === 'VERSION_CONFLICT') setConflict(true);
       else setFailure(error);
@@ -199,7 +203,7 @@ export function EditEvent(): React.JSX.Element {
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <header className="flex shrink-0 items-center border-b border-line-soft px-2 py-2">
-        <Link to="/" aria-label={zhTW.addEvent.cancel} className="flex size-11 items-center justify-center text-ink-muted">
+        <Link to={back} aria-label={zhTW.addEvent.cancel} className="flex size-11 items-center justify-center text-ink-muted">
           <ChevronLeft size={22} />
         </Link>
         <div className="-ml-11 flex flex-1 items-center justify-center gap-2">
@@ -296,7 +300,7 @@ export function EditEvent(): React.JSX.Element {
             setBusy(false);
             setReloads((n) => n + 1);
           }}
-          onCancel={() => navigate('/')}
+          onCancel={() => navigate(back)}
         />
       ) : null}
     </div>

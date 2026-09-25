@@ -72,21 +72,11 @@ export function WaitingRow({ entry, timezone }: {
   );
 }
 
-export function EventRow({ event, timezone, drafted, carriedOver = false, msOnDay = null }: {
+export function EventRow({ event, timezone, drafted }: {
   event: EventDto;
   timezone: string;
   /** Stopped on this device, with nobody having confirmed when yet. */
   drafted: boolean;
-  /**
-   * Began on an earlier day and ran into the one being shown.
-   *
-   * Said out loud, because it is counted on the earlier day: every figure
-   * beside it belongs to that day, and a row that looked like a record of
-   * this one would quietly contradict them (spec 3.4.1).
-   */
-  carriedOver?: boolean;
-  /** Its share of the day being shown, where that is not its whole length. */
-  msOnDay?: number | null;
 }): React.JSX.Element {
   const type = getEventType(event.typeId);
   const color = type?.color ?? FALLBACK_COLOR;
@@ -98,11 +88,6 @@ export function EventRow({ event, timezone, drafted, carriedOver = false, msOnDa
 
   if (event.endedAt !== null && type?.hasRange) {
     details.push(formatDuration(event.endedAt - event.startedAt));
-    // Its own length is the headline; what fell inside this day is a
-    // second figure and only worth printing when the two differ.
-    if (carriedOver && msOnDay !== null && msOnDay !== event.endedAt - event.startedAt) {
-      details.push(interpolate(zhTW.calendar.onThisDay, { duration: formatDuration(msOnDay) }));
-    }
   }
   for (const [key, value] of Object.entries(event.metadata)) {
     if (value !== '') details.push(metadataOptionLabel(key, value));
@@ -129,14 +114,6 @@ export function EventRow({ event, timezone, drafted, carriedOver = false, msOnDa
           ) : event.active ? (
             <span className="rounded border px-1.5 py-px text-[10px]" style={{ color, borderColor: `${color}66` }}>
               {zhTW.event.inProgress}
-            </span>
-          ) : null}
-          {carriedOver ? (
-            <span
-              className="rounded border border-line px-1.5 py-px text-[10px] text-ink-dim"
-              data-testid="carried-over"
-            >
-              {zhTW.calendar.carriedOver}
             </span>
           ) : null}
         </div>

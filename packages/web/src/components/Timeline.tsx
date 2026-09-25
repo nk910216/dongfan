@@ -1,8 +1,9 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { memo } from 'react';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { eventTypeName, formatValue, getEventType, interpolate, zhTW } from '@dongfan/shared';
 import { EventIcon, FALLBACK_COLOR } from './EventIcon.js';
 import { formatClock, formatDuration } from '../lib/format.js';
+import { linkBack } from '../lib/return-to.js';
 import { DEFAULT_METRICS, MINUTES_IN_DAY, boxOf, columnSpan } from '../lib/timeline.js';
 import type { Cluster, DayLayout, Metrics, Placed, TimelineItem } from '../lib/timeline.js';
 
@@ -70,11 +71,17 @@ function detailOf(item: TimelineItem, timezone: string): string {
   return parts.join(' · ');
 }
 
-/** Where a tap goes, which is never a new screen invented for this page. */
-function linkFor(item: TimelineItem): string {
+/**
+ * Where a tap goes, which is never a new screen invented for this page.
+ *
+ * The edit screen is told where it was opened from, so coming back lands on
+ * the day being read with whatever was open still open -- rather than on the
+ * home screen, on today.
+ */
+function linkFor(item: TimelineItem, from: string): string {
   if (item.kind === 'queued') return '/unsynced';
   if (item.drafted) return `/stop/${item.eventId ?? ''}`;
-  return `/event/${item.eventId ?? ''}`;
+  return linkBack(`/event/${item.eventId ?? ''}`, from);
 }
 
 function Card({ item, timezone, metrics, style }: {
@@ -83,6 +90,7 @@ function Card({ item, timezone, metrics, style }: {
   metrics: Metrics;
   style: React.CSSProperties;
 }): React.JSX.Element {
+  const location = useLocation();
   const type = getEventType(item.typeId);
   const color = type?.color ?? FALLBACK_COLOR;
   const spec = type?.value ?? null;
@@ -90,7 +98,7 @@ function Card({ item, timezone, metrics, style }: {
 
   return (
     <Link
-      to={linkFor(item)}
+      to={linkFor(item, `${location.pathname}${location.search}`)}
       style={style}
       data-testid={`slot-${item.typeId}`}
       data-kind={item.kind}
@@ -135,12 +143,34 @@ function Card({ item, timezone, metrics, style }: {
   );
 }
 
-function ClusterBody({ cluster, timezone, metrics }: {
+/**
+ * One stretch of the day, and its cards.
+ *
+ * Memoised because the clock ticks. `now` moves every second in the store,
+ * and without this every card on the day was rebuilt each time -- which on a
+ * busy day is the difference between a screen that responds and one that
+ * does not.
+ *
+ * Whether a crowded stretch is open lives in the URL rather than in state
+ * here. Opening one, tapping into an event and coming back unmounted this
+ * component and lost it, so the list a parent had just opened collapsed
+ * under them; in the URL it survives that, and a reload as well.
+ */
+const ClusterBody = memo(function ClusterBody({ cluster, timezone, metrics }: {
   cluster: Cluster;
   timezone: string;
   metrics: Metrics;
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useSearchParams();
+  const open = search.get('open') === String(cluster.fromMin);
+
+  const setOpen = (wanted: boolean): void => {
+    const next = new URLSearchParams(search);
+    if (wanted) next.set('open', String(cluster.fromMin));
+    else next.delete('open');
+    // Replaced, not pushed: opening a list is not a place to go back to.
+    setSearch(next, { replace: true });
+  };
 
   const place = (placed: Placed): React.CSSProperties => {
     const box = boxOf(placed.item, metrics);
@@ -219,7 +249,27 @@ function ClusterBody({ cluster, timezone, metrics }: {
       ))}
     </>
   );
-}
+});
+
+/** The rules behind everything. They never change, so they are built once. */
+const Hours = memo(function Hours({ metrics }: { metrics: Metrics }): React.JSX.Element {
+  return (
+    <>
+      {Array.from({ length: 25 }, (_, hour) => hour).map((hour) => (
+        <div
+          key={hour}
+          className="absolute right-0 left-0 flex items-start"
+          style={{ top: `${minutesToPx(hour * 60, metrics)}px` }}
+        >
+          <span className="-mt-1.5 w-9 pr-1 text-right font-numeric text-[10px] text-ink-dim">
+            {hour === 24 ? '24:00' : `${String(hour).padStart(2, '0')}:00`}
+          </span>
+          <span className="mt-px h-px flex-1 bg-line-soft" />
+        </div>
+      ))}
+    </>
+  );
+});
 
 export function Timeline({ layout, timezone, nowMinutes, metrics = DEFAULT_METRICS }: {
   layout: DayLayout;
@@ -228,8 +278,6 @@ export function Timeline({ layout, timezone, nowMinutes, metrics = DEFAULT_METRI
   nowMinutes: number | null;
   metrics?: Metrics;
 }): React.JSX.Element {
-  const hours = Array.from({ length: 25 }, (_, hour) => hour);
-
   return (
     <div>
       {/* Events with no time of day at all head the day rather than sitting
@@ -256,18 +304,7 @@ export function Timeline({ layout, timezone, nowMinutes, metrics = DEFAULT_METRI
         style={{ height: `${minutesToPx(MINUTES_IN_DAY, metrics)}px` }}
         data-testid="timeline"
       >
-        {hours.map((hour) => (
-          <div
-            key={hour}
-            className="absolute right-0 left-0 flex items-start"
-            style={{ top: `${minutesToPx(hour * 60, metrics)}px` }}
-          >
-            <span className="-mt-1.5 w-9 pr-1 text-right font-numeric text-[10px] text-ink-dim">
-              {hour === 24 ? '24:00' : `${String(hour).padStart(2, '0')}:00`}
-            </span>
-            <span className="mt-px h-px flex-1 bg-line-soft" />
-          </div>
-        ))}
+        <Hours metrics={metrics} />
 
         {layout.clusters.map((cluster) => (
           <ClusterBody key={cluster.key} cluster={cluster} timezone={timezone} metrics={metrics} />

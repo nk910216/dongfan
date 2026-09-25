@@ -1336,6 +1336,86 @@ describe('looking back at one day', () => {
     await waitFor(() => expect(scroller.scrollTop).toBeCloseTo(7 * 64 - 80, 0));
   });
 
+  it('shows the morning of a night stopped with no signal', async () => {
+    // The server still has the timer running, so its `endedAt` is null and
+    // the plain rule leaves the night on the evening alone. The moment the
+    // button was pressed is only on this device, and the morning it covers
+    // is the one somebody is looking at (spec 7.2).
+    const started = earlierToday(2 * HOUR);
+    api.add({ typeId: 'sleep', startedAt: started, active: true });
+
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(await screen.findByRole('button', { name: zhTW.timer.stop }));
+    await screen.findByTestId('stop-drafts');
+
+    await user.click(screen.getByTestId('open-menu'));
+    await user.click(screen.getByRole('link', { name: zhTW.nav.calendar }));
+
+    const slot = await screen.findByTestId('slot-sleep');
+    expect(slot.dataset['kind']).toBe('draft');
+    expect(slot.getAttribute('href')).toContain('/stop/');
+  });
+
+  it('goes back to the top of a day with nothing on the hours', async () => {
+    // Only a milestone, which lives in the band above the axis. Leaving the
+    // scroll where the previous day left it kept the page at the bottom with
+    // the day's one record out of sight.
+    const late = daysAgo(2);
+    const quiet = daysAgo(6);
+    api.add({ typeId: 'bottle', startedAt: onDay(late, 23) });
+    api.add({ typeId: 'milestone', startedAt: onDay(quiet, 0) });
+
+    openSignedIn(`/day/${late}`);
+    await screen.findByTestId('slot-bottle');
+    const scroller = screen.getByTestId('day-scroller');
+    await waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(1000));
+
+    fireEvent.change(screen.getByTestId('calendar-date'), { target: { value: quiet } });
+
+    await screen.findByTestId('all-day');
+    await waitFor(() => expect(scroller.scrollTop).toBe(0));
+  });
+
+  it('goes back to the top of an entirely empty day', async () => {
+    const late = daysAgo(2);
+    api.add({ typeId: 'bottle', startedAt: onDay(late, 23) });
+
+    openSignedIn(`/day/${late}`);
+    await screen.findByTestId('slot-bottle');
+    const scroller = screen.getByTestId('day-scroller');
+    await waitFor(() => expect(scroller.scrollTop).toBeGreaterThan(1000));
+
+    fireEvent.change(screen.getByTestId('calendar-date'), { target: { value: daysAgo(6) } });
+
+    await screen.findByText(zhTW.calendar.empty);
+    await waitFor(() => expect(scroller.scrollTop).toBe(0));
+  });
+
+  it('keeps a crowded stretch open after going into one of its records', async () => {
+    // Opening the list, tapping in and coming back collapsed it again,
+    // because the state lived in a component the navigation unmounted.
+    const day = daysAgo(2);
+    for (let i = 0; i < 4; i += 1) {
+      api.add({ typeId: 'bottle', startedAt: onDay(day, 9, i), value: 100 + i });
+    }
+
+    const user = openSignedIn(`/day/${day}`);
+    await user.click(await screen.findByTestId('crowded'));
+    const first = screen.getAllByTestId('slot-bottle')[0] as HTMLElement;
+
+    await user.click(first);
+    await screen.findByTestId('submit');
+
+    await user.click(screen.getByLabelText(zhTW.addEvent.cancel));
+
+    // Back on the day, with the list still open rather than collapsed.
+    expect(await screen.findByTestId('crowded-open')).toBeInTheDocument();
+    expect(screen.getAllByTestId('slot-bottle')).toHaveLength(4);
+  });
+
   it('says so rather than looking like a day that failed to load', async () => {
     openSignedIn(`/day/${daysAgo(5)}`);
     expect(await screen.findByText(zhTW.calendar.empty)).toBeInTheDocument();

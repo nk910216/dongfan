@@ -62,7 +62,9 @@ export function Calendar(): React.JSX.Element {
     if (!isRealLocalDate(date)) return;
 
     let cancelled = false;
-    void calendarDay(scope, date, baby.timezone).then((rows) => {
+    // The drafts go in, so a timer stopped here at 07:00 after a night
+    // that began at 23:00 is known to cover this morning (spec 7.2).
+    void calendarDay(scope, date, baby.timezone, stopDrafts).then((rows) => {
       if (!cancelled) setLoaded({ date, rows });
     });
     return () => {
@@ -78,9 +80,17 @@ export function Calendar(): React.JSX.Element {
     [entries, unsynced, stopDrafts, date, today, baby.timezone],
   );
 
-  /** Minutes into the day, from the baby's clock. Null on any other day. */
+  /**
+   * Minutes into the day, from the baby's clock. Null on any other day.
+   *
+   * Whole minutes, so this changes once a minute rather than once a second.
+   * The store's clock ticks every second, and a value that moved with it
+   * rebuilt every card on the day sixty times a minute -- which on a busy
+   * day is the difference between a screen that answers a tap and one that
+   * does not. The line cannot move by less than a pixel anyway.
+   */
   const nowMinutes = isToday
-    ? Math.min((now - startOfLocalDay(today, baby.timezone)) / 60_000, MINUTES_IN_DAY)
+    ? Math.min(Math.floor((now - startOfLocalDay(today, baby.timezone)) / 60_000), MINUTES_IN_DAY)
     : null;
 
   useEffect(() => {
@@ -92,9 +102,15 @@ export function Calendar(): React.JSX.Element {
 
     const target = openingMinute(isToday, nowMinutes, layout);
     placed.current = date;
-    if (target === null) return;
 
-    element.scrollTop = Math.max((target / 60) * DEFAULT_METRICS.hourHeight - 80, 0);
+    // A day with nothing on the hour axis -- empty, or only a milestone in
+    // the band above -- goes to the top. Leaving the scroll where the last
+    // day left it kept the page at the bottom with the day's one event out
+    // of sight. Only on a change of day: a background sync never reaches
+    // here, because the date has already been marked.
+    element.scrollTop = target === null
+      ? 0
+      : Math.max((target / 60) * DEFAULT_METRICS.hourHeight - 80, 0);
     // `nowMinutes` deliberately absent: it changes every second, and this
     // must happen once per day looked at, not every tick (spec 7.5).
   }, [entries, date, isToday, layout]);
