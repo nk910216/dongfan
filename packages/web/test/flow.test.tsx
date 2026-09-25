@@ -1574,6 +1574,9 @@ describe('looking back at a trend', () => {
     await user.click(screen.getByTestId('open-menu'));
     await user.click(screen.getByRole('link', { name: zhTW.nav.stats }));
     await screen.findByLabelText(zhTW.stats.type);
+    // The chart for the thing that was just recorded, so the story is one
+    // story: a nappy waiting on the phone and a nappy chart without it.
+    fireEvent.change(screen.getByTestId('stats-type'), { target: { value: 'diaper' } });
     await screen.findByTestId('stats-unsynced');
 
     // The figures change the moment the queue drains, because the figures
@@ -1581,6 +1584,16 @@ describe('looking back at a trend', () => {
     api.statsValues = { [today()]: 1 };
     comeBack();
 
+    // Waited for on the new figure, not on the notice going. Loading hides
+    // the notice too, so "it disappeared" would pass while the chart was
+    // still showing the old numbers -- which is the whole bug.
+    await waitFor(() =>
+      expect(screen.getByTestId('stats-totals'))
+        .toHaveTextContent(interpolate(zhTW.stats.times, { count: 1 })));
+
+    // And then the notice, which is a separate step: the chart re-asks when
+    // the events change and the queue empties on its own schedule, so
+    // neither can be assumed to have happened because the other did.
     await waitFor(() => expect(screen.queryByTestId('stats-unsynced')).not.toBeInTheDocument());
   });
 
@@ -1617,6 +1630,19 @@ describe('looking back at a trend', () => {
 
     expect(await screen.findByTestId('stats-empty')).toBeInTheDocument();
     expect(screen.getByTestId('stats-unsynced')).toBeInTheDocument();
+  });
+
+  it('says which days it is showing, because the buttons only say how many', async () => {
+    // A 30-day range from 1 February runs to 2 March. The button cannot say
+    // that and the chart cannot show it, so the dates are printed.
+    const user = await openStats();
+
+    await user.click(screen.getByTestId('range-month'));
+    fireEvent.change(screen.getByTestId('stats-start'), { target: { value: '2026-02-01' } });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('stats-window')).toHaveTextContent(
+        interpolate(zhTW.stats.showing, { from: '2026-02-01', to: '2026-03-02' })));
   });
 
   it('is reachable from the page list', async () => {

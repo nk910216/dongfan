@@ -406,14 +406,27 @@ The range arithmetic lives in `lib/stats-range.ts`, away from the screen,
 because it is all off-by-one-day work.
 
 **The four ranges are fixed day counts — 7, 30, 183, 365 — and not calendar
-months.** A calendar-month window cannot always end today: "a month ending on
-29 March" needs a start whose month-later date is 30 March, and there is none,
-because 28 February lands on 28 March and 1 March on 1 April. Subtracting a
-month and adding a day therefore produced a window ending on 27 February when
-today was the 28th, leaving today off a chart of the last month, and one
-ending on 31 March when today was the 29th — two days that had not happened,
-zero-filled, dragging the daily average down. Correcting the drift by hand did
-not converge either, because the clamp is not a translation.
+months**, and the buttons name the count rather than a month or a year. A
+30-day range from 1 February runs to 2 March, and calling that a month is a
+lie the screen has no way of admitting to — so the window's actual dates are
+printed under the controls as well. Spec 7.7 carries the decision; AGENTS.md
+is not the place for it to live alone.
+
+**In a window anchored to its start**, calendar months cannot always end
+today: "a month ending on 29 March" needs a start whose month-later date is 30
+March, and there is none, because 28 February lands on 28 March and 1 March on
+1 April. Subtracting a month and adding a day therefore produced a window
+ending on 27 February when today was the 28th, leaving today off a chart of
+the last month, and one ending on 31 March when today was the 29th — two days
+that had not happened, zero-filled, dragging the daily average down.
+Correcting the drift by hand did not converge either, because the clamp is not
+a translation.
+
+That is a limit of **this model**, not of calendar months, and an earlier
+version of this note overstated it as an impossibility. Anchoring the window
+to its end — today, with the start derived from it — works, and spec 7.7
+records what moving to it would involve, including that it changes what the
+date picker means.
 
 Fixed counts also make the figures comparable: a total over a calendar month
 changes between February and March partly because the months are different

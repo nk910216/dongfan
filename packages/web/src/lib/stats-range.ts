@@ -18,12 +18,18 @@ export type Range = (typeof RANGES)[number];
  * Fixed counts, not calendar months, and that is a decision rather than an
  * approximation.
  *
- * A window of calendar months cannot always end today. "A month ending on 29
- * March" would need a start whose month-later date is 30 March, and there is
- * none: 28 February lands on 28 March and 1 March lands on 1 April. So a
- * calendar-month range either misses today or reaches into days that have not
- * happened -- the second of which is worse, because the server fills them with
- * zeros and they drag the daily average down.
+ * **In a window anchored to its start**, calendar months cannot always end
+ * today. "A month ending on 29 March" would need a start whose month-later
+ * date is 30 March, and there is none: 28 February lands on 28 March and 1
+ * March lands on 1 April. So such a range either misses today or reaches into
+ * days that have not happened -- the second of which is worse, because the
+ * server fills them with zeros that drag the daily average down.
+ *
+ * That is a limit of this model and not of calendar months. Anchoring the
+ * window to its **end** instead -- today, with the start derived from it --
+ * works perfectly well, and spec 7.7 records what changing to it would
+ * involve. It would also change what the date picker means, since spec 7.7
+ * gives the user a start date to move. The two cannot be mixed.
  *
  * Fixed counts also make the figures comparable. A total and a daily average
  * over a calendar month change between February and March partly because the

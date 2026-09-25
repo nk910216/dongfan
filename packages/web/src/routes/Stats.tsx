@@ -214,6 +214,13 @@ export function Stats(): React.JSX.Element {
           </div>
         </div>
 
+        {/* The window, written out. The buttons say how many days, but
+            which days is what somebody needs to read a chart -- and a range
+            that quietly ran two days into March is invisible without it. */}
+        <p className="mb-3 px-4.5 font-numeric text-[11px] text-ink-faint" data-testid="stats-window">
+          {interpolate(zhTW.stats.showing, { from, to })}
+        </p>
+
         {loading ? (
           <p className="px-3.5 text-sm text-ink-dim" data-testid="stats-loading">{zhTW.app.loading}</p>
         ) : failure !== null ? (

@@ -153,10 +153,19 @@ export const zhTW = {
     title: '統計',
     type: '事件類型',
     range: '區間',
-    week: '週',
-    month: '月',
-    halfYear: '6 個月',
-    year: '年',
+    /*
+     * Days, not months.
+     *
+     * The ranges are fixed lengths (see stats-range.ts), so "month" would be
+     * a lie: a month range from 1 February runs to 2 March. The button says
+     * what it does, and the dates it produced are printed underneath.
+     */
+    week: '7 天',
+    month: '30 天',
+    halfYear: '183 天',
+    year: '365 天',
+    /** The window actually being shown, so the labels need not be trusted. */
+    showing: '{from} 到 {to}',
     start: '起始日期',
     chart: '圖表',
     bar: '長條',
