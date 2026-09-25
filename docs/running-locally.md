@@ -321,6 +321,84 @@ finding new assets, and `GET /api/version` reporting a build the running
 one is not. The second is what catches a phone that has been open since
 Tuesday.
 
+## The statistics page
+
+**This one does not need HTTPS.** Nothing on it touches the service worker,
+so a tunnel is unnecessary — the LAN address is enough:
+
+```sh
+npm run dev:all
+```
+
+Open `http://<ip>:5180` on the phone, sign in, and reach it from the icon at
+the top left: the page list has home, calendar, statistics and settings.
+
+### What to look at
+
+**The controls**
+
+1. The type picker lists every event type, grouped by category.
+2. The four range buttons name a **number of days — 7, 30, 183, 365** — and
+   not a month or a year. They are fixed day counts (spec 7.7), and a 30-day
+   range starting on 1 February really does run to 2 March.
+3. Underneath them the window is written out, `2026-02-01` to `2026-03-02`.
+   That line is the point of the day-count labels: it is the only thing on
+   screen that can say which days are actually being charted.
+4. Pressing a range button moves the whole window so it **ends today**. Check
+   it on the last days of a month, where it used to be wrong: today itself
+   was missing from a 30-day chart, or two days that had not happened were
+   included and dragged the average down.
+
+**The chart**
+
+5. Switch between the bar and line buttons. Both draw the same figures.
+6. Pick **weight** and a 30-day range. With only a few weighings, the
+   readings must sit **on their own dates** — one taken on the 30th belongs
+   at the right-hand edge, not a third of the way along because it happens
+   to be the second of three points. A single reading shows as a dot.
+7. Check the axis labels: every day over 7, the 1st, 5th, 10th and so on
+   over 30, and month numbers alone over 183 and 365. The month markers come
+   from the calendar, so a month with nothing recorded on its 1st still gets
+   one.
+8. Pick **sleep**. The figures read as hours and minutes rather than raw
+   numbers, and the line saying the chart counts finished records only
+   appears underneath. Start a sleep timer and come back: today's total does
+   not move while it runs, which is what that line is there to explain
+   (spec 3.4.1 rule 3).
+
+**The states**
+
+9. Record something with the phone in flight mode, then open the statistics
+   page. The chart still loads if the app is already open, and a line says
+   how many records are still on this phone and missing from the figures. It
+   appears **even when the chart is empty** — pick weight, which has nothing
+   to show unless you have weighed the baby, and the reason is still there.
+10. Stop the worker with Ctrl-C. The page says it could not read the figures
+    and offers a retry; it does not draw an empty chart, because an empty
+    chart is a claim that nothing happened. Start the worker again and press
+    the retry.
+11. Press the sync line at the top. The chart asks again rather than sitting
+    on yesterday's figures under a heading saying it has just synced.
+
+**One-handed, in the dark**
+
+12. Every control is reachable with a thumb, and the chart is legible at
+    arm's length with the screen dim. 365 bars on a phone is the hard case.
+
+### What this page cannot tell you
+
+Nothing here measures the 10 ms CPU limit. The database times printed by
+`npm run db:stats-fixture` are SQL time on a laptop with no limit applied,
+and Miniflare does not enforce the Workers CPU budget at all (spec 11.2), so
+no local number bears on it. That measurement needs a deployed Worker and is
+listed in spec 12.1 as an M3 acceptance condition that has **not** been
+carried out.
+
+Note also that a development database holding a few dozen events makes a
+365-day chart mostly zeros. That is the data being thin, not the chart being
+wrong. The year of invented records lives in its own database, below, and is
+deliberately not wired to the app.
+
 ### A year of data for the statistics
 
 ```sh

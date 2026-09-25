@@ -112,7 +112,7 @@ is a year of data to point it at.
 | 3 | A year of synthetic data in its own database, the D1 query-count guardrail (spec 11.2), and `GET /stats` for `count`/`sum`/`last`/`max`/`avg` | **done** |
 | 4 | `duration_sum`: the midnight split in SQL, `UNION ALL`, excluding running timers | **done** |
 | 5 | The stats screen: type, range, chart kind, axis density, the two warnings | **done** |
-| 6 | The M3 measurement (see below) | |
+| 6 | The M3 acceptance: what can be checked locally, and the steps for the rest | **done** |
 
 ### A day's calendar is not a day's list
 
@@ -459,16 +459,39 @@ kinds of chart over at most 366 points is a few dozen lines of geometry.
 Points the server left out are a gap the line joins across, which is exactly
 what the no-zero-filling rule asks for.
 
-### Two things spec.md is not consistent about
+### What M3 can and cannot be shown to do locally
 
-- **Which milestone owns the `/stats` CPU measurement.** 5.6 says M4,
-  12.1's acceptance table says M3. The table wins here; the prose is
-  probably older.
-- **The D1 query-count guardrail 11.2 asks for does not exist.** There is
-  no helper counting calls per request and failing past 30. Locally that
-  is the *only* half of "performance" that can be measured at all — the
-  10 ms CPU limit is not enforced by Miniflare — so it belongs with the
-  stats endpoint rather than with a later tidy-up.
+Checked here, and automated:
+
+- **The aggregation is the database's.** A year of four types costs **5 D1
+  statements**; one type over one day and the same type over one year both
+  cost **3**. The query count does not move with the range or the number of
+  types, which is the architectural claim spec 5.6 makes.
+- **At most one row per day comes back.** 5,183 events in the fixture, 365 or
+  366 rows out of each query.
+- **The midnight split, the zero-filling rules, the units and the range
+  arithmetic**, against a real D1 and across every day of three years for the
+  window.
+- **The chart ships without a charting library**: the precache is 10 entries
+  and about 474 KiB, which is what the hand-drawn SVG is for (spec 6.2).
+
+**Not checked here, and not checkable here:** the 10 ms CPU limit. Miniflare
+does not enforce it (spec 11.2), so the SQL times `npm run db:stats-fixture`
+prints are a laptop with no limit applied and say nothing about it. Spec 12.1
+lists this as an M3 condition and it has not been carried out. Do not report a
+local number as that acceptance.
+
+The statistics page has **not** been through a phone. `docs/running-locally.md`
+has the steps, and unlike the PWA ones they need no tunnel: nothing on that
+page touches the service worker, so the LAN address is enough.
+
+### Which milestone owns the CPU measurement
+
+Spec 5.6 said M4 and spec 12.1's acceptance table said M3. **M3 wins**, and
+5.6 now says so with the reason: the endpoint is M3's work, so its acceptance
+should not fall into the milestone after it. Both places also now state that
+the measurement needs a deployment.
+
 
 The queue lives in `packages/web/src/lib/outbox.ts`, with its storage in
 `db.ts` under `outbox`. An entry is put in doubt by `beginSend` *before*
