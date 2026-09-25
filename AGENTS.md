@@ -403,11 +403,42 @@ A total is offered only where adding up means something — `count`, `sum`,
 `duration_sum`. Summing weighings reports a toddler at twenty-one kilos.
 
 The range arithmetic lives in `lib/stats-range.ts`, away from the screen,
-because it is all off-by-one-day work: a week is seven days and not eight, a
-month range ends the day before the next month starts, and a month from the
-31st ends in February rather than reaching into March (`addLocalMonths`
-clamps). A test checks that no range the screen can select exceeds the 366
-days the endpoint will answer, so no control is a dead one.
+because it is all off-by-one-day work.
+
+**The four ranges are fixed day counts — 7, 30, 183, 365 — and not calendar
+months.** A calendar-month window cannot always end today: "a month ending on
+29 March" needs a start whose month-later date is 30 March, and there is none,
+because 28 February lands on 28 March and 1 March on 1 April. Subtracting a
+month and adding a day therefore produced a window ending on 27 February when
+today was the 28th, leaving today off a chart of the last month, and one
+ending on 31 March when today was the 29th — two days that had not happened,
+zero-filled, dragging the daily average down. Correcting the drift by hand did
+not converge either, because the clamp is not a translation.
+
+Fixed counts also make the figures comparable: a total over a calendar month
+changes between February and March partly because the months are different
+lengths, which is not a fact about the baby. A test walks every day of three
+years, leap Februaries included, and checks the default window ends exactly
+today.
+
+**The chart positions a value by its date, never by its place in the array.**
+For the types that are not zero-filled — weight, temperature — the points are
+irregular, and three weighings on the 1st, the 2nd and the 30th spaced evenly
+draw a month of steady growth that did not happen. The axis labels come from
+the days of the range for the same reason: taken from the points, a month with
+no reading on its first loses its marker entirely. A line of one point has no
+line in it, so readings are drawn as dots as well.
+
+**The chart re-asks when the app catches up.** It watches `syncedAt` and the
+local events, because the figures are the server's: without that the header
+could say "just synced" with the unsynced notice gone while the chart was
+still missing the record it was about. A failure gets its own retry, since
+pressing sync only re-asks if the sync itself succeeds and the connection is
+usually what failed first.
+
+**The unsynced notice sits outside the chart.** "No records" plus a record
+waiting on this phone is exactly when the reason matters most, and it was the
+one case where it was hidden.
 
 The chart is hand-drawn SVG. A charting library is a large thing to precache
 for a phone that has to start with no connection at all (spec 6.2), and two

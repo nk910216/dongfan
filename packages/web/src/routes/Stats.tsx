@@ -46,7 +46,7 @@ const RANGE_LABEL: Record<Range, string> = {
 };
 
 export function Stats(): React.JSX.Element {
-  const { baby, now, unsynced, loadStats } = useStore();
+  const { baby, now, unsynced, syncedAt, events, loadStats } = useStore();
 
   const [typeId, setTypeId] = useState('bottle');
   const [range, setRange] = useState<Range>('week');
@@ -56,6 +56,8 @@ export function Stats(): React.JSX.Element {
   const [series, setSeries] = useState<StatSeriesDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [failure, setFailure] = useState<string | null>(null);
+  /** Bumped to ask again after a failure, since nothing else has changed. */
+  const [attempt, setAttempt] = useState(0);
 
   const type = getEventType(typeId);
   const { from, to } = useMemo(() => windowFor(range, start), [range, start]);
@@ -84,7 +86,14 @@ export function Stats(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [loadStats, typeId, from, to]);
+    // `syncedAt` and `events` are not read in here. They are the signal that
+    // the store has caught up or that something local has changed, and the
+    // figures are the server's -- so a sync that brought in the other
+    // parent's feeds, or a queued record that has just been sent, changes
+    // this chart. Without them the header could say "just synced" with the
+    // unsynced notice gone while the chart was still missing the record it
+    // was about (spec 6.1).
+  }, [loadStats, typeId, from, to, syncedAt, events, attempt]);
 
   /**
    * Records this device is still holding.
@@ -211,6 +220,17 @@ export function Stats(): React.JSX.Element {
           <div className="px-3.5" data-testid="stats-failed">
             <ErrorLine failure={failure} />
             <p className="text-sm text-ink-muted">{zhTW.stats.failed}</p>
+            {/* Its own button. Pressing sync only asks again if the sync
+                itself succeeds, and the first thing that fails here is
+                usually the connection. */}
+            <button
+              type="button"
+              data-testid="stats-retry"
+              onClick={() => setAttempt((n) => n + 1)}
+              className="mt-2 min-h-11 rounded-xl border border-line px-4 text-sm text-accent"
+            >
+              {zhTW.stats.retry}
+            </button>
           </div>
         ) : points.length === 0 ? (
           <p className="px-3.5 text-sm text-ink-dim" data-testid="stats-empty">{zhTW.stats.empty}</p>
@@ -218,8 +238,9 @@ export function Stats(): React.JSX.Element {
           <>
             <Chart
               points={points}
-              kind={kind}
               range={range}
+              start={start}
+              kind={kind}
               color={type?.color ?? '#e8b15c'}
               format={format}
             />
@@ -239,22 +260,25 @@ export function Stats(): React.JSX.Element {
               </div>
             ) : null}
 
-            {/* Spec 7.7 asks for both of these out loud. A timer still
-                running has no length yet, so today looks short for a
-                reason nobody can see; and records still on this phone are
-                not in the server's figures at all. */}
+            {/* A timer still running has no length yet, so today looks
+                short for a reason nobody can see (spec 7.7). Only where
+                there is a chart to qualify. */}
             {type?.hasRange ? (
               <p className="mt-3 px-4.5 text-[11px] text-ink-dim" data-testid="finished-only">
                 {zhTW.stats.finishedOnly}
               </p>
             ) : null}
-            {waiting > 0 ? (
-              <p className="mt-1.5 px-4.5 text-[11px] text-warn-soft" data-testid="stats-unsynced">
-                {interpolate(zhTW.stats.unsynced, { count: waiting })}
-              </p>
-            ) : null}
           </>
         )}
+
+        {/* Outside all of that, on purpose. "No records" plus a record
+            waiting on this phone is exactly when the reason matters most,
+            and it was the one case where this was hidden (spec 6.2). */}
+        {!loading && failure === null && waiting > 0 ? (
+          <p className="mt-3 px-4.5 text-[11px] text-warn-soft" data-testid="stats-unsynced">
+            {interpolate(zhTW.stats.unsynced, { count: waiting })}
+          </p>
+        ) : null}
       </div>
     </div>
   );

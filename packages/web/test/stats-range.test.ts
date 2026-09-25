@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { daysBetween, localToUtc, toLocalDate } from '@dongfan/shared';
-import { RANGES, axisLabel, startEndingToday, windowFor } from '../src/lib/stats-range.js';
+import { addLocalDays, daysBetween, localToUtc, startOfLocalDay, toLocalDate } from '@dongfan/shared';
+import {
+  RANGES, axisLabel, dayIndex, daysIn, daysOf, startEndingToday, windowFor,
+} from '../src/lib/stats-range.js';
 
 /**
  * The arithmetic behind the statistics screen.
@@ -19,19 +21,49 @@ describe('the window a range covers', () => {
     expect(daysBetween('2026-06-15', '2026-06-21')).toBe(7);
   });
 
-  it('ends a month the day before the next one starts', () => {
+  it('makes the other three a fixed number of days too', () => {
+    // Fixed counts rather than calendar months, and deliberately.
+    //
+    // A calendar-month window cannot always end today: "a month ending on 29
+    // March" would need a start whose month-later date is 30 March, and there
+    // is none -- 28 February lands on 28 March and 1 March on 1 April. So a
+    // calendar range either misses today or reaches into days that have not
+    // happened, and the server fills those with zeros that drag the average
+    // down.
+    //
+    // They are also comparable this way: a total over a calendar month
+    // changes between February and March partly because the months are
+    // different lengths, which is not a fact about the baby.
+    expect(daysIn('week')).toBe(7);
+    expect(daysIn('month')).toBe(30);
+    expect(daysIn('halfYear')).toBe(183);
+    expect(daysIn('year')).toBe(365);
+
     expect(windowFor('month', '2026-06-15')).toEqual({ from: '2026-06-15', to: '2026-07-14' });
-  });
-
-  it('does not reach into the month after when the start has no counterpart', () => {
-    // 31 January plus a month is 28 February, so the window ends on the
-    // 27th. Rolling over would put three days of March in a month view.
-    expect(windowFor('month', '2026-01-31')).toEqual({ from: '2026-01-31', to: '2026-02-27' });
-  });
-
-  it('covers six months and a year', () => {
-    expect(windowFor('halfYear', '2026-01-01')).toEqual({ from: '2026-01-01', to: '2026-06-30' });
     expect(windowFor('year', '2026-01-01')).toEqual({ from: '2026-01-01', to: '2026-12-31' });
+  });
+
+  it('is the same length whatever month it starts in', () => {
+    for (const start of ['2026-01-31', '2026-02-01', '2028-02-29']) {
+      const { from, to } = windowFor('month', start);
+      expect(daysBetween(from, to), start).toBe(30);
+    }
+  });
+
+  it('gives every day of the window, in order and without gaps', () => {
+    const days = daysOf('week', '2026-06-15');
+    expect(days).toHaveLength(7);
+    expect(days[0]).toBe('2026-06-15');
+    expect(days[6]).toBe('2026-06-21');
+  });
+
+  it('places a date by its day, not by where it sits in a list', () => {
+    // Three weighings on the 1st, the 2nd and the 30th are three points.
+    // Spacing them evenly draws a month of steady growth that never
+    // happened, which is why the chart asks for this rather than counting.
+    expect(dayIndex('2026-09-01', '2026-09-01')).toBe(0);
+    expect(dayIndex('2026-09-01', '2026-09-02')).toBe(1);
+    expect(dayIndex('2026-09-01', '2026-09-30')).toBe(29);
   });
 
   it('never asks for more days than the endpoint will aggregate', () => {
@@ -56,6 +88,27 @@ describe('the start that ends a range today', () => {
       const { to } = windowFor(range, startEndingToday(range, now, TAIPEI));
       expect(to, range).toBe(today);
     }
+  });
+
+  it('ends on today on every day of three years, leap Februaries included', () => {
+    // One fixed day proves nothing here. `addLocalMonths` clamps and is
+    // therefore not reversible, so subtracting a month and adding a day gave
+    // a window ending on 27 February when today was the 28th -- today itself
+    // missing from a chart of the last month -- and one ending on 31 March
+    // when today was the 29th, so two days that had not happened were
+    // included, zero-filled, and dragged the average down. Both passed the
+    // single-date test above.
+    const wrong: string[] = [];
+
+    for (let date = '2026-01-01'; date <= '2028-12-31'; date = addLocalDays(date, 1)) {
+      const noon = startOfLocalDay(date, TAIPEI) + 12 * 3_600_000;
+      for (const range of RANGES) {
+        const { to } = windowFor(range, startEndingToday(range, noon, TAIPEI));
+        if (to !== date) wrong.push(`${range} on ${date} ended ${to}`);
+      }
+    }
+
+    expect(wrong).toEqual([]);
   });
 
   it('reads today in the baby timezone, never the device one', () => {

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { HttpResponse, http } from 'msw';
 import {
-  addLocalDays, addLocalMonths, eventTypeName, fromLocalInput, interpolate, metadataLabel,
+  addLocalDays, eventTypeName, fromLocalInput, interpolate, metadataLabel,
   metadataOptionLabel,
   startOfLocalDay, toLocalDate, toLocalInput, toStored, valueLabel, zhTW,
 } from '@dongfan/shared';
@@ -16,6 +16,7 @@ import { formKey, readForm, saveForm } from '../src/lib/form-draft.js';
 import { scopeOf } from '../src/lib/db.js';
 import { earlierToday as atEarlierToday } from './fixtures/clock.js';
 import { formatClock } from '../src/lib/format.js';
+import { daysIn } from '../src/lib/stats-range.js';
 import { breakStorage, setOnline } from './setup.js';
 import { USER_CONTENT } from './fixtures/user-content.js';
 
@@ -1367,7 +1368,7 @@ describe('looking back at a trend', () => {
     await waitFor(() => {
       const asked = api.lastGet('/stats')?.query;
       expect(asked?.get('to')).toBe(today());
-      expect(asked?.get('from')).toBe(addLocalDays(addLocalMonths(today(), -12), 1));
+      expect(asked?.get('from')).toBe(addLocalDays(today(), -(daysIn('year') - 1)));
     });
   });
 
@@ -1501,6 +1502,121 @@ describe('looking back at a trend', () => {
     fireEvent.change(screen.getByTestId('stats-type'), { target: { value: 'weight' } });
 
     expect(await screen.findByTestId('stats-empty')).toHaveTextContent(zhTW.stats.empty);
+  });
+
+  it('places each reading on its own day, not evenly across the chart', async () => {
+    // Three weighings on the 1st, the 2nd and the 30th are three points.
+    // Spaced by their position in the list they draw a month of steady
+    // growth that never happened; spaced by date, the last one sits at the
+    // right-hand edge where it belongs (spec 7.7's ungapped types).
+    api.statsValues = { '2026-09-01': 7000, '2026-09-30': 7400 };
+    const user = await openStats();
+
+    await user.click(screen.getByTestId('range-month'));
+    await user.click(screen.getByTestId('kind-line'));
+    fireEvent.change(screen.getByTestId('stats-start'), { target: { value: '2026-09-01' } });
+    fireEvent.change(screen.getByTestId('stats-type'), { target: { value: 'weight' } });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('chart-line')).toHaveAttribute('aria-label', '2'));
+
+    const dots = [...screen.getByTestId('chart-line').querySelectorAll('circle')];
+    expect(dots).toHaveLength(2);
+    const [first, last] = dots.map((dot) => Number(dot.getAttribute('cx')));
+
+    // The 30th of a thirty-day window belongs at the far right. Counting
+    // list positions instead would put it around three quarters across.
+    expect(last as number).toBeGreaterThan(0.9 * 320);
+    expect(first as number).toBeLessThan(0.1 * 320);
+  });
+
+  it('labels the months of the axis even when nothing was recorded on one', async () => {
+    // The labels come from the range, not from the points. Taken from the
+    // points, a month with no reading on its 1st loses its marker
+    // altogether and the rest sit wherever somebody happened to weigh.
+    api.statsValues = { '2026-09-02': 7000 };
+    const user = await openStats();
+
+    await user.click(screen.getByTestId('range-month'));
+    fireEvent.change(screen.getByTestId('stats-start'), { target: { value: '2026-09-01' } });
+    fireEvent.change(screen.getByTestId('stats-type'), { target: { value: 'weight' } });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('chart-bar')).toHaveAttribute('aria-label', '1'));
+
+    // 1, 5, 10, 15, 20, 25, 30 of a thirty-day window.
+    const labels = [...screen.getByTestId('chart-bar').querySelectorAll('text')];
+    expect(labels.map((label) => label.textContent)).toEqual(['1', '5', '10', '15', '20', '25', '30']);
+  });
+
+  it('asks again when the app catches up, so the chart is not left behind', async () => {
+    // Otherwise the header says "just synced" and the unsynced notice has
+    // gone, while the chart is still missing the record it was about.
+    api.statsValues = { [today()]: 120 };
+    const user = await openStats();
+    await waitFor(() => expect(screen.getByTestId('stats-totals')).toHaveTextContent('120ml'));
+
+    api.statsValues = { [today()]: 300 };
+    await user.click(screen.getByRole('button', { name: zhTW.a11y.sync }));
+
+    await waitFor(() => expect(screen.getByTestId('stats-totals')).toHaveTextContent('300ml'));
+  });
+
+  it('asks again once a queued record has actually been sent', async () => {
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') }));
+    await screen.findByTestId('unsynced-count');
+
+    await user.click(screen.getByTestId('open-menu'));
+    await user.click(screen.getByRole('link', { name: zhTW.nav.stats }));
+    await screen.findByLabelText(zhTW.stats.type);
+    await screen.findByTestId('stats-unsynced');
+
+    // The figures change the moment the queue drains, because the figures
+    // are the server's.
+    api.statsValues = { [today()]: 1 };
+    comeBack();
+
+    await waitFor(() => expect(screen.queryByTestId('stats-unsynced')).not.toBeInTheDocument());
+  });
+
+  it('can be asked again after the first read failed', async () => {
+    // Pressing sync only asks again if the sync itself succeeds, and what
+    // usually fails first here is the connection.
+    api.failStats = true;
+    const user = await openStats();
+    await screen.findByTestId('stats-failed');
+
+    api.failStats = false;
+    api.statsValues = { [today()]: 120 };
+    await user.click(screen.getByTestId('stats-retry'));
+
+    await waitFor(() => expect(screen.getByTestId('stats-totals')).toHaveTextContent('120ml'));
+  });
+
+  it('still says why a chart is empty when the records are on this phone', async () => {
+    // The worst case for hiding this: the server has no weighings, the phone
+    // has one waiting, and without the notice the screen just says there is
+    // nothing.
+    const user = openSignedIn();
+    await waitForHome();
+
+    goOffline();
+    await user.click(screen.getByRole('link', { name: zhTW.a11y.addEvent }));
+    await user.click(await screen.findByRole('button', { name: metadataOptionLabel('diaper_kind', 'poo') }));
+    await screen.findByTestId('unsynced-count');
+
+    await user.click(screen.getByTestId('open-menu'));
+    await user.click(screen.getByRole('link', { name: zhTW.nav.stats }));
+    await screen.findByLabelText(zhTW.stats.type);
+    fireEvent.change(screen.getByTestId('stats-type'), { target: { value: 'weight' } });
+
+    expect(await screen.findByTestId('stats-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('stats-unsynced')).toBeInTheDocument();
   });
 
   it('is reachable from the page list', async () => {
