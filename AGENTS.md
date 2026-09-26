@@ -266,14 +266,18 @@ confirmation that cannot succeed.
 the sketches and the reasoning. What follows is what a reader of the code
 needs to know.
 
-**The anchor used to live in a lane of its own** beside the card, and before
-that inside it. Inside, a rounded corner and `overflow: hidden` clipped a
-moment's mark into a speck. Outside, the mark and the card were one record
-drawn as two objects with a gap between them, and a column of them read as
-debris. Now **the card's top edge is the start minute** -- for everything,
-with no offset and no exception -- so there is exactly one rule tying a card
-to a time. A moment adds a dot straddling that edge; a range adds a stripe
-down its left, whose height is the true extent.
+**Two marks on a card, and no more.** Its **top edge is the start minute**,
+for everything, with no offset and no exception; and **colour inside it is
+duration**, so a card with no colour in it is a moment. There were four marks
+before -- a dot on the edge, a stripe down the left, the top edge and the
+tint -- saying the same two things twice each, and marks that have to be read
+together read as debris. The owner reported them as ugly and hard to tell
+apart, which is the same finding.
+
+Before that the mark lived *inside* the card, where a rounded corner and
+`overflow: hidden` clipped it into a speck, and then in a lane of its own
+beside the card, where it and the card were one record drawn as two objects.
+The history is here because both looked reasonable when written.
 
 **And the tint stops where the record stops.** A card has a minimum height
 because a target smaller than a fingertip is no use at 3am, so a thirteen
@@ -363,6 +367,17 @@ when has stopped being a timeline.
 `assignColumns` keeps a real interval list per column rather than one "last
 bottom" each, because spans are placed before pins and items no longer arrive
 in start order.
+
+**Nothing may be placed past the edge of the band, and a test says so at
+every width.** The reserve a pin leaves for a range is clamped to what the
+band actually has; before that, asking for more than there was and widening
+the columns to the minimum anyway put records up to 43% past the right-hand
+edge. On a real iPhone that is a screen you have to swipe sideways to read,
+and it was reported from one -- **jsdom's window is 1024px, where the reserve
+never binds, so the whole suite was green.** Both calendars also clip
+horizontal overflow, so the next mistake in this arithmetic shows up as a
+truncated card rather than as half a day off-screen. Any test about how this
+screen is laid out has to name a phone's width; the default is a desktop.
 
 **The `?open=` key is `${day}@h${hour}`**, not a minute. The day is in it
 because both two-day columns have a 09:00; the hour replaced the minute

@@ -141,7 +141,12 @@ export function TwoDays(): React.JSX.Element {
       <div
         ref={scroller}
         onScroll={onScroll}
-        className="min-h-0 flex-1 overflow-y-auto pb-24"
+        // Never sideways. The axis scrolls up and down and nothing else: a
+        // card placed past the right-hand edge turned a phone into a screen
+        // that had to be swiped to be read, and a clip here means a
+        // mistake in the arithmetic shows up as a truncated card rather
+        // than as half the day being off-screen.
+        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-24"
         data-testid="day-scroller"
       >
         {/* Each column has its own all-day band, because an all-day record

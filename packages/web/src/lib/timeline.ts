@@ -448,11 +448,19 @@ function placePins(
     // One reserve for the whole group, so its columns line up. Computed from
     // the widest any member needs: a grid that shifted from row to row would
     // read as records jumping sideways down the screen.
-    const reserve = Math.max(
+    //
+    // **Clamped to what the band actually has.** Asking for more than there
+    // is and then widening the columns to the minimum anyway put records
+    // past the right-hand edge -- up to 43% past it on a narrow column, and
+    // 7% past it on a whole phone, which on a real iPhone is a screen you
+    // have to swipe sideways to read. When the two cannot both be had,
+    // being on the screen wins and the range gives up some of its reserve.
+    const wanted = Math.max(
       ...group.map(({ at }) => reserveFor(at, spans, metrics, bandWidth)),
       0,
     );
-    const available = Math.max(bandWidth - reserve, metrics.minCardWidth);
+    const reserve = Math.max(Math.min(wanted, bandWidth - metrics.minCardWidth), 0);
+    const available = bandWidth - reserve;
 
     const columns = assignColumns(group);
     const needed = Math.max(...[...columns.values()].map((one) => one + 1), 1);
@@ -564,43 +572,44 @@ function uncoveredWidth(
   return Math.max(right - leftPx, 0);
 }
 
-export const POINT_PX = 7;
-
 /**
- * The least a range's bar may be drawn as.
+ * The least a range's tint may be drawn as.
  *
- * Three pixels is under three minutes at the default metrics. It is there so
+ * Three pixels is under two minutes at the default metrics. It is there so
  * that a two-minute feed is visible at all, and it is the only place the
  * drawing departs from the clock -- deliberately not the other direction,
- * because a bar stretched to fit words would be a duration nobody recorded.
+ * because a tint stretched to fit words would be a duration nobody
+ * recorded.
  */
-export const MIN_BAR_PX = 3;
+export const MIN_EXTENT_PX = 3;
 
 /**
  * The real extent of a record, in pixels, which is not its card's height.
  *
  * Measured from the card's own top edge, because the card's top edge **is**
- * the start minute -- for everything, with no offset and no exceptions. That
- * is the whole of how a card is tied to a time now: an anchor drawn in a
- * lane beside the card was one record drawn as two objects, and the marks
- * read as debris scattered down the column.
+ * the start minute -- for everything, with no offset and no exceptions.
  *
- * A finished range gets a stripe of exactly its minutes. Anything without a
- * length -- a bottle, a running timer, a back-filled record with no end --
- * gets a dot on the edge and no stripe at all, because a stripe of no height
- * is nothing and a stripe of some height would be a duration nobody
- * recorded (spec 3.4.1 rule 3).
+ * **The extent is the tint, and the tint is the only thing that draws it.**
+ * There was a stripe down the card's left as well, and a dot on the edge for
+ * a moment; both said a second time what the top edge and the tint already
+ * said, and three marks that have to be read together read as debris. So:
+ * colour in the card means duration, and a card with no colour in it is a
+ * moment. Nothing else has to be learnt.
+ *
+ * A moment gets no tint at all, because a tint of no height is nothing and a
+ * tint of some height would be a duration nobody recorded (spec 3.4.1
+ * rule 3).
  */
 export type Extent = {
-  /** Height of the stripe, in pixels. Zero when there is nothing to draw. */
+  /** Height of the tinted part, in pixels. Zero for a moment. */
   readonly px: number;
-  /** A moment rather than a range, so it is drawn as a dot. */
+  /** A moment rather than a range, so nothing is tinted. */
   readonly point: boolean;
 };
 
 export function extentOf(item: TimelineItem, metrics: Metrics): Extent {
   if (item.lengthMin <= 0) return { px: 0, point: true };
-  return { px: Math.max(minutesToPx(item.lengthMin, metrics), MIN_BAR_PX), point: false };
+  return { px: Math.max(minutesToPx(item.lengthMin, metrics), MIN_EXTENT_PX), point: false };
 }
 
 /**

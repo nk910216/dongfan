@@ -3,7 +3,7 @@ import { MAX_EVENT_DURATION_MS, localToUtc, startOfLocalDay } from '@dongfan/sha
 import type { EventDto } from '@dongfan/shared';
 import type { DayEntry, QueuedCreate, StopDraft } from '../src/lib/db.js';
 import {
-  DEFAULT_METRICS, MINUTES_IN_DAY, MIN_BAR_PX, SPAN_KEEP, boxOf, extentOf, itemsFor,
+  DEFAULT_METRICS, MINUTES_IN_DAY, MIN_EXTENT_PX, SPAN_KEEP, boxOf, extentOf, itemsFor,
   labelWidthFor, layOut, minCardMinutes, minutesToPx, openingMinute, splitAllDay, textWidth,
   tierFor,
 } from '../src/lib/timeline.js';
@@ -410,6 +410,42 @@ describe('what merges, and what bounds it', () => {
   });
 });
 
+describe('nothing is ever placed past the edge of the band', () => {
+  // Reported from a real iPhone: the screen had to be swiped sideways to
+  // read it. Nothing in the suite caught it, because jsdom's window is
+  // 1024px wide and the arithmetic only goes wrong once the reserved width
+  // for a range's words is a large share of the band -- which is every
+  // phone, and every two-day column on one.
+  const days: Record<string, DayEntry[]> = {
+    'a night with two moments on it': [
+      entry(event({ id: 's', typeId: 'sleep', startedAt: at(DAY, 20), endedAt: at(DAY, 23) })),
+      entry(event({ id: 'n', typeId: 'nursing', startedAt: at(DAY, 20, 30), endedAt: at(DAY, 21) })),
+      entry(event({ id: 'd', typeId: 'diaper', startedAt: at(DAY, 20, 35) })),
+      entry(event({ id: 'b', typeId: 'bottle', startedAt: at(DAY, 20, 40) })),
+    ],
+    'an hour with more moments than fit': Array.from({ length: 8 }, (_, i) =>
+      entry(event({ id: `m${i}`, typeId: 'diaper', startedAt: at(DAY, 9, i * 2) }))),
+    'three ranges at once': [
+      entry(event({ id: 'x', typeId: 'sleep', startedAt: at(DAY, 9), endedAt: at(DAY, 12) })),
+      entry(event({ id: 'y', typeId: 'walk', startedAt: at(DAY, 9, 30), endedAt: at(DAY, 11) })),
+      entry(event({ id: 'z', typeId: 'bath', startedAt: at(DAY, 10), endedAt: at(DAY, 10, 30) })),
+    ],
+  };
+
+  for (const [what, entries] of Object.entries(days)) {
+    it(`keeps ${what} inside every width a phone can be`, () => {
+      for (const band of [110, 130, 150, 173, 200, 250, 300, 346, 500]) {
+        const layout = layOut(items(entries), DEFAULT_METRICS, band);
+        for (const one of [...layout.spans, ...layout.pins, ...layout.chips]) {
+          const name = 'item' in one ? one.item.typeId : `chip@${one.hour}`;
+          expect(one.left, `${name} at ${band}`).toBeGreaterThanOrEqual(0);
+          expect(one.left + one.width, `${name} at ${band}`).toBeLessThanOrEqual(1.0001);
+        }
+      }
+    });
+  }
+});
+
 describe('the evening that used to be one grey rectangle', () => {
   // The stretch from the screenshot, at a phone's single-day width: a solid
   // feed, a walk, two nappies, a five-hour nursing and a stopped timer.
@@ -490,10 +526,10 @@ describe('the extent is the duration, and the card is not', () => {
     expect(stripe.px).toBeLessThan(DEFAULT_METRICS.minCardHeight);
   });
 
-  it('gives a moment no stripe at all, rather than a short one', () => {
-    // Zero is not a very small duration. A moment is marked with a dot on
-    // the card's top edge and nothing else, because a stripe of any height
-    // would be a length nobody recorded.
+  it('gives a moment no tint at all, rather than a little of one', () => {
+    // Zero is not a very small duration. A moment's card carries no colour
+    // in it whatever, because any amount of colour would be a length
+    // nobody recorded -- which is also how the two kinds are told apart.
     const bottle = extentOf(only(event({
       id: 'b', typeId: 'bottle', startedAt: at(DAY, 16, 20),
     })), DEFAULT_METRICS);
@@ -501,7 +537,7 @@ describe('the extent is the duration, and the card is not', () => {
     expect(bottle).toEqual({ px: 0, point: true });
   });
 
-  it('gives a running timer and an unfinished record a dot as well', () => {
+  it('gives a running timer and an unfinished record no tint either', () => {
     // Neither has a length that is a fact yet (spec 3.4.1 rule 3).
     const running = extentOf(only(event({
       id: 'r', typeId: 'sleep', startedAt: at(DAY, 13), active: true,
@@ -521,8 +557,8 @@ describe('the extent is the duration, and the card is not', () => {
       id: 's', typeId: 'nursing', startedAt: at(DAY, 9), endedAt: at(DAY, 9, 1),
     })), DEFAULT_METRICS);
 
-    expect(brief.px).toBe(MIN_BAR_PX);
-    expect((MIN_BAR_PX / HOUR_PX) * 60).toBeLessThan(2);
+    expect(brief.px).toBe(MIN_EXTENT_PX);
+    expect((MIN_EXTENT_PX / HOUR_PX) * 60).toBeLessThan(2);
     // And nothing above the floor is touched by it.
     const ten = extentOf(only(event({
       id: 't', typeId: 'nursing', startedAt: at(DAY, 9), endedAt: at(DAY, 9, 10),

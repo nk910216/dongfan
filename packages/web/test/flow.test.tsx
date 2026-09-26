@@ -1153,11 +1153,10 @@ describe('looking back at one day', () => {
     expect(topOf(bottle) - topOf(sleep)).toBeCloseTo(48, 1);
   });
 
-  it('draws a range as long as it lasted, and a moment as a dot on its edge', async () => {
-    // The two numbers the page is made of, and they are not the same one.
-    // The card's top edge is the start minute -- for both of them, with no
-    // offset -- and the stripe inside a range is the minutes between its
-    // timestamps (spec 7.5, docs/timeline-design.md).
+  it('draws a range as colour and a moment as none, both starting at their minute', async () => {
+    // Two marks on a card and no more: its top edge is the minute it began,
+    // and the colour inside it is how long it lasted. A card with no colour
+    // in it is a moment (spec 7.5, docs/timeline-design.md).
     const day = daysAgo(2);
     api.add({ typeId: 'sleep', startedAt: onDay(day, 9), endedAt: onDay(day, 10, 30) });
     api.add({ typeId: 'bottle', startedAt: onDay(day, 13) });
@@ -1167,41 +1166,16 @@ describe('looking back at one day', () => {
 
     const sleep = screen.getByTestId('slot-sleep');
     const bottle = screen.getByTestId('slot-bottle');
-    const markIn = (card: HTMLElement): HTMLElement =>
-      card.querySelector('[data-testid="mark"]') as HTMLElement;
 
-    // Both cards begin at their own minute.
+    // Both cards begin at their own minute, and the range is as tall as it
+    // was long.
     expect(topOf(sleep)).toBeCloseTo(9 * 96, 1);
     expect(topOf(bottle)).toBeCloseTo(13 * 96, 1);
+    expect(Number.parseFloat(sleep.style.height)).toBeCloseTo(1.5 * 96, 1);
 
-    // An hour and a half of stripe, measured from the card's own top.
-    expect(markIn(sleep).dataset['shape']).toBe('bar');
-    expect(Number.parseFloat(markIn(sleep).style.top)).toBe(0);
-    expect(Number.parseFloat(markIn(sleep).style.height)).toBeCloseTo(1.5 * 96, 1);
-
-    // The bottle has no stripe at all -- a dot on the edge instead, because
-    // a stripe of any height would be a length nobody recorded.
-    expect(markIn(bottle).dataset['shape']).toBe('point');
-    expect(Number.parseFloat(markIn(bottle).style.height)).toBeLessThan(10);
-  });
-
-  it('stops the tint where the record stops, so height is not a duration', async () => {
-    // A thirteen-minute nursing needs a card a fingertip tall, and a card a
-    // fingertip tall is three times its length. The colour ends at the
-    // length; the card carries on plain.
-    const day = daysAgo(2);
-    api.add({ typeId: 'nursing', startedAt: onDay(day, 8, 6), endedAt: onDay(day, 8, 19) });
-
-    openSignedIn(`/day/${day}`);
-    const card = await screen.findByTestId('slot-nursing');
-    const stripe = card.querySelector('[data-testid="mark"]') as HTMLElement;
-
-    // 44px of card, 20.8px of record.
-    expect(Number.parseFloat(card.style.height)).toBe(44);
-    expect(Number.parseFloat(stripe.style.height)).toBeCloseTo((13 / 60) * 96, 1);
-    // And the background says so too: a hard stop at the extent rather than
-    // a flat fill over the whole card.
-    expect(card.style.background).toContain('linear-gradient');
+    // The range is tinted; the moment is the plain surface.
+    expect(sleep.style.background).toContain('color-mix');
+    expect(bottle.style.background).not.toContain('color-mix');
   });
 
   it('puts a long record\u2019s words at the minute it began', async () => {
@@ -1368,10 +1342,9 @@ describe('looking back at one day', () => {
     for (const row of rows) {
       expect(row.style.top, row.dataset['testid']).toBe('');
       expect(row.style.height, row.dataset['testid']).toBe('');
-      // Its mark is a full-height chip of colour, not an extent: a list row
-      // has no time in its height.
-      const mark = row.querySelector('[data-testid="mark"]') as HTMLElement | null;
-      if (mark !== null) expect(mark.style.height).toBe('100%');
+      // And no gradient: a row has no time in its height, so nothing in it
+      // may be scaled by one.
+      expect(row.style.background, row.dataset['testid']).not.toContain('gradient');
     }
   });
 

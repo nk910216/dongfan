@@ -6,7 +6,7 @@ import { EventIconChip, FALLBACK_COLOR } from './EventIcon.js';
 import { formatClock, formatDuration } from '../lib/format.js';
 import { linkBack } from '../lib/return-to.js';
 import {
-  DEFAULT_METRICS, MINUTES_IN_DAY, POINT_PX, extentOf, minutesToPx, textWidth, tierFor,
+  DEFAULT_METRICS, MINUTES_IN_DAY, extentOf, minutesToPx, textWidth, tierFor,
 } from '../lib/timeline.js';
 import type { DayLayout, HourChip, Metrics, Tier, TimelineItem } from '../lib/timeline.js';
 
@@ -19,17 +19,18 @@ import type { DayLayout, HourChip, Metrics, Tier, TimelineItem } from '../lib/ti
  * exists to show, and a layout that tidied it away would be a list with
  * gridlines drawn on it.
  *
- * Two measurements per record, kept apart on purpose. The **extent** is real:
- * a finished range is a stripe from its start to its end, and it is never
- * adjusted to suit the words. The **card** carrying the words has a minimum
- * height, because a target smaller than a fingertip is no use at three in the
- * morning -- so when the card is taller than the extent, the tint *stops
- * where the record stops* and the height cannot be read as a duration.
+ * Two measurements per record, kept apart on purpose. The **extent** is real
+ * and is never adjusted to suit the words. The **card** carrying them has a
+ * minimum height, because a target smaller than a fingertip is no use at
+ * three in the morning -- so when the card is taller than the extent, the
+ * tint *stops where the record stops* and the height cannot be read as a
+ * duration.
  *
- * The card's top edge is the start minute. For everything, with no offset
- * and no exception -- which is what ties a card to a time now that the
- * anchor no longer lives in a lane of its own beside it
- * (docs/timeline-design.md).
+ * Two marks and no more: **the card's top edge is the start minute**, for
+ * everything, with no offset and no exception; and **colour inside the card
+ * is duration**, so a card with none is a moment. A stripe down the left and
+ * a dot on the edge said the same two things a third and a fourth time, and
+ * marks that have to be read together read as debris.
  */
 
 const HOUR_LABEL_WIDTH = 38;
@@ -45,8 +46,6 @@ export const TIMELINE_GUTTER = HOUR_LABEL_WIDTH + RAIL_WIDTH;
 const GUTTER = TIMELINE_GUTTER;
 /** Between a card and the next column, and the right-hand edge. */
 const GAP = 4;
-/** The stripe carrying a range's true extent, at the card's own left edge. */
-const STRIPE_WIDTH = 3;
 /**
  * The least a collapsed entry may be, with and without its time range.
  *
@@ -59,20 +58,17 @@ const STRIPE_WIDTH = 3;
 const CHIP_MIN_HEIGHT = 58;
 const CHIP_MIN_HEIGHT_TERSE = 44;
 
-/** How much of the type's colour a card's body carries. */
-const RANGE_TINT = 18;
-const MOMENT_TINT = 11;
 /**
- * A range is tinted harder than a moment, and that is not decoration.
+ * How much of the type's colour a range's body carries.
  *
- * A range is a thing you compare -- how long was the night, how did tonight
- * differ -- and a moment is a thing you count. The heavier tint is what makes
- * the day's shape legible while scrolling past at speed, which is the whole
- * purpose of the two-day screen.
+ * Only a range carries any. That is the whole of how the two kinds are told
+ * apart, and it means the colour on the screen *is* the time accounted for:
+ * the shape of a day -- when the sleeping was, how the two nights differ --
+ * is legible while scrolling past at speed, which is what the two-day
+ * screen is for. A moment has no duration and so no fill; its top edge, its
+ * border and its badge carry its colour.
  */
-function tintOf(item: TimelineItem): number {
-  return item.lengthMin > 0 ? RANGE_TINT : MOMENT_TINT;
-}
+const RANGE_TINT = 18;
 
 /** The time a record is anchored to, for the card and for screen readers. */
 function describeTime(item: TimelineItem, timezone: string): string {
@@ -232,8 +228,9 @@ function StateMark({ item }: { item: TimelineItem }): React.JSX.Element | null {
  * the common case -- so it is one rule with no branch in it.
  */
 function bodyOf(item: TimelineItem, extentPx: number, heightPx: number): string {
-  const tint = `color-mix(in oklab, var(--type) ${tintOf(item)}%, var(--color-surface-raised))`;
-  if (item.lengthMin <= 0 || extentPx >= heightPx) return tint;
+  if (item.lengthMin <= 0) return 'var(--color-surface-raised)';
+  const tint = `color-mix(in oklab, var(--type) ${RANGE_TINT}%, var(--color-surface-raised))`;
+  if (extentPx >= heightPx) return tint;
   return `linear-gradient(to bottom, ${tint} 0, ${tint} ${extentPx}px, `
     + `var(--color-surface-raised) ${extentPx}px)`;
 }
@@ -332,7 +329,7 @@ function Card({ item, timezone, metrics, width, style, inList = false, overSpan 
         // colour is named in exactly one place.
         ['--type' as string]: color,
         background: inList
-          ? `color-mix(in oklab, var(--type) ${tintOf(item)}%, var(--color-surface-raised))`
+          ? bodyOf(item, Number.POSITIVE_INFINITY, 0)
           : bodyOf(item, extent.px, height),
         borderColor: item.drafted || item.kind === 'queued'
           ? undefined
@@ -364,57 +361,6 @@ function Card({ item, timezone, metrics, width, style, inList = false, overSpan 
             : ''
       }`}
     >
-      {/* The extent, at the card's own left edge and starting at its top.
-          Square, and outside nothing: `overflow: visible` above is what
-          stops a rounded corner clipping a short range into a speck. */}
-      {extent.point ? (
-        // Not drawn in a list or on a record carried over from yesterday:
-        // in a list there is no axis for a dot to be on, and a carried-over
-        // record began at a minute this day cannot show.
-        item.carriedOver || inList ? null : (
-          <span
-            aria-hidden
-            data-testid="mark"
-            data-shape="point"
-            className="absolute rounded-full"
-            style={{
-              left: 2,
-              top: -POINT_PX / 2,
-              width: POINT_PX,
-              height: POINT_PX,
-              background: 'var(--type)',
-            }}
-          />
-        )
-      ) : (
-        <span
-          aria-hidden
-          data-testid="mark"
-          data-shape="bar"
-          className={item.drafted ? 'absolute opacity-70' : 'absolute'}
-          style={{
-            left: 0,
-            top: 0,
-            width: STRIPE_WIDTH,
-            height: inList ? '100%' : `${extent.px}px`,
-            background: 'var(--type)',
-          }}
-        />
-      )}
-
-      {/* The end minute. Absent while a timer runs or a record continues
-          past midnight, which is the same open edge as the top. */}
-      {!inList && !extent.point && !item.continues && !item.running ? (
-        <span
-          aria-hidden
-          className="absolute right-0 left-0 h-px"
-          style={{
-            top: `${Math.max(extent.px - 1, 0)}px`,
-            background: 'color-mix(in oklab, var(--type) 45%, transparent)',
-          }}
-        />
-      ) : null}
-
       {/* The words live in whatever width is not covered, which for a
           range is narrower than its card (docs/timeline-design.md). */}
       <span
