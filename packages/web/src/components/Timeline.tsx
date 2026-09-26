@@ -67,8 +67,13 @@ const CHIP_MIN_HEIGHT_TERSE = 44;
  * is legible while scrolling past at speed, which is what the two-day
  * screen is for. A moment has no duration and so no fill; its top edge, its
  * border and its badge carry its colour.
+ *
+ * Twenty-eight per cent, not eighteen: at eighteen the two kinds were told
+ * apart only by looking for the fill rather than by seeing it. The cost is
+ * paid on the second line, which is why a tinted card lifts it -- see
+ * below.
  */
-const RANGE_TINT = 18;
+const RANGE_TINT = 28;
 
 /** The time a record is anchored to, for the card and for screen readers. */
 function describeTime(item: TimelineItem, timezone: string): string {
@@ -381,8 +386,14 @@ function Card({ item, timezone, metrics, width, style, inList = false, overSpan 
         ) : null}
         <StateMark item={item} />
       </span>
+      {/* Lifted on a tinted card. The faint ink was chosen against the
+          plain surface and is already near the floor there; over a fill of
+          one of the lighter type colours it stops being readable, and the
+          clock is on this line. */}
       <span
-        className="truncate text-[10px] leading-tight text-ink-faint"
+        className={`truncate text-[10px] leading-tight ${
+          item.lengthMin > 0 ? 'text-ink-muted' : 'text-ink-faint'
+        }`}
         style={inList ? undefined : { maxWidth: `${Math.max(width - 15, 24)}px` }}
       >
         {secondLine.join(' · ')}
