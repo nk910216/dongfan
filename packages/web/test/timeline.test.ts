@@ -3,8 +3,9 @@ import { MAX_EVENT_DURATION_MS, localToUtc, startOfLocalDay } from '@dongfan/sha
 import type { EventDto } from '@dongfan/shared';
 import type { DayEntry, QueuedCreate, StopDraft } from '../src/lib/db.js';
 import {
-  DEFAULT_METRICS, MAX_COLUMNS, MINUTES_IN_DAY, MIN_BAR_PX, boxOf, columnSpan, columnsFor,
-  extentOf, itemsFor, layOut, minCardMinutes, minutesToPx, openingMinute, splitAllDay, tierFor,
+  DEFAULT_METRICS, MINUTES_IN_DAY, MIN_BAR_PX, SPAN_KEEP, boxOf, extentOf, itemsFor,
+  labelWidthFor, layOut, minCardMinutes, minutesToPx, openingMinute, splitAllDay, textWidth,
+  tierFor,
 } from '../src/lib/timeline.js';
 
 /**
@@ -185,93 +186,271 @@ describe('all-day events', () => {
       entry(event({ id: 'm', typeId: 'milestone', startedAt: at(DAY, 0) })),
     ]));
     expect(layout.allDay).toHaveLength(1);
-    expect(layout.clusters).toEqual([]);
+    expect(layout.spans).toEqual([]);
+    expect(layout.pins).toEqual([]);
   });
 });
 
-describe('two things at once', () => {
-  it('puts genuinely overlapping ranges in separate columns', () => {
-    const layout = layOut(items([
-      entry(event({ id: 'sleep', typeId: 'sleep', startedAt: at(DAY, 9), endedAt: at(DAY, 11) })),
-      entry(event({ id: 'walk', typeId: 'walk', startedAt: at(DAY, 10), endedAt: at(DAY, 12) })),
-    ]));
+describe('ranges and moments are two different problems', () => {
+  // A phone, less the hour labels; and half of it, which is a two-day
+  // column. Every layout question below has a different answer at each.
+  const WIDE = 346;
+  const HALF = 173;
+  const lay = (entries: DayEntry[], band = WIDE) =>
+    layOut(items(entries), DEFAULT_METRICS, band);
 
-    expect(layout.clusters).toHaveLength(1);
-    const columns = layout.clusters[0]?.placed.map((p) => p.column);
-    expect(columns).toEqual([0, 1]);
-    expect(layout.clusters[0]?.placed[0]?.columns).toBe(2);
+  it('decides that two ranges overlap by their times, never by their cards', () => {
+    // A 09:00 nap and an 09:40 walk do not overlap at all. Their cards do
+    // not either at these metrics -- but the point is that even if they
+    // did, a range's extent is a fact and a card's minimum height is an
+    // artefact of a fingertip.
+    const layout = lay([
+      entry(event({ id: 'a', typeId: 'sleep', startedAt: at(DAY, 9), endedAt: at(DAY, 9, 30) })),
+      entry(event({ id: 'b', typeId: 'walk', startedAt: at(DAY, 9, 40), endedAt: at(DAY, 10) })),
+    ]);
+
+    // Both take the whole band, one after the other.
+    expect(layout.spans.map((one) => one.width)).toEqual([1, 1]);
+    expect(layout.spans.map((one) => one.left)).toEqual([0, 0]);
   });
 
-  it('separates moments that do not overlap in time but would on screen', () => {
-    // Two bottles four minutes apart have no overlap at all, and their cards
-    // do. Spec 7.5 asks for both kinds to be laid out, which is why the
-    // card's extent decides this and not the duration.
-    const minimum = minCardMinutes(DEFAULT_METRICS);
-    expect(minimum).toBeGreaterThan(4);
+  it('leaves two short ranges alone when only their cards would collide', () => {
+    // The rule the whole redesign turns on, and the one case that can tell
+    // it from the old one. A ten-minute nursing at 09:00 and a
+    // fifteen-minute walk at 09:20 do not overlap in time at all -- but
+    // both are shorter than the 27.5 minutes a card's minimum height
+    // covers, so their *boxes* do. Under the old rule that put them in two
+    // columns; a card's minimum height is a fact about a fingertip and
+    // must never narrow a fact about a record.
+    const layout = lay([
+      entry(event({ id: 'n', typeId: 'nursing', startedAt: at(DAY, 9), endedAt: at(DAY, 9, 10) })),
+      entry(event({ id: 'w', typeId: 'walk', startedAt: at(DAY, 9, 20), endedAt: at(DAY, 9, 35) })),
+    ]);
 
-    const layout = layOut(items([
+    expect(minCardMinutes(DEFAULT_METRICS)).toBeGreaterThan(20);
+    expect(layout.spans.map((one) => one.width)).toEqual([1, 1]);
+    expect(layout.spans.map((one) => one.left)).toEqual([0, 0]);
+  });
+
+  it('shares the band between ranges whose times really do intersect', () => {
+    const layout = lay([
+      entry(event({ id: 'a', typeId: 'sleep', startedAt: at(DAY, 9), endedAt: at(DAY, 11) })),
+      entry(event({ id: 'b', typeId: 'walk', startedAt: at(DAY, 10), endedAt: at(DAY, 12) })),
+    ]);
+
+    expect(layout.spans.map((one) => one.width)).toEqual([0.5, 0.5]);
+    expect(layout.spans.map((one) => one.left)).toEqual([0, 0.5]);
+  });
+
+  it('gives the longer of two concurrent ranges the first column', () => {
+    // So the night is on the left and the fifteen minutes that overlap it
+    // are beside it, rather than the other way round.
+    const layout = lay([
+      entry(event({ id: 'walk', typeId: 'walk', startedAt: at(DAY, 21), endedAt: at(DAY, 21, 15) })),
+      entry(event({ id: 'night', typeId: 'sleep', startedAt: at(DAY, 21), endedAt: at(DAY, 23) })),
+    ]);
+
+    const night = layout.spans.find((one) => one.item.eventId === 'night');
+    expect(night?.left).toBe(0);
+  });
+
+  it('never puts a range behind a collapsed entry, at any width', () => {
+    // The owner's rule, made structural: only moments can ever merge. Five
+    // records in six minutes on a half-width column, one of them a range.
+    const layout = lay([
+      entry(event({ id: 'n', typeId: 'nursing', startedAt: at(DAY, 8), endedAt: at(DAY, 8, 13) })),
+      entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 8, 1) })),
+      entry(event({ id: 'b', typeId: 'diaper', startedAt: at(DAY, 8, 2) })),
+      entry(event({ id: 'c', typeId: 'bottle', startedAt: at(DAY, 8, 3) })),
+      entry(event({ id: 'd', typeId: 'diaper', startedAt: at(DAY, 8, 4) })),
+    ], HALF);
+
+    expect(layout.spans.map((one) => one.item.eventId)).toEqual(['n']);
+    for (const chip of layout.chips) {
+      expect(chip.members.every((one) => one.lengthMin === 0)).toBe(true);
+    }
+  });
+
+  it('keeps a lone moment the whole width of the band', () => {
+    const layout = lay([entry(event({ id: 'b', typeId: 'bottle', startedAt: at(DAY, 9) }))]);
+    expect(layout.pins[0]).toMatchObject({ left: 0, width: 1 });
+  });
+
+  it('puts two moments that collide side by side, and no more than that', () => {
+    const layout = lay([
       entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 9) })),
       entry(event({ id: 'b', typeId: 'diaper', startedAt: at(DAY, 9, 4) })),
-    ]));
+    ]);
 
-    expect(layout.clusters[0]?.placed.map((p) => p.column)).toEqual([0, 1]);
+    expect(layout.chips).toEqual([]);
+    expect(layout.pins.map((one) => one.width)).toEqual([0.5, 0.5]);
+  });
+});
+
+describe('what a moment may cover of a range, and what it may not', () => {
+  const WIDE = 346;
+  const lay = (entries: DayEntry[], band = WIDE) =>
+    layOut(items(entries), DEFAULT_METRICS, band);
+
+  const night = () => event({
+    id: 'night', typeId: 'sleep', startedAt: at(DAY, 20), endedAt: at(DAY, 23),
   });
 
-  it('reuses a column once the card above it has finished', () => {
-    // A card covers 27.5 minutes of axis at the default metrics, so the
-    // third here is clear of the first (09:00, done by 09:27) and still
-    // caught by the second (09:04, done by 09:31). It goes back to column 0
-    // rather than starting a third and squeezing the words.
-    const layout = layOut(items([
-      entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 9) })),
-      entry(event({ id: 'b', typeId: 'diaper', startedAt: at(DAY, 9, 4) })),
-      entry(event({ id: 'c', typeId: 'bottle', startedAt: at(DAY, 9, 30) })),
-    ]));
+  it('leaves a range its stripe and its badge when a moment sits on it', () => {
+    // 44px, and the number is not the tap target by coincidence: it is
+    // what keeps the extent and the type visible under a nappy.
+    const layout = lay([
+      entry(night()),
+      entry(event({ id: 'd', typeId: 'diaper', startedAt: at(DAY, 21, 30) })),
+    ]);
 
-    expect(layout.clusters).toHaveLength(1);
-    expect(layout.clusters[0]?.placed.map((p) => p.column)).toEqual([0, 1, 0]);
-    expect(layout.clusters[0]?.crowded).toBe(false);
+    expect(layout.pins[0]?.left as number * WIDE).toBeGreaterThanOrEqual(SPAN_KEEP);
+    expect(layout.pins[0]?.overSpan).toBe(true);
   });
 
-  it('starts a new cluster once nothing is left to collide with', () => {
-    const layout = layOut(items([
-      entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 9) })),
-      entry(event({ id: 'b', typeId: 'bottle', startedAt: at(DAY, 9, 50) })),
-    ]));
+  it('leaves a range its whole label zone when a moment lands at its top', () => {
+    // The words of a range are never covered. Without this the tier would
+    // depend on the coverage, the coverage on how wide the moments are, and
+    // the moments on the tier.
+    const layout = lay([
+      entry(night()),
+      entry(event({ id: 'd', typeId: 'diaper', startedAt: at(DAY, 20, 5) })),
+    ]);
 
-    expect(layout.clusters).toHaveLength(2);
-    expect(layout.clusters.map((c) => c.placed.length)).toEqual([1, 1]);
+    expect(layout.pins[0]?.left as number * WIDE).toBeGreaterThanOrEqual(labelWidthFor(WIDE));
+    expect(layout.spans[0]?.labelWidth).toBeGreaterThanOrEqual(labelWidthFor(WIDE));
   });
 
-  it('leaves things that do not collide in separate clusters', () => {
-    const layout = layOut(items([
-      entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 9) })),
-      entry(event({ id: 'b', typeId: 'bottle', startedAt: at(DAY, 15) })),
-    ]));
+  it('gives every range at least its label width, however busy the hour', () => {
+    const layout = lay([
+      entry(night()),
+      entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 20, 2) })),
+      entry(event({ id: 'b', typeId: 'diaper', startedAt: at(DAY, 20, 6) })),
+      entry(event({ id: 'c', typeId: 'bottle', startedAt: at(DAY, 20, 10) })),
+      entry(event({ id: 'd', typeId: 'diaper', startedAt: at(DAY, 20, 14) })),
+    ]);
 
-    expect(layout.clusters).toHaveLength(2);
-    expect(layout.clusters.every((c) => c.placed.length === 1)).toBe(true);
+    for (const span of layout.spans) {
+      expect(span.labelWidth).toBeGreaterThanOrEqual(Math.min(labelWidthFor(WIDE), span.width * WIDE));
+    }
   });
 
-  it('says when a stretch is too crowded for a phone, without dropping any', () => {
-    // Four at once is past what fits beside each other. The cluster is
-    // marked, the screen offers a way in, and every one of them is still
-    // here (spec 7.5).
-    const layout = layOut(items(
-      ['a', 'b', 'c', 'd'].map((id, i) =>
-        entry(event({ id, typeId: 'bottle', startedAt: at(DAY, 9, i) }))),
-    ));
+  it('does not reserve anything under a range that has finished', () => {
+    // The nappy is two hours after the night ended, so it has the band.
+    const layout = lay([
+      entry(event({ id: 's', typeId: 'sleep', startedAt: at(DAY, 9), endedAt: at(DAY, 10) })),
+      entry(event({ id: 'd', typeId: 'diaper', startedAt: at(DAY, 12) })),
+    ]);
 
-    expect(layout.clusters).toHaveLength(1);
-    expect(layout.clusters[0]?.crowded).toBe(true);
-    expect(layout.clusters[0]?.placed).toHaveLength(4);
+    expect(layout.pins[0]).toMatchObject({ left: 0, width: 1, overSpan: false });
+  });
+});
+
+describe('what merges, and what bounds it', () => {
+  const HALF = 173;
+  const lay = (entries: DayEntry[], band: number) =>
+    layOut(items(entries), DEFAULT_METRICS, band);
+
+  const many = (hour: number, count: number, from = 0): DayEntry[] =>
+    Array.from({ length: count }, (_, i) =>
+      entry(event({ id: `${hour}-${i}`, typeId: 'diaper', startedAt: at(DAY, hour, from + i) })));
+
+  it('merges nothing at all while there is room', () => {
+    const layout = lay(many(9, 3), 346);
+    expect(layout.chips).toEqual([]);
+    expect(layout.pins).toHaveLength(3);
   });
 
-  it('does not call three crowded', () => {
-    const layout = layOut(items(
-      ['a', 'b', 'c'].map((id, i) => entry(event({ id, typeId: 'bottle', startedAt: at(DAY, 9, i) }))),
-    ));
-    expect(layout.clusters[0]?.crowded).toBe(false);
+  it('offers an entry once the width has genuinely run out', () => {
+    const layout = lay(many(9, 6), HALF);
+    expect(layout.chips.length).toBeGreaterThan(0);
+    // And nothing is dropped: every record is either placed or in an entry.
+    const held = layout.chips.flatMap((chip) => chip.members).length + layout.pins.length;
+    expect(held).toBe(6);
+  });
+
+  it('never merges across a clock hour, however crowded either one is', () => {
+    // The owner's rule, and the one thing about a merge that is visible on
+    // the axis: an eight o'clock record and an eleven o'clock record can
+    // never be behind the same entry.
+    const layout = lay([...many(8, 6), ...many(11, 6)], HALF);
+
+    expect(layout.chips.length).toBeGreaterThanOrEqual(2);
+    for (const chip of layout.chips) {
+      const hours = new Set(chip.members.map((one) => Math.floor(one.startMin / 60)));
+      expect([...hours]).toEqual([chip.hour]);
+    }
+  });
+
+  it('never merges two moments four minutes apart across an hour boundary', () => {
+    // 17:58 and 18:02 are four minutes apart and in different hours, so
+    // they compete for columns and never share an entry. That is the price
+    // of a bound somebody can see, and it is worth paying.
+    const layout = lay([
+      entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 17, 58) })),
+      entry(event({ id: 'b', typeId: 'diaper', startedAt: at(DAY, 18, 2) })),
+    ], HALF);
+
+    expect(layout.chips).toEqual([]);
+    expect(layout.pins).toHaveLength(2);
+  });
+
+  it('does not make an entry out of one record', () => {
+    // A list of one is not a list; it takes the column it was heading for.
+    const layout = lay(many(9, 4), HALF);
+    for (const chip of layout.chips) expect(chip.members.length).toBeGreaterThan(1);
+  });
+
+  it('holds its members in the order they happened', () => {
+    const layout = lay(many(9, 6), HALF);
+    for (const chip of layout.chips) {
+      const starts = chip.members.map((one) => one.startMin);
+      expect(starts).toEqual([...starts].sort((a, b) => a - b));
+    }
+  });
+});
+
+describe('the evening that used to be one grey rectangle', () => {
+  // The stretch from the screenshot, at a phone's single-day width: a solid
+  // feed, a walk, two nappies, a five-hour nursing and a stopped timer.
+  const WIDE = 346;
+  const evening = (): DayEntry[] => [
+    entry(event({ id: 'solid', typeId: 'solid_food', startedAt: at(DAY, 16, 27) })),
+    entry(event({ id: 'walk', typeId: 'walk', startedAt: at(DAY, 16, 44), endedAt: at(DAY, 17, 10) })),
+    entry(event({ id: 'nappy1', typeId: 'diaper', startedAt: at(DAY, 17, 6) })),
+    entry(event({ id: 'nursing', typeId: 'nursing', startedAt: at(DAY, 17, 24), endedAt: at(DAY, 23, 11) })),
+    entry(event({ id: 'nappy2', typeId: 'diaper', startedAt: at(DAY, 17, 24) })),
+  ];
+
+  it('draws all six of them, and collapses none', () => {
+    const layout = layOut(items(evening()), DEFAULT_METRICS, WIDE);
+    expect(layout.chips).toEqual([]);
+    expect(layout.spans.length + layout.pins.length).toBe(5);
+  });
+
+  it('leaves the five-hour nursing its own block and its own words', () => {
+    const layout = layOut(items(evening()), DEFAULT_METRICS, WIDE);
+    const nursing = layout.spans.find((one) => one.item.eventId === 'nursing');
+
+    // Its extent, in full, and enough width to say what it is.
+    expect(nursing?.extentPx).toBeCloseTo(minutesToPx(5 * 60 + 47, DEFAULT_METRICS), 6);
+    expect(nursing?.labelWidth).toBeGreaterThanOrEqual(labelWidthFor(WIDE));
+    // Wide enough for the one number a range is there to carry.
+    expect(nursing?.labelWidth).toBeGreaterThan(
+      textWidth('\u4e0b\u53485:24', 10) + textWidth(' \u00b7 ', 10) + textWidth('5 \u5c0f\u6642 47 \u5206', 10) + 15,
+    );
+  });
+
+  it('does not let a nappy at 17:06 narrow a range that starts at 17:24', () => {
+    // They do not overlap in time at all. Under the old model the nappy's
+    // card box did overlap, which put the nursing in a third of the band
+    // and then the whole evening behind one button.
+    const layout = layOut(items(evening()), DEFAULT_METRICS, WIDE);
+    const nursing = layout.spans.find((one) => one.item.eventId === 'nursing');
+    const walk = layout.spans.find((one) => one.item.eventId === 'walk');
+
+    expect(nursing?.width).toBe(1);
+    expect(walk?.width).toBe(1);
   });
 });
 
@@ -386,8 +565,10 @@ describe('how tall an hour is', () => {
       entry(event({ id: 'b', typeId: 'diaper', startedAt: at(DAY, 6, 10) })),
     ]);
 
-    expect(layOut(pair, DEFAULT_METRICS).clusters).toHaveLength(2);
-    expect(layOut(pair, { ...DEFAULT_METRICS, hourHeight: 64 }).clusters).toHaveLength(1);
+    // Two full-width cards at 96, two half-width ones at 64.
+    expect(layOut(pair, DEFAULT_METRICS, 346).pins.map((one) => one.width)).toEqual([1, 1]);
+    expect(layOut(pair, { ...DEFAULT_METRICS, hourHeight: 64 }, 346).pins.map((one) => one.width))
+      .toEqual([0.5, 0.5]);
   });
 
   it('still puts ten minutes apart side by side, because they are', () => {
@@ -397,7 +578,32 @@ describe('how tall an hour is', () => {
       entry(event({ id: 'a', typeId: 'diaper', startedAt: at(DAY, 5, 59) })),
       entry(event({ id: 'b', typeId: 'bottle', startedAt: at(DAY, 6, 9) })),
     ]);
-    expect(layOut(pair, DEFAULT_METRICS).clusters).toHaveLength(1);
+    expect(layOut(pair, DEFAULT_METRICS, 346).pins.map((one) => one.width)).toEqual([0.5, 0.5]);
+  });
+});
+
+describe('roughly how wide a string is', () => {
+  it('counts a CJK glyph as wider than a digit', () => {
+    // The estimate exists so a card can decide whether it can carry a thing
+    // at all. It is allowed to be a few pixels out; it is not allowed to
+    // think two Chinese characters are the width of two digits.
+    expect(textWidth('\u5206', 10)).toBeGreaterThan(textWidth('7', 10));
+    expect(textWidth('\u4e0b\u5348', 10)).toBeCloseTo(20, 5);
+  });
+
+  it('is in the right neighbourhood for the strings cards actually carry', () => {
+    // Measured in the browser at 10px: the clock is around 40px and a long
+    // duration around 55. Both within a few pixels here, which is all the
+    // callers need -- each leaves a margin.
+    expect(textWidth('\u4e0b\u53485:24', 10)).toBeGreaterThan(30);
+    expect(textWidth('\u4e0b\u53485:24', 10)).toBeLessThan(50);
+    expect(textWidth('5 \u5c0f\u6642 47 \u5206', 10)).toBeGreaterThan(45);
+    expect(textWidth('5 \u5c0f\u6642 47 \u5206', 10)).toBeLessThan(70);
+  });
+
+  it('grows with the font size, and is zero for nothing', () => {
+    expect(textWidth('abc', 20)).toBe(textWidth('abc', 10) * 2);
+    expect(textWidth('', 12)).toBe(0);
   });
 });
 
@@ -422,46 +628,6 @@ describe('how much a card can say at its width', () => {
     expect(tierFor((390 - 44) / 2)).toBe('A');
     // And two cards inside one of those columns still say type and value.
     expect(tierFor((390 - 44) / 2 / 2 - 4)).toBe('C');
-  });
-});
-
-describe('how many cards fit across a band', () => {
-  it('fits several across a phone, at the width a card is readable at', () => {
-    // 48px, not 128. Requiring a name, a value and a clock on one line is
-    // what made the screen give up at half width; a card that narrows by
-    // dropping words needs far less (docs/timeline-design.md).
-    const band = 390 - 44;
-    expect(columnsFor(band, DEFAULT_METRICS)).toBe(MAX_COLUMNS);
-    expect(columnsFor(band / 2, DEFAULT_METRICS)).toBe(MAX_COLUMNS);
-  });
-
-  it('gives up only when a card could not be read at all', () => {
-    expect(columnsFor(100, DEFAULT_METRICS)).toBe(2);
-    expect(columnsFor(47, DEFAULT_METRICS)).toBe(1);
-  });
-
-  it('never offers less than one, and falls back when nothing was measured', () => {
-    // Zero means "nobody has measured", which is not the same as "no room".
-    expect(columnsFor(0, DEFAULT_METRICS)).toBe(MAX_COLUMNS);
-    expect(columnsFor(Number.NaN, DEFAULT_METRICS)).toBe(MAX_COLUMNS);
-  });
-
-  it('offers an entry for two at once where only one fits, and not where two do', () => {
-    // The same two records, and the answer depends on the room there is.
-    const both = items([
-      entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 9) })),
-      entry(event({ id: 'b', typeId: 'diaper', startedAt: at(DAY, 9, 4) })),
-    ]);
-
-    expect(layOut(both, DEFAULT_METRICS, 1).clusters[0]?.crowded).toBe(true);
-    expect(layOut(both, DEFAULT_METRICS, 2).clusters[0]?.crowded).toBe(false);
-    // And nothing is dropped either way (spec 7.5).
-    expect(layOut(both, DEFAULT_METRICS, 1).clusters[0]?.placed).toHaveLength(2);
-  });
-
-  it('leaves one record alone however narrow the band is', () => {
-    const one = items([entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 9) }))]);
-    expect(layOut(one, DEFAULT_METRICS, 1).clusters[0]?.crowded).toBe(false);
   });
 });
 
@@ -597,33 +763,11 @@ describe('a timer stopped here, with nobody having confirmed when', () => {
   });
 });
 
-describe('how wide a column is', () => {
-  it('divides the event area and never reaches past its right edge', () => {
-    // The fractions are of the space left after the hour labels. Adding that
-    // strip to the offset while still dividing the full width put a single
-    // column 40px past the edge, and the last of any row with it.
-    for (const columns of [1, 2, 3, 4]) {
-      for (let column = 0; column < columns; column += 1) {
-        const span = columnSpan({ item: {} as never, column, columns });
-        expect(span.left, `${column}/${columns}`).toBeGreaterThanOrEqual(0);
-        expect(span.left + span.width, `${column}/${columns}`).toBeLessThanOrEqual(1);
-      }
-    }
-  });
-
-  it('gives the columns of a row equal, non-overlapping shares', () => {
-    const spans = [0, 1, 2].map((column) => columnSpan({ item: {} as never, column, columns: 3 }));
-    expect(spans.map((s) => s.width)).toEqual([1 / 3, 1 / 3, 1 / 3]);
-    expect(spans[1]!.left).toBeCloseTo(spans[0]!.left + spans[0]!.width, 10);
-    expect(spans[2]!.left).toBeCloseTo(spans[1]!.left + spans[1]!.width, 10);
-  });
-});
-
 describe('where a day opens', () => {
   const layout = layOut(items([
     entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 7, 30) })),
     entry(event({ id: 'b', typeId: 'bottle', startedAt: at(DAY, 15) })),
-  ]));
+  ]), DEFAULT_METRICS, 346);
 
   it('opens today near the current hour', () => {
     expect(openingMinute(true, 13 * 60, layout)).toBe(13 * 60);
@@ -635,7 +779,7 @@ describe('where a day opens', () => {
   });
 
   it('has nowhere in particular to go on an empty day', () => {
-    expect(openingMinute(false, null, layOut([]))).toBeNull();
+    expect(openingMinute(false, null, layOut([], DEFAULT_METRICS, 346))).toBeNull();
   });
 });
 
@@ -651,9 +795,9 @@ describe('the axis itself', () => {
     const layout = layOut(items([
       entry(event({ id: 'a', typeId: 'bottle', startedAt: at(DAY, 3) })),
       entry(event({ id: 'b', typeId: 'bottle', startedAt: at(DAY, 9) })),
-    ]));
+    ]), DEFAULT_METRICS, 346);
 
-    const [first, second] = layout.clusters;
-    expect(second!.fromMin - first!.fromMin).toBe(6 * 60);
+    const [first, second] = layout.pins;
+    expect(second!.top - first!.top).toBe(minutesToPx(6 * 60, DEFAULT_METRICS));
   });
 });

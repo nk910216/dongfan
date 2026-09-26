@@ -307,14 +307,67 @@ types inside it in start order, the count, the stretch it covers, and a
 stripe segmented one colour per member. It is `surface` rather than a tint so
 that nobody reads it as a record.
 
-**What is still wrong, and is the next stage.** A cluster is still a
-transitive chain of card boxes, and `crowded` is still decided for the whole
-chain. A long range therefore chains everything it overlaps, and a few
-crowded minutes still collapse hours. The fix is in the design document:
-split **spans** (a real extent) from **pins** (a moment, a running timer, a
-back-filled record with no end); lay spans out by true interval overlap and
-never merge them; merge only pins, and only within one clock hour. Until that
-lands, the evening of a busy day is still one entry on the two-day screen.
+### Ranges and moments are two different layout problems
+
+`Cluster`, `crowded`, `MAX_COLUMNS`, `columnSpan` and `columnsFor` are gone,
+and with them the failure they caused: a cluster was a transitive chain of
+**card boxes**, `crowded` was decided for the whole chain, and four crowded
+minutes around 17:24 therefore collapsed 17:52 to 23:11 into one button. The
+records were not merged because they were close together. They were merged
+because something else was close together, three hours earlier.
+
+`layOut` now returns `spans`, `pins` and `chips`:
+
+- a **span** has a real extent (`lengthMin > 0`), including a stop draft,
+  whose end is this device's answer for the end;
+- a **pin** has none -- a moment, a running timer, a back-filled record with
+  no end time. Their length is not a fact yet (spec 3.4.1 rule 3).
+
+**Two spans are concurrent when their times intersect. Never their boxes.** A
+pin's box is 27.5 minutes because of a fingertip; a span's extent is a fact,
+and an artefact must not narrow a fact. Only that rule can be told apart from
+the old one by a range **shorter than 27.5 minutes**, so the test that pins it
+uses a ten-minute nursing and a fifteen-minute walk twenty minutes apart --
+the first mutation of this rule survived a suite full of hour-long naps.
+
+**Spans never merge, at any width.** Concurrent ones share the band equally
+within their group, longest in the first column. The cost, taken knowingly:
+an eight-minute feed inside a three-hour night halves the night for its whole
+length. A per-slice width would use the space better and be much harder to
+reason about.
+
+**Only pins merge, and a merge is bounded three ways**: by the clock hour, by
+kind, and by necessity. An eight o'clock record can never be behind the same
+entry as an eleven o'clock one -- the hour is a bound a parent can see on the
+axis rather than a number in the code. Two pins either side of an hour
+boundary therefore never merge however close they are, which is the price of
+that.
+
+**A pin may not cover a span's stripe, its badge or its words.** `SPAN_KEEP`
+(44px) keeps the first two; `labelWidthFor(band)` keeps the third -- 96px
+floor, 42% of the band, 150px cap. The floor is what a two-day column can
+spare; the proportion is because 96px on a 346px screen left a five-hour
+nursing unable to say five hours on a card nearly two hundred pixels wide.
+The fixed reservation is also what stops rule 11 being circular: the tier
+depends on the coverage, the coverage on how wide the pins are, and the pins
+on the tier.
+
+**A card drops what it cannot hold whole.** `textWidth` estimates a string's
+width -- CJK at one em, Latin at about half -- and anything that would be cut
+is left out instead. "1 ..." where a duration should be says less than
+nothing, and a name cut to one character beside a badge that already said the
+type is the state this redesign started from. The clock is the exception: it
+is truncated rather than dropped, because a timeline that has stopped saying
+when has stopped being a timeline.
+
+`assignColumns` keeps a real interval list per column rather than one "last
+bottom" each, because spans are placed before pins and items no longer arrive
+in start order.
+
+**The `?open=` key is `${day}@h${hour}`**, not a minute. The day is in it
+because both two-day columns have a 09:00; the hour replaced the minute
+because a minute moves when a record is added nearby, which silently closed a
+list somebody had open.
 
 ### The clock ticks every second, so nothing may depend on it by accident
 

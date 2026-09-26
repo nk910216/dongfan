@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { HttpResponse, http } from 'msw';
@@ -1273,79 +1273,125 @@ describe('looking back at one day', () => {
     expect(screen.queryByTestId('now-line')).not.toBeInTheDocument();
   });
 
-  it('offers a way into a stretch too crowded to lay out side by side', async () => {
-    // Four within a few minutes is past what fits beside each other on a
-    // phone. Nothing may be silently dropped (spec 7.5), so the stretch
-    // offers an entry and every one of them is behind it.
+  it('offers a way into an hour too crowded to lay out side by side', async () => {
+    // Six moments inside ten minutes is past what fits beside each other on
+    // a phone. Nothing may be silently dropped (spec 7.5), so the ones with
+    // no column left are behind an entry and every one of them is in it.
+    setViewportWidth(390);
     const day = daysAgo(2);
-    for (let i = 0; i < 4; i += 1) {
-      api.add({ typeId: 'bottle', startedAt: onDay(day, 9, i), value: 100 + i });
+    for (let i = 0; i < 6; i += 1) {
+      api.add({ typeId: 'diaper', startedAt: onDay(day, 9, i * 2) });
     }
 
     const user = openSignedIn(`/day/${day}`);
 
     const entry = await screen.findByTestId('crowded');
-    expect(entry).toHaveTextContent(interpolate(zhTW.calendar.crowded, { count: 4 }));
-    expect(screen.queryByTestId('slot-bottle')).not.toBeInTheDocument();
+    // Some of them are still cards; the rest are behind this.
+    const behind = Number(/(\d+)/.exec(entry.textContent ?? '')?.[1] ?? '0');
+    expect(behind).toBeGreaterThan(1);
 
     await user.click(entry);
-
-    expect(screen.getAllByTestId('slot-bottle')).toHaveLength(4);
+    expect(screen.getAllByTestId('slot-diaper')).toHaveLength(6);
   });
 
   it('says what is behind a crowded entry without it being opened', async () => {
-    // A count on its own is not an answer: four records could be four
-    // nappies or a bath, a feed and two moods, over four minutes or over
-    // seven hours. The entry names the types it holds and the stretch it
-    // covers (docs/timeline-design.md).
+    // A count on its own is not an answer: three records could be three
+    // nappies or a bath, a feed and a mood, over four minutes or over seven
+    // hours. The entry names the types it holds and the stretch it covers
+    // (docs/timeline-design.md).
+    //
+    // Six inside one hour at a phone's width: four take the columns there
+    // are, and the last column is given up to the entry along with the two
+    // that had nowhere to go.
+    setViewportWidth(390);
     const day = daysAgo(2);
     api.add({ typeId: 'bottle', startedAt: onDay(day, 9), value: 90 });
     api.add({ typeId: 'diaper', startedAt: onDay(day, 9, 2) });
     api.add({ typeId: 'bottle', startedAt: onDay(day, 9, 4), value: 110 });
     api.add({ typeId: 'solid_food', startedAt: onDay(day, 9, 6) });
+    api.add({ typeId: 'diaper', startedAt: onDay(day, 9, 8) });
+    api.add({ typeId: 'bottle', startedAt: onDay(day, 9, 10), value: 120 });
 
     openSignedIn(`/day/${day}`);
     const entry = await screen.findByTestId('crowded');
 
-    expect(entry).toHaveTextContent(interpolate(zhTW.calendar.crowded, { count: 4 }));
-    // The stretch it covers, so a four-minute huddle cannot read like an
-    // evening.
-    expect(entry).toHaveTextContent(
-      `${formatClock(onDay(day, 9), BABY.timezone)} - ${formatClock(onDay(day, 9, 6), BABY.timezone)}`,
-    );
+    expect(entry).toHaveTextContent(interpolate(zhTW.calendar.crowded, { count: 3 }));
+    // Where the stretch begins, so a four-minute huddle cannot read like an
+    // evening. At a column this narrow the end is given up before the
+    // beginning is, rather than half a range being printed with an
+    // ellipsis after it.
+    expect(entry).toHaveTextContent(formatClock(onDay(day, 9, 6), BABY.timezone));
     // And every type inside it: as badges for the eye, in start order and
     // one per type however many of that type there are...
     expect([...entry.querySelectorAll('[data-testid="chip-type"]')]
       .map((one) => (one as HTMLElement).dataset['type']))
-      .toEqual(['bottle', 'diaper', 'solid_food']);
-    // ...and named in full for a screen reader, all four of them.
+      .toEqual(['solid_food', 'diaper', 'bottle']);
+    // ...and named in full for a screen reader.
     for (const typeId of ['bottle', 'diaper', 'solid_food']) {
       expect(entry).toHaveTextContent(eventTypeName(typeId));
     }
   });
 
+  it('says both ends of the stretch where there is room for both', async () => {
+    // The same entry on a wider screen. What the width takes away is the
+    // end of the range, and nothing else.
+    const day = daysAgo(2);
+    for (let i = 0; i < 6; i += 1) {
+      api.add({ typeId: 'diaper', startedAt: onDay(day, 9, i * 2) });
+    }
+
+    openSignedIn(`/day/${day}`);
+    const entry = await screen.findByTestId('crowded');
+
+    expect(entry).toHaveTextContent(
+      `${formatClock(onDay(day, 9, 6), BABY.timezone)} - ${formatClock(onDay(day, 9, 10), BABY.timezone)}`,
+    );
+  });
+
   it('lists a crowded stretch as rows, with no duration drawn in any of them', async () => {
     // A row in the list stands for a record, not for a stretch of time. A
-    // bar scaled by duration in here would say one of them lasted longer
+    // stripe scaled by duration in here would say one of them lasted longer
     // than another because its row happened to be taller (spec 7.5).
+    setViewportWidth(390);
     const day = daysAgo(2);
-    api.add({ typeId: 'sleep', startedAt: onDay(day, 9), endedAt: onDay(day, 9, 50) });
-    for (let i = 1; i <= 3; i += 1) {
-      api.add({ typeId: 'bottle', startedAt: onDay(day, 9, i), value: 100 });
+    for (let i = 0; i < 6; i += 1) {
+      api.add({ typeId: 'bottle', startedAt: onDay(day, 9, i * 2), value: 100 });
     }
 
     const user = openSignedIn(`/day/${day}`);
     await user.click(await screen.findByTestId('crowded'));
 
     const list = await screen.findByTestId('crowded-open');
-    expect(list.querySelectorAll('[data-testid="anchor"]')).toHaveLength(0);
-
     const rows = [...list.querySelectorAll('[data-testid^="slot-"]')] as HTMLElement[];
-    expect(rows).toHaveLength(4);
+    expect(rows.length).toBeGreaterThan(1);
+
     for (const row of rows) {
       expect(row.style.top, row.dataset['testid']).toBe('');
       expect(row.style.height, row.dataset['testid']).toBe('');
+      // Its mark is a full-height chip of colour, not an extent: a list row
+      // has no time in its height.
+      const mark = row.querySelector('[data-testid="mark"]') as HTMLElement | null;
+      if (mark !== null) expect(mark.style.height).toBe('100%');
     }
+  });
+
+  it('never puts a range behind a crowded entry, however narrow the band', async () => {
+    // The owner's rule, made structural: only moments merge. A nursing in
+    // the middle of a busy hour keeps its own block at any width.
+    setViewportWidth(390);
+    const day = daysAgo(2);
+    api.add({ typeId: 'nursing', startedAt: onDay(day, 9), endedAt: onDay(day, 9, 13) });
+    for (let i = 1; i <= 6; i += 1) {
+      api.add({ typeId: 'diaper', startedAt: onDay(day, 9, i * 2) });
+    }
+
+    const user = openSignedIn(`/two/${day}`);
+    const entry = await screen.findByTestId('crowded');
+
+    // The nursing is a card on the axis, not a row in a list.
+    expect(screen.getByTestId('slot-nursing').style.top).not.toBe('');
+    await user.click(entry);
+    expect(screen.getByTestId('slot-nursing').style.top).not.toBe('');
   });
 
   it('lays three out side by side rather than hiding them', async () => {
@@ -1538,10 +1584,11 @@ describe('looking back at one day', () => {
     // A record in the morning and a crowded stretch at night. Opening the
     // stretch, tapping in and coming back had the list still open and the
     // page back at the morning, with it somewhere off the screen.
+    setViewportWidth(390);
     const day = daysAgo(2);
     api.add({ typeId: 'diaper', startedAt: onDay(day, 7) });
-    for (let i = 0; i < 4; i += 1) {
-      api.add({ typeId: 'bottle', startedAt: onDay(day, 21, i), value: 100 + i });
+    for (let i = 0; i < 6; i += 1) {
+      api.add({ typeId: 'bottle', startedAt: onDay(day, 21, i * 2), value: 100 + i });
     }
 
     const user = openSignedIn(`/day/${day}`);
@@ -1686,25 +1733,26 @@ describe('looking back at one day', () => {
   });
 
   it('keeps a crowded stretch open after going into one of its records', async () => {
+    setViewportWidth(390);
     // Opening the list, tapping in and coming back collapsed it again,
     // because the state lived in a component the navigation unmounted.
     const day = daysAgo(2);
-    for (let i = 0; i < 4; i += 1) {
-      api.add({ typeId: 'bottle', startedAt: onDay(day, 9, i), value: 100 + i });
+    for (let i = 0; i < 6; i += 1) {
+      api.add({ typeId: 'bottle', startedAt: onDay(day, 9, i * 2), value: 100 + i });
     }
 
     const user = openSignedIn(`/day/${day}`);
     await user.click(await screen.findByTestId('crowded'));
-    const first = screen.getAllByTestId('slot-bottle')[0] as HTMLElement;
-
-    await user.click(first);
+    const inList = within(screen.getByTestId('crowded-open'));
+    await user.click(inList.getAllByTestId('slot-bottle')[0] as HTMLElement);
     await screen.findByTestId('submit');
 
     await user.click(screen.getByLabelText(zhTW.addEvent.cancel));
 
-    // Back on the day, with the list still open rather than collapsed.
+    // Back on the day, with the list still open rather than collapsed, and
+    // all six still on the screen between the list and the axis.
     expect(await screen.findByTestId('crowded-open')).toBeInTheDocument();
-    expect(screen.getAllByTestId('slot-bottle')).toHaveLength(4);
+    expect(screen.getAllByTestId('slot-bottle')).toHaveLength(6);
   });
 
   it('says so rather than looking like a day that failed to load', async () => {
@@ -1922,6 +1970,7 @@ describe('two days at once', () => {
   });
 
   it('comes back to the two days after a shortcut add, still where it was', async () => {
+    setViewportWidth(390);
     // The nappy shortcut is the fastest path in the app and the easiest one
     // to drop somebody out of the screen they were on. The day is not the
     // whole of "where they were": a stretch they had opened is part of it,
@@ -1947,6 +1996,7 @@ describe('two days at once', () => {
   });
 
   it('comes back to the two days when a shortcut turns into an edit', async () => {
+    setViewportWidth(390);
     // The awkward one. The shortcut screen only takes over an entry that is
     // in doubt or has failed, so reaching this needs a nappy whose answer
     // was lost, and then the queue getting through while that screen is
@@ -2049,13 +2099,15 @@ describe('two days at once', () => {
   });
 
   it('opens one day’s crowded stretch without opening the other’s', async () => {
+    setViewportWidth(390);
     // Both columns have a 09:00. Keyed on the minute alone, pressing one
-    // opened both and closing either closed both.
+    // opened both and closing either closed both. It is keyed on the day
+    // and the hour now, which is stable across both of those.
     const later = daysAgo(2);
     const earlier = daysAgo(3);
     for (const [day, type] of [[earlier, 'bottle'], [later, 'diaper']] as const) {
-      for (let i = 0; i < 4; i += 1) {
-        api.add({ typeId: type, startedAt: onDay(day, 9, i), value: 100 + i });
+      for (let i = 0; i < 5; i += 1) {
+        api.add({ typeId: type, startedAt: onDay(day, 9, i * 2), value: 100 + i });
       }
     }
 
@@ -2067,17 +2119,20 @@ describe('two days at once', () => {
     // One opened, one still shut.
     expect(screen.getAllByTestId('crowded-open')).toHaveLength(1);
     expect(screen.getAllByTestId('crowded')).toHaveLength(1);
-    // And it is the left column's, which holds the bottles.
-    expect(screen.getAllByTestId('slot-bottle')).toHaveLength(4);
-    expect(screen.queryByTestId('slot-diaper')).not.toBeInTheDocument();
+    // And it is the left column's, which holds the bottles: the list has
+    // bottles in it and no nappies.
+    const inList = within(screen.getByTestId('crowded-open'));
+    expect(inList.getAllByTestId('slot-bottle').length).toBeGreaterThan(0);
+    expect(inList.queryByTestId('slot-diaper')).not.toBeInTheDocument();
   });
 
   it('reopens the right column’s stretch after going into one of its records', async () => {
+    setViewportWidth(390);
     const later = daysAgo(2);
     const earlier = daysAgo(3);
     for (const [day, type] of [[earlier, 'bottle'], [later, 'diaper']] as const) {
-      for (let i = 0; i < 4; i += 1) {
-        api.add({ typeId: type, startedAt: onDay(day, 9, i), value: 100 + i });
+      for (let i = 0; i < 5; i += 1) {
+        api.add({ typeId: type, startedAt: onDay(day, 9, i * 2), value: 100 + i });
       }
     }
 
@@ -2085,13 +2140,15 @@ describe('two days at once', () => {
     await waitFor(() => expect(screen.getAllByTestId('crowded')).toHaveLength(2));
 
     await user.click(screen.getAllByTestId('crowded')[1] as HTMLElement);
-    await user.click(screen.getAllByTestId('slot-diaper')[0] as HTMLElement);
+    const opened = within(screen.getByTestId('crowded-open'));
+    await user.click(opened.getAllByTestId('slot-diaper')[0] as HTMLElement);
     await screen.findByTestId('submit');
     await user.click(screen.getByLabelText(zhTW.addEvent.cancel));
 
-    await screen.findByTestId('crowded-open');
-    expect(screen.getAllByTestId('slot-diaper')).toHaveLength(4);
-    expect(screen.queryByTestId('slot-bottle')).not.toBeInTheDocument();
+    // The right column's list, open again, and still the right column's.
+    const back = within(await screen.findByTestId('crowded-open'));
+    expect(back.getAllByTestId('slot-diaper').length).toBeGreaterThan(0);
+    expect(back.queryByTestId('slot-bottle')).not.toBeInTheDocument();
   });
 
   it('files a new record under the later day', async () => {

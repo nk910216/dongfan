@@ -6,9 +6,9 @@ import { EventIconChip, FALLBACK_COLOR } from './EventIcon.js';
 import { formatClock, formatDuration } from '../lib/format.js';
 import { linkBack } from '../lib/return-to.js';
 import {
-  DEFAULT_METRICS, MINUTES_IN_DAY, POINT_PX, boxOf, columnSpan, extentOf, minutesToPx, tierFor,
+  DEFAULT_METRICS, MINUTES_IN_DAY, POINT_PX, extentOf, minutesToPx, textWidth, tierFor,
 } from '../lib/timeline.js';
-import type { Cluster, DayLayout, Metrics, Placed, Tier, TimelineItem } from '../lib/timeline.js';
+import type { DayLayout, HourChip, Metrics, Tier, TimelineItem } from '../lib/timeline.js';
 
 /**
  * A day drawn against a fixed 00:00-24:00 axis (spec 7.5).
@@ -246,14 +246,22 @@ function bodyOf(item: TimelineItem, extentPx: number, heightPx: number): string 
  * geometry at all, because a row there stands for a record and not for a
  * stretch of time.
  */
-function Card({ item, timezone, metrics, width, style, inList = false }: {
+function Card({ item, timezone, metrics, width, style, inList = false, overSpan = false }: {
   item: TimelineItem;
   timezone: string;
   metrics: Metrics;
-  /** The card's own width in pixels, which decides how much it can say. */
+  /**
+   * The width the words have, in pixels, which decides how much is said.
+   *
+   * For a moment that is the card. For a range it is the part of the card
+   * nothing is covering, which is why a nursing with a nappy on its right
+   * still says its type, its time and how long it was.
+   */
   width: number;
   style?: React.CSSProperties;
   inList?: boolean;
+  /** Drawn over a range, so it needs an edge against it. */
+  overSpan?: boolean;
 }): React.JSX.Element {
   const location = useLocation();
   const type = getEventType(item.typeId);
@@ -263,16 +271,57 @@ function Card({ item, timezone, metrics, width, style, inList = false }: {
   const extent = extentOf(item, metrics);
   const height = Number.parseFloat(String(style?.height ?? '0'));
 
-  // Name at A and B; at C the value wins, because the badge already said the
-  // type and the number did not. The clock never drops: a timeline that has
-  // stopped saying when has stopped being a timeline.
-  const showName = tier === 'A' || tier === 'B' || (tier === 'C' && parts.figure === null);
-  const figureOnTop = tier === 'A' || tier === 'C';
+  // Name at A and B only. At C the value wins, because the badge already
+  // said the type and the number did not -- and with no value the name is
+  // dropped rather than cut to one character, which is the state the owner
+  // reported: a glyph saying "solid food" beside a character saying nothing.
+  // The clock never drops: a timeline that has stopped saying when has
+  // stopped being a timeline.
+  /**
+   * What actually fits, rather than what the tier allows.
+   *
+   * The tier says what a card of this width is *entitled* to; this decides
+   * what it can hold. Anything that would be cut is left out instead: a
+   * figure truncated to "1 ..." where a duration should be says less than
+   * nothing, and a name cut to one character next to a badge that already
+   * said the type is the state the owner reported in the first place.
+   *
+   * Dropping is in order and stops at the first thing that does not fit --
+   * keeping a later, shorter item would put the card's facts in an order
+   * nobody chose.
+   */
+  const room = Math.max(width - 15, 0);
+  const fits = (candidates: (string | null)[], space: number, size: number): string[] => {
+    const out: string[] = [];
+    let used = 0;
+    for (const one of candidates) {
+      if (one === null || one === '') continue;
+      const cost = textWidth(one, size) + (out.length > 0 ? textWidth(' · ', size) : 0);
+      if (used + cost > space) break;
+      out.push(one);
+      used += cost;
+    }
+    return out;
+  };
+
+  const figureWidth = parts.figure === null ? 0 : textWidth(parts.figure, 12);
+  const figureOnTop = parts.figure !== null
+    && (tier === 'A' || tier === 'C')
+    && figureWidth + 4 <= room - 20 - 4;
+  const showName = (tier === 'A' || tier === 'B')
+    && textWidth(parts.name, 12) <= room - 20 - 4 - (figureOnTop ? figureWidth + 4 : 0);
+
+  // The clock goes on whether it fits or not: a timeline that has stopped
+  // saying when has stopped being a timeline, and it is the one thing here
+  // that is better truncated than absent.
   const secondLine = [
     parts.clock,
-    ...(figureOnTop ? [] : [parts.figure]),
-    ...(tier === 'A' || tier === 'B' ? [parts.status] : []),
-  ].filter((one): one is string => one !== null && one !== '');
+    ...fits(
+      [figureOnTop ? null : parts.figure, parts.status],
+      room - textWidth(parts.clock, 10),
+      10,
+    ),
+  ];
 
   return (
     <Link
@@ -297,6 +346,9 @@ function Card({ item, timezone, metrics, width, style, inList = false }: {
         // the record has not been settled; the time it began at is settled
         // either way, and that edge is what says it.
         borderTopStyle: 'solid',
+        // A moment over a range is on top of it, not beside it, and needs a
+        // line of ground between the two or they read as one block.
+        ...(overSpan ? { boxShadow: '0 0 0 2px var(--color-ground)' } : {}),
       }}
       data-testid={`slot-${item.typeId}`}
       data-kind={item.kind}
@@ -316,20 +368,24 @@ function Card({ item, timezone, metrics, width, style, inList = false }: {
           Square, and outside nothing: `overflow: visible` above is what
           stops a rounded corner clipping a short range into a speck. */}
       {extent.point ? (
-        <span
-          aria-hidden
-          data-testid="mark"
-          data-shape="point"
-          className="absolute rounded-full"
-          style={{
-            left: 2,
-            top: -POINT_PX / 2,
-            width: POINT_PX,
-            height: POINT_PX,
-            background: 'var(--type)',
-            display: item.carriedOver || inList ? 'none' : undefined,
-          }}
-        />
+        // Not drawn in a list or on a record carried over from yesterday:
+        // in a list there is no axis for a dot to be on, and a carried-over
+        // record began at a minute this day cannot show.
+        item.carriedOver || inList ? null : (
+          <span
+            aria-hidden
+            data-testid="mark"
+            data-shape="point"
+            className="absolute rounded-full"
+            style={{
+              left: 2,
+              top: -POINT_PX / 2,
+              width: POINT_PX,
+              height: POINT_PX,
+              background: 'var(--type)',
+            }}
+          />
+        )
       ) : (
         <span
           aria-hidden
@@ -359,12 +415,17 @@ function Card({ item, timezone, metrics, width, style, inList = false }: {
         />
       ) : null}
 
-      <span className="flex min-w-0 items-center gap-1">
+      {/* The words live in whatever width is not covered, which for a
+          range is narrower than its card (docs/timeline-design.md). */}
+      <span
+        className="flex min-w-0 items-center gap-1"
+        style={inList ? undefined : { maxWidth: `${Math.max(width - 15, 24)}px` }}
+      >
         <EventIconChip icon={type?.icon ?? 'circle-ellipsis'} color={color} size={20} />
         {showName ? (
           <span className="truncate text-[12px] font-semibold leading-tight">{parts.name}</span>
         ) : null}
-        {figureOnTop && parts.figure !== null ? (
+        {figureOnTop ? (
           <span
             className="font-numeric ml-auto shrink-0 pl-1 text-[12px] font-semibold"
             style={{ color: 'color-mix(in oklab, var(--type) 70%, var(--color-ink))' }}
@@ -374,7 +435,10 @@ function Card({ item, timezone, metrics, width, style, inList = false }: {
         ) : null}
         <StateMark item={item} />
       </span>
-      <span className="truncate text-[10px] leading-tight text-ink-faint">
+      <span
+        className="truncate text-[10px] leading-tight text-ink-faint"
+        style={inList ? undefined : { maxWidth: `${Math.max(width - 15, 24)}px` }}
+      >
         {secondLine.join(' · ')}
       </span>
     </Link>
@@ -393,22 +457,82 @@ function Card({ item, timezone, metrics, width, style, inList = false }: {
  *
  * Deliberately unlike a card: `surface` rather than a tint, and a plain
  * border, so that nobody reads it as a record.
+ *
+ * Whether it is open lives in the URL rather than in state here. Opening
+ * one, tapping into an event and coming back unmounted this component and
+ * lost it, so the list a parent had just opened collapsed under them.
+ *
+ * The key is the **day and the hour**, not a minute. Both columns of the
+ * two-day screen have a 09:00, so the day has to be in it; a minute moves
+ * when a record is added nearby, which would silently close a list somebody
+ * had open, and an hour does not. It is also the same key on both screens,
+ * so a list opened on one is still open on the other.
  */
-function Chip({ cluster, timezone, metrics, width, onOpen }: {
-  cluster: Cluster;
+const ChipBody = memo(function ChipBody({ chip, day, timezone, metrics, bandWidth }: {
+  chip: HourChip;
+  day: string;
   timezone: string;
   metrics: Metrics;
-  width: number;
-  onOpen: () => void;
+  bandWidth: number;
 }): React.JSX.Element {
-  const members = cluster.placed.map(({ item }) => item);
-  const first = members[0] as TimelineItem;
-  const last = members[members.length - 1] as TimelineItem;
+  const [search, setSearch] = useSearchParams();
+  const id = `${day}@h${chip.hour}`;
+  const open = search.get('open') === id;
+
+  const setOpen = (wanted: boolean): void => {
+    const next = new URLSearchParams(search);
+    if (wanted) next.set('open', id);
+    else next.delete('open');
+    // Replaced, not pushed: opening a list is not a place to go back to.
+    setSearch(next, { replace: true });
+  };
+
+  const width = chip.width * bandWidth - GAP;
+  const place = {
+    top: `${chip.top}px`,
+    left: `${chip.left * 100}%`,
+    width: `calc(${chip.width * 100}% - ${GAP}px)`,
+  };
+
+  if (open) {
+    // A list, so its rows carry no time geometry: a row is as tall as its
+    // words, and nothing in it is scaled by a duration. Drawing extents in
+    // here would say that one of these lasted longer than another because
+    // its row happened to be taller, which is not what a row means.
+    return (
+      <div
+        style={place}
+        className="absolute z-10 rounded-lg border border-line bg-surface p-1 shadow-lg shadow-black/50"
+        data-testid="crowded-open"
+      >
+        {chip.members.map((item) => (
+          <Card
+            key={item.key}
+            item={item}
+            timezone={timezone}
+            metrics={metrics}
+            width={bandWidth - GAP}
+            inList
+          />
+        ))}
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="min-h-11 w-full text-[11px] text-ink-dim"
+        >
+          {zhTW.calendar.crowdedClose}
+        </button>
+      </div>
+    );
+  }
+
+  const first = chip.members[0] as TimelineItem;
+  const last = chip.members[chip.members.length - 1] as TimelineItem;
 
   // Distinct types in start order. A type that appears more than once is one
   // badge carrying how many, rather than the same glyph repeated.
   const kinds: { typeId: string; count: number }[] = [];
-  for (const item of members) {
+  for (const item of chip.members) {
     const seen = kinds.find((one) => one.typeId === item.typeId);
     if (seen) seen.count += 1;
     else kinds.push({ typeId: item.typeId, count: 1 });
@@ -417,29 +541,30 @@ function Chip({ cluster, timezone, metrics, width, onOpen }: {
 
   const startOf = (item: TimelineItem): number =>
     item.event?.startedAt ?? item.queued?.input.startedAt ?? 0;
-  const range = `${formatClock(startOf(first), timezone)} - ${formatClock(startOf(last), timezone)}`;
-  // When outranks how many, so the range is the last thing the width takes.
-  const showRange = width >= 64;
+  // When outranks how many, so this is the last thing the width takes --
+  // and it gives up the end before it gives up the beginning, rather than
+  // printing half a range and an ellipsis.
+  const both = `${formatClock(startOf(first), timezone)} - ${formatClock(startOf(last), timezone)}`;
+  const range = width >= 108 ? both : formatClock(startOf(first), timezone);
+  const showRange = width >= 56;
 
   return (
     <button
       type="button"
-      onClick={onOpen}
+      onClick={() => setOpen(true)}
       data-testid="crowded"
       style={{
-        top: `${minutesToPx(cluster.fromMin, metrics)}px`,
+        ...place,
         height: `${Math.max(
-          minutesToPx(cluster.toMin - cluster.fromMin, metrics),
+          chip.height,
           showRange ? CHIP_MIN_HEIGHT : CHIP_MIN_HEIGHT_TERSE,
         )}px`,
-        left: 0,
-        right: `${GAP}px`,
       }}
       className="absolute flex min-h-11 flex-col justify-start gap-0.5 overflow-hidden rounded-lg border border-line bg-surface py-[5px] pr-1.5 pl-[9px] text-left"
     >
       {/* One segment per member, in start order, in that member's colour. */}
       <span aria-hidden className="absolute top-0 bottom-0 left-0 flex w-[3px] flex-col">
-        {members.map((item) => (
+        {chip.members.map((item) => (
           <span
             key={item.key}
             className="flex-1"
@@ -479,7 +604,7 @@ function Chip({ cluster, timezone, metrics, width, onOpen }: {
       </span>
 
       <span className="truncate text-[11px] text-ink-muted">
-        {interpolate(zhTW.calendar.crowded, { count: members.length })}
+        {interpolate(zhTW.calendar.crowded, { count: chip.members.length })}
       </span>
       {showRange ? (
         <span className="font-numeric truncate text-[10px] text-ink-faint">{range}</span>
@@ -487,126 +612,75 @@ function Chip({ cluster, timezone, metrics, width, onOpen }: {
 
       {/* Nothing is hidden from a screen reader either. */}
       <span className="sr-only">
-        {members.map((item) =>
+        {chip.members.map((item) =>
           `${eventTypeName(item.typeId)} ${formatClock(startOf(item), timezone)}`).join(', ')}
       </span>
     </button>
   );
-}
+});
 
 /**
- * One stretch of the day, and its cards.
+ * One day's records: its ranges, its moments, and any hour it had to
+ * collapse.
  *
  * Memoised because the clock ticks. `now` moves every second in the store,
- * and without this every card on the day was rebuilt each time -- which on a
- * busy day is the difference between a screen that responds and one that
- * does not.
+ * and the current-time line is next to this: without the split, every card
+ * on the day was rebuilt once a second for a line that cannot move by less
+ * than a pixel in that time.
  *
- * Whether a crowded stretch is open lives in the URL rather than in state
- * here. Opening one, tapping into an event and coming back unmounted this
- * component and lost it, so the list a parent had just opened collapsed
- * under them; in the URL it survives that, and a reload as well.
+ * Ranges are drawn first so that a moment over one sits on top of it, which
+ * is what the ring on `overSpan` says out loud.
  */
-const ClusterBody = memo(function ClusterBody({ cluster, day, timezone, metrics, bandWidth }: {
-  cluster: Cluster;
-  /** The date this band is for. Part of what identifies the stretch. */
+const Records = memo(function Records({ layout, day, timezone, metrics, bandWidth }: {
+  layout: DayLayout;
   day: string;
   timezone: string;
   metrics: Metrics;
-  /** How wide this day's band is, in pixels, which decides each card's tier. */
   bandWidth: number;
 }): React.JSX.Element {
-  const [search, setSearch] = useSearchParams();
-  // The day is in the name, not only the minute. Two columns showing two
-  // days both have a 09:00, and keyed on the minute alone opening one opened
-  // the other and closing either closed both (spec 7.6).
-  const id = `${day}@${cluster.fromMin}`;
-  const open = search.get('open') === id;
-
-  const setOpen = (wanted: boolean): void => {
-    const next = new URLSearchParams(search);
-    if (wanted) next.set('open', id);
-    else next.delete('open');
-    // Replaced, not pushed: opening a list is not a place to go back to.
-    setSearch(next, { replace: true });
-  };
-
-  // Percentages of the band this day occupies, which the parent positions.
-  // One day's band is everything right of the hour labels; two days split
-  // that between them, and neither this nor the cards below need to know
-  // which it is.
-  const place = (placed: Placed): React.CSSProperties => {
-    const box = boxOf(placed.item, metrics);
-    const { left, width } = columnSpan(placed);
-    return {
-      top: `${minutesToPx(box.top, metrics)}px`,
-      height: `${minutesToPx(box.bottom - box.top, metrics)}px`,
-      left: `${left * 100}%`,
-      width: `calc(${width * 100}% - ${GAP}px)`,
-    };
-  };
-
-  /** The same arithmetic in pixels, for deciding how much a card can say. */
-  const widthOf = (placed: Placed): number => bandWidth * columnSpan(placed).width - GAP;
-
-  // Past what fits across this band there is no width left for words, so the
-  // stretch offers a way in instead -- and every one of them is in it
-  // (spec 7.5). How many fit is the screen's to say: half a phone is not the
-  // same amount of room as all of it.
-  if (cluster.crowded && !open) {
-    return (
-      <Chip
-        cluster={cluster}
-        timezone={timezone}
-        metrics={metrics}
-        width={bandWidth - GAP}
-        onOpen={() => setOpen(true)}
-      />
-    );
-  }
-
-  if (cluster.crowded && open) {
-    // A list, so its rows carry no time geometry: a row is as tall as its
-    // words, and nothing in it is scaled by a duration. Drawing bars in
-    // here would say that one of these lasted longer than another because
-    // its row happened to be taller, which is not what a row means.
-    return (
-      <div
-        style={{ top: `${minutesToPx(cluster.fromMin, metrics)}px`, left: 0, right: `${GAP}px` }}
-        className="absolute z-10 rounded-lg border border-line bg-surface p-1 shadow-lg shadow-black/50"
-        data-testid="crowded-open"
-      >
-        {cluster.placed.map(({ item }) => (
-          <Card
-            key={item.key}
-            item={item}
-            timezone={timezone}
-            metrics={metrics}
-            width={bandWidth - GAP}
-            inList
-          />
-        ))}
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          className="min-h-11 w-full text-[11px] text-ink-dim"
-        >
-          {zhTW.calendar.crowdedClose}
-        </button>
-      </div>
-    );
-  }
-
   return (
     <>
-      {cluster.placed.map((placed) => (
+      {layout.spans.map((span) => (
         <Card
-          key={placed.item.key}
-          item={placed.item}
+          key={span.item.key}
+          item={span.item}
           timezone={timezone}
           metrics={metrics}
-          width={widthOf(placed)}
-          style={place(placed)}
+          width={span.labelWidth}
+          style={{
+            top: `${span.top}px`,
+            height: `${span.height}px`,
+            left: `${span.left * 100}%`,
+            width: `calc(${span.width * 100}% - ${GAP}px)`,
+          }}
+        />
+      ))}
+
+      {layout.pins.map((pin) => (
+        <Card
+          key={pin.item.key}
+          item={pin.item}
+          timezone={timezone}
+          metrics={metrics}
+          width={pin.width * bandWidth - GAP}
+          overSpan={pin.overSpan}
+          style={{
+            top: `${pin.top}px`,
+            height: `${pin.height}px`,
+            left: `${pin.left * 100}%`,
+            width: `calc(${pin.width * 100}% - ${GAP}px)`,
+          }}
+        />
+      ))}
+
+      {layout.chips.map((chip) => (
+        <ChipBody
+          key={chip.key}
+          chip={chip}
+          day={day}
+          timezone={timezone}
+          metrics={metrics}
+          bandWidth={bandWidth}
         />
       ))}
     </>
@@ -635,16 +709,13 @@ export function DayBand({ layout, day, timezone, metrics, nowMinutes, bandWidth,
 }): React.JSX.Element {
   return (
     <div className="absolute top-0 bottom-0" style={style}>
-      {layout.clusters.map((cluster) => (
-        <ClusterBody
-          key={cluster.key}
-          cluster={cluster}
-          day={day}
-          timezone={timezone}
-          metrics={metrics}
-          bandWidth={bandWidth}
-        />
-      ))}
+      <Records
+        layout={layout}
+        day={day}
+        timezone={timezone}
+        metrics={metrics}
+        bandWidth={bandWidth}
+      />
 
       {/* Only on today, and from the baby's clock rather than the
           device's (spec 3.4). */}

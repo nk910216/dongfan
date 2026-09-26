@@ -7,9 +7,7 @@ import {
 import { AllDayBand, DayBand, Hours, TIMELINE_GUTTER } from '../components/Timeline.js';
 import { PageMenu } from '../components/PageMenu.js';
 import { SyncState } from '../components/SyncState.js';
-import {
-  DEFAULT_METRICS, MINUTES_IN_DAY, columnsFor, itemsFor, layOut, openingMinute,
-} from '../lib/timeline.js';
+import { DEFAULT_METRICS, MINUTES_IN_DAY, itemsFor, layOut, openingMinute } from '../lib/timeline.js';
 import type { DayLayout } from '../lib/timeline.js';
 import { addQuery } from '../lib/dated-add.js';
 import { useDay, useDayScroll } from './Calendar.js';
@@ -54,23 +52,22 @@ export function TwoDays(): React.JSX.Element {
    * rather than to draw (spec 7.6).
    */
   const bandWidth = (useViewportWidth() - TIMELINE_GUTTER) / 2;
-  const columns = columnsFor(bandWidth, DEFAULT_METRICS);
 
   const left = useMemo<DayLayout>(
     () => layOut(
       itemsFor(leftRows ?? [], unsynced, stopDrafts, earlier, baby.timezone),
       DEFAULT_METRICS,
-      columns,
+      bandWidth,
     ),
-    [leftRows, unsynced, stopDrafts, earlier, baby.timezone, columns],
+    [leftRows, unsynced, stopDrafts, earlier, baby.timezone, bandWidth],
   );
   const right = useMemo<DayLayout>(
     () => layOut(
       itemsFor(rightRows ?? [], unsynced, stopDrafts, date, baby.timezone),
       DEFAULT_METRICS,
-      columns,
+      bandWidth,
     ),
-    [rightRows, unsynced, stopDrafts, date, baby.timezone, columns],
+    [rightRows, unsynced, stopDrafts, date, baby.timezone, bandWidth],
   );
 
   /** Whole minutes, so the clock ticking does not rebuild both days. */

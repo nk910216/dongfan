@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { AllDayBand, DayBand, Hours, TIMELINE_GUTTER, Timeline } from '../src/components/Timeline.js';
 import {
-  DEFAULT_METRICS, MINUTES_IN_DAY, columnsFor, itemsFor, layOut, minutesToPx,
+  DEFAULT_METRICS, MINUTES_IN_DAY, itemsFor, layOut, minutesToPx,
 } from '../src/lib/timeline.js';
 import { DRAFTS, EARLIER, EARLIER_DAY, LATER, LATER_DAY, QUEUED, TZ } from './fixtures.js';
 import '../src/index.css';
@@ -49,12 +49,7 @@ function Header({ title }: { title: string }): React.JSX.Element {
 
 function OneDay(): React.JSX.Element {
   const bandWidth = window.innerWidth - TIMELINE_GUTTER;
-  const columns = columnsFor(bandWidth, DEFAULT_METRICS);
-  const layout = layOut(
-    itemsFor(LATER_DAY, QUEUED, DRAFTS, LATER, TZ),
-    DEFAULT_METRICS,
-    columns,
-  );
+  const layout = layOut(itemsFor(LATER_DAY, QUEUED, DRAFTS, LATER, TZ), DEFAULT_METRICS, bandWidth);
   const scroller = useScrollTo(openAt);
 
   return (
@@ -75,9 +70,8 @@ function OneDay(): React.JSX.Element {
 
 function TwoDays(): React.JSX.Element {
   const bandWidth = (window.innerWidth - TIMELINE_GUTTER) / 2;
-  const columns = columnsFor(bandWidth, DEFAULT_METRICS);
-  const left = layOut(itemsFor(EARLIER_DAY, [], [], EARLIER, TZ), DEFAULT_METRICS, columns);
-  const right = layOut(itemsFor(LATER_DAY, QUEUED, DRAFTS, LATER, TZ), DEFAULT_METRICS, columns);
+  const left = layOut(itemsFor(EARLIER_DAY, [], [], EARLIER, TZ), DEFAULT_METRICS, bandWidth);
+  const right = layOut(itemsFor(LATER_DAY, QUEUED, DRAFTS, LATER, TZ), DEFAULT_METRICS, bandWidth);
   const scroller = useScrollTo(openAt);
   const column = `calc((100% - ${TIMELINE_GUTTER}px) / 2)`;
 

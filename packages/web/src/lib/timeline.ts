@@ -128,58 +128,442 @@ export type TimelineItem = {
    */
   readonly draftTooLong: boolean;
 };
-
-export type Placed = {
+/**
+ * A range, placed: a real extent on the axis with a card over it.
+ *
+ * `left` and `width` are fractions of the band rather than pixels, because
+ * the band's width in CSS is a `calc` the screen owns and this arithmetic
+ * should not have a second opinion about it. `labelWidth` is in pixels,
+ * because it answers a question about words.
+ */
+export type PlacedSpan = {
   readonly item: TimelineItem;
-  /** Column within its cluster, and how many columns that cluster has. */
-  readonly column: number;
-  readonly columns: number;
+  /** Pixels from the top of the axis; the card's top edge is the start. */
+  readonly top: number;
+  /** The card's height, at least a fingertip however short the record. */
+  readonly height: number;
+  /** The true extent, which is the stripe and where the tint stops. */
+  readonly extentPx: number;
+  readonly left: number;
+  readonly width: number;
+  /**
+   * How much of this card's own width is not covered by a pin or a chip.
+   *
+   * What the words are laid out in. Guaranteed to be at least `LABEL_W` or
+   * the card's whole width, whichever is smaller -- which is the rule that
+   * stops a range being reduced to a badge by a nappy landing on it.
+   */
+  readonly labelWidth: number;
 };
 
-export type Cluster = {
+/** A moment, placed. It has no extent, so it has no height of its own. */
+export type PlacedPin = {
+  readonly item: TimelineItem;
+  readonly top: number;
+  readonly height: number;
+  readonly left: number;
+  readonly width: number;
+  /** Drawn over a range rather than beside one, so it says so. */
+  readonly overSpan: boolean;
+};
+
+/**
+ * Moments from one clock hour that there was no room for, behind one entry.
+ *
+ * The hour is the whole of the bound, and it is a bound somebody can see on
+ * the axis rather than a number in the code: a record in the eight o'clock
+ * hour can never be behind the same entry as one from the eleven o'clock
+ * hour, whatever else is on the screen.
+ */
+export type HourChip = {
   readonly key: string;
-  /** Minutes from midnight that the cluster's boxes span. */
-  readonly fromMin: number;
-  readonly toMin: number;
-  readonly placed: readonly Placed[];
-  /**
-   * Too many at once for the width of a phone.
-   *
-   * The entry stays: spec 7.5 allows an "N of them" opening that expands,
-   * and forbids anything being silently dropped. The axis around it keeps
-   * its proportions either way.
-   */
-  readonly crowded: boolean;
+  readonly hour: number;
+  readonly members: readonly TimelineItem[];
+  readonly top: number;
+  readonly height: number;
+  readonly left: number;
+  readonly width: number;
 };
 
 export type DayLayout = {
   /** No hour belongs to these; they head the day (spec 3.9). */
   readonly allDay: readonly TimelineItem[];
-  readonly clusters: readonly Cluster[];
+  readonly spans: readonly PlacedSpan[];
+  readonly pins: readonly PlacedPin[];
+  readonly chips: readonly HourChip[];
+  /** The first minute anything happens on, for deciding where to open. */
+  readonly firstMin: number | null;
 };
 
-/** Past this many side by side, no phone has width left for words. */
-export const MAX_COLUMNS = 3;
+/**
+ * The least width a range keeps for its words, whatever lands on top of it.
+ *
+ * Enough for a badge, a type name and a clock, which is the floor a
+ * comparison screen needs: a night whose card says neither how long it was
+ * nor what it is cannot be compared with anything.
+ */
+export const LABEL_W = 96;
 
 /**
- * How many cards fit across a band, given how wide the band actually is.
+ * And how much it keeps when there is more to go round.
  *
- * Not a constant, because the two calendars do not have the same width to
- * divide: one day owns everything right of the hour labels and two days own
- * half of it each. Carrying "three side by side is fine" over to a half-width
- * column is what put four characters of a type name on screen and cut the
- * rest, which is the state spec 7.5 says to offer an entry for instead.
- *
- * A width of zero means nobody has measured yet; the old ceiling is the
- * answer then, rather than collapsing a day that may be perfectly readable.
+ * A proportion of the band rather than a constant, because 96px is the
+ * right floor for a 173px two-day column and much too little for a 346px
+ * single day -- there, a five-hour nursing had a nappy on its top corner
+ * and so could not say five hours, on a card nearly two hundred pixels
+ * wide. Capped, because past about a clock and a duration more reserved
+ * width only takes room from the moments beside it.
  */
-export function columnsFor(bandWidth: number, metrics: Metrics): number {
-  if (!Number.isFinite(bandWidth) || bandWidth <= 0) return MAX_COLUMNS;
-  const fits = Math.floor(bandWidth / metrics.minCardWidth);
-  return Math.min(Math.max(fits, 1), MAX_COLUMNS);
+export function labelWidthFor(bandWidth: number): number {
+  return Math.min(Math.max(bandWidth * 0.42, LABEL_W), 150);
 }
 
-/** A moment's mark: a dot straddling the card's top edge. */
+/**
+ * How much of a covered range stays visible: its stripe and its badge.
+ *
+ * Not the tap-target 44 by coincidence, but not the same 44 either. It is
+ * what a range needs to keep saying *how long* and *which type* while a
+ * moment sits on top of it, and those two are the ones that must never be
+ * covered.
+ */
+export const SPAN_KEEP = 44;
+
+/** Beyond this, moments beside each other stop being worth telling apart. */
+export const MAX_PIN_COLUMNS = 4;
+
+/** Is this a range with a real extent, or a moment? */
+function isSpan(item: TimelineItem): boolean {
+  return item.lengthMin > 0;
+}
+
+type Interval = { readonly from: number; readonly to: number };
+
+const overlaps = (a: Interval, b: Interval): boolean => a.from < b.to && b.from < a.to;
+
+/** Greedy by start: the first column free for the whole of this interval. */
+function assignColumns<T>(
+  entries: readonly { readonly key: T; readonly at: Interval }[],
+): Map<T, number> {
+  // A real interval list per column, not one "last bottom" each: ranges are
+  // placed before moments, so entries no longer arrive in start order and a
+  // single number per column is then wrong.
+  const columns: Interval[][] = [];
+  const placed = new Map<T, number>();
+
+  for (const entry of entries) {
+    let column = columns.findIndex((taken) => !taken.some((one) => overlaps(one, entry.at)));
+    if (column === -1) {
+      column = columns.length;
+      columns.push([]);
+    }
+    (columns[column] as Interval[]).push(entry.at);
+    placed.set(entry.key, column);
+  }
+
+  return placed;
+}
+
+/** Groups by transitive overlap of whatever interval is handed in. */
+function groupBy<T>(
+  entries: readonly { readonly key: T; readonly at: Interval }[],
+): { readonly key: T; readonly at: Interval }[][] {
+  const sorted = [...entries].sort((a, b) => a.at.from - b.at.from || a.at.to - b.at.to);
+  const groups: { key: T; at: Interval }[][] = [];
+  let reach = -Infinity;
+
+  for (const entry of sorted) {
+    const last = groups[groups.length - 1];
+    if (last === undefined || entry.at.from >= reach) groups.push([entry]);
+    else last.push(entry);
+    reach = last === undefined || entry.at.from >= reach
+      ? entry.at.to
+      : Math.max(reach, entry.at.to);
+  }
+
+  return groups;
+}
+
+/**
+ * A day's records, placed on a band of a given width.
+ *
+ * The one structural decision here is that **ranges and moments are two
+ * different problems** (docs/timeline-design.md, spec 7.5):
+ *
+ * - A range has a real extent, so two ranges are concurrent when their
+ *   *times* intersect. Never their cards: a moment's card covers 27.5
+ *   minutes because of a fingertip, and letting that artefact narrow a fact
+ *   is how a nappy at 17:06 pushed a five-hour nursing into a third of the
+ *   band and then into a collapsed cluster. **Ranges never merge.**
+ * - A moment has no extent, so its card's box is all there is to go on. Two
+ *   moments collide when their boxes do, and when the width genuinely runs
+ *   out the excess merge -- but only ever with moments from the **same clock
+ *   hour**.
+ *
+ * What is gone with the old model: a cluster was a transitive chain of card
+ * boxes and `crowded` was decided for the whole chain, so four crowded
+ * minutes collapsed six and a half hours of an evening into one button.
+ */
+export function layOut(
+  items: readonly TimelineItem[],
+  metrics: Metrics = DEFAULT_METRICS,
+  bandWidth = 0,
+): DayLayout {
+  const { allDay, timed } = splitAllDay(items);
+  const width = bandWidth > 0 ? bandWidth : DEFAULT_BAND;
+
+  const spans = placeSpans(timed.filter(isSpan), metrics, width);
+  const { pins, chips } = placePins(timed.filter((one) => !isSpan(one)), spans, metrics, width);
+
+  const starts = [...spans, ...pins].map(({ item }) => item.startMin);
+  return {
+    allDay,
+    spans: spans.map((span) => ({
+      ...span,
+      labelWidth: uncoveredWidth(span, pins, chips, metrics, width),
+    })),
+    pins,
+    chips,
+    firstMin: starts.length === 0 ? null : Math.min(...starts),
+  };
+}
+
+/**
+ * A band width to fall back on before anything has been measured.
+ *
+ * A phone, less the hour labels. Laying a day out against a width of zero
+ * would put every record in one column and merge most of the day, which is
+ * a worse first paint than being slightly wrong for one frame.
+ */
+const DEFAULT_BAND = 346;
+
+type Sized = Omit<PlacedSpan, 'labelWidth'>;
+
+/**
+ * Ranges, by true overlap, sharing the band equally within a group.
+ *
+ * Uniform width across a group means a range's width does not change part
+ * way down it, which is the predictability a calendar buys at the cost of
+ * some space: a fifteen-minute walk at 21:00 halves an eight-hour night for
+ * the whole night. A per-slice width would use the space better and be much
+ * harder to read.
+ */
+function placeSpans(
+  items: readonly TimelineItem[],
+  metrics: Metrics,
+  bandWidth: number,
+): Sized[] {
+  const entries = items.map((item) => ({
+    key: item,
+    at: { from: item.startMin, to: item.startMin + item.lengthMin },
+  }));
+
+  const out: Sized[] = [];
+
+  for (const group of groupBy(entries)) {
+    // Longest first within a start, so the night takes column 0 and the
+    // fifteen minutes that overlap it take column 1.
+    const ordered = [...group].sort((a, b) =>
+      a.at.from - b.at.from || (b.at.to - b.at.from) - (a.at.to - a.at.from));
+    const columns = assignColumns(ordered);
+    const count = Math.max(...[...columns.values()].map((one) => one + 1), 1);
+
+    for (const { key: item } of ordered) {
+      const column = columns.get(item) ?? 0;
+      const box = boxOf(item, metrics);
+      out.push({
+        item,
+        top: minutesToPx(box.top, metrics),
+        height: minutesToPx(box.bottom - box.top, metrics),
+        extentPx: extentOf(item, metrics).px,
+        left: column / count,
+        width: 1 / count,
+      });
+    }
+  }
+
+  // More concurrent ranges than the band can give a readable width to means
+  // narrow cards, not hidden ones. One baby can have at most one live timer
+  // per range type (spec 3.5), so this is a data anomaly rather than a day,
+  // and a card nobody can read still beats a record nobody can reach.
+  void bandWidth;
+  return out;
+}
+
+/** Rows of the band that a placed range's card occupies, in pixels. */
+const rowsOf = (span: Sized): Interval => ({ from: span.top, to: span.top + span.height });
+
+/** The rows a range keeps its words in: the top of its card, one card tall. */
+const labelRowsOf = (span: Sized, metrics: Metrics): Interval =>
+  ({ from: span.top, to: span.top + Math.min(span.height, metrics.minCardHeight) });
+
+/**
+ * How far from the band's left a moment must start, to cover no range's
+ * stripe, badge or words.
+ *
+ * Two reserves, and the wider one wins: a range under this moment keeps
+ * `SPAN_KEEP`, and a range whose *label zone* is in these rows keeps its
+ * whole label width. The second is what makes rule 11 terminate -- without
+ * a fixed reservation the tier depends on the coverage, the coverage on how
+ * wide the moments are, and the moments on the tier.
+ */
+function reserveFor(box: Interval, spans: readonly Sized[], metrics: Metrics, bandWidth: number): number {
+  let reserve = 0;
+
+  for (const span of spans) {
+    const leftPx = span.left * bandWidth;
+    const widthPx = span.width * bandWidth;
+
+    if (overlaps(rowsOf(span), box)) {
+      reserve = Math.max(reserve, leftPx + Math.min(SPAN_KEEP, widthPx));
+    }
+    if (overlaps(labelRowsOf(span, metrics), box)) {
+      reserve = Math.max(reserve, leftPx + Math.min(labelWidthFor(bandWidth), widthPx) + GAP);
+    }
+  }
+
+  return reserve;
+}
+
+/** Between a card and the next column. The screen uses the same number. */
+const GAP = 4;
+
+function placePins(
+  items: readonly TimelineItem[],
+  spans: readonly Sized[],
+  metrics: Metrics,
+  bandWidth: number,
+): { pins: PlacedPin[]; chips: HourChip[] } {
+  const entries = items.map((item) => {
+    const box = boxOf(item, metrics);
+    return {
+      key: item,
+      at: { from: minutesToPx(box.top, metrics), to: minutesToPx(box.bottom, metrics) },
+    };
+  });
+
+  const pins: PlacedPin[] = [];
+  const chips: HourChip[] = [];
+
+  for (const group of groupBy(entries)) {
+    // One reserve for the whole group, so its columns line up. Computed from
+    // the widest any member needs: a grid that shifted from row to row would
+    // read as records jumping sideways down the screen.
+    const reserve = Math.max(
+      ...group.map(({ at }) => reserveFor(at, spans, metrics, bandWidth)),
+      0,
+    );
+    const available = Math.max(bandWidth - reserve, metrics.minCardWidth);
+
+    const columns = assignColumns(group);
+    const needed = Math.max(...[...columns.values()].map((one) => one + 1), 1);
+    const fits = Math.max(1, Math.min(
+      Math.floor(available / metrics.minCardWidth),
+      MAX_PIN_COLUMNS,
+    ));
+    const count = Math.min(needed, fits);
+    const columnWidth = available / count;
+
+    const placed: PlacedPin[] = [];
+    const overflow: TimelineItem[] = [];
+
+    for (const { key: item, at } of group) {
+      const column = columns.get(item) ?? 0;
+      if (column >= count) {
+        overflow.push(item);
+        continue;
+      }
+      placed.push({
+        item,
+        top: at.from,
+        height: at.to - at.from,
+        left: (reserve + column * columnWidth) / bandWidth,
+        width: columnWidth / bandWidth,
+        overSpan: spans.some((span) => overlaps(rowsOf(span), at)),
+      });
+    }
+
+    const rightmost = count - 1;
+    const hours = [...new Set(overflow.map((item) => Math.floor(item.startMin / 60)))];
+
+    for (const hour of hours) {
+      // Everything already in the rightmost column that started in this hour
+      // joins them, so the entry takes one column rather than sitting on top
+      // of a card that happens to be under it.
+      const evicted = placed.filter((one) =>
+        one.left * bandWidth >= reserve + rightmost * columnWidth - 0.5
+        && Math.floor(one.item.startMin / 60) === hour);
+      const members = [...evicted.map((one) => one.item),
+        ...overflow.filter((item) => Math.floor(item.startMin / 60) === hour)]
+        .sort((a, b) => a.startMin - b.startMin);
+
+      if (members.length === 1) {
+        // One record is not a list. It takes the column it was heading for.
+        const only = members[0] as TimelineItem;
+        if (!placed.some((one) => one.item === only)) {
+          const box = boxOf(only, metrics);
+          placed.push({
+            item: only,
+            top: minutesToPx(box.top, metrics),
+            height: minutesToPx(box.bottom - box.top, metrics),
+            left: (reserve + rightmost * columnWidth) / bandWidth,
+            width: columnWidth / bandWidth,
+            overSpan: spans.some((span) => overlaps(rowsOf(span), {
+              from: minutesToPx(box.top, metrics), to: minutesToPx(box.bottom, metrics),
+            })),
+          });
+        }
+        continue;
+      }
+
+      for (const gone of evicted) placed.splice(placed.indexOf(gone), 1);
+
+      const first = members[0] as TimelineItem;
+      const last = members[members.length - 1] as TimelineItem;
+      chips.push({
+        key: `chip:${hour}:${first.key}`,
+        hour,
+        members,
+        top: minutesToPx(first.startMin, metrics),
+        height: minutesToPx(last.startMin - first.startMin, metrics) + metrics.minCardHeight,
+        left: (reserve + rightmost * columnWidth) / bandWidth,
+        width: columnWidth / bandWidth,
+      });
+    }
+
+    pins.push(...placed);
+  }
+
+  return { pins, chips };
+}
+
+/**
+ * The widest strip of a range's card, from its own left edge, that nothing
+ * covers across the rows its words live in.
+ *
+ * The tier comes from this rather than from the column width, so a range
+ * with a nappy sitting on its right-hand half still says its type, its time
+ * and how long it was.
+ */
+function uncoveredWidth(
+  span: Sized,
+  pins: readonly PlacedPin[],
+  chips: readonly HourChip[],
+  metrics: Metrics,
+  bandWidth: number,
+): number {
+  const rows = labelRowsOf(span, metrics);
+  const leftPx = span.left * bandWidth;
+  let right = leftPx + span.width * bandWidth;
+
+  for (const one of [...pins, ...chips]) {
+    if (!overlaps({ from: one.top, to: one.top + one.height }, rows)) continue;
+    const coverLeft = one.left * bandWidth;
+    if (coverLeft > leftPx) right = Math.min(right, coverLeft - GAP);
+  }
+
+  return Math.max(right - leftPx, 0);
+}
+
 export const POINT_PX = 7;
 
 /**
@@ -228,6 +612,32 @@ export function extentOf(item: TimelineItem, metrics: Metrics): Extent {
  * timeline (docs/timeline-design.md).
  */
 export type Tier = 'A' | 'B' | 'C' | 'D';
+
+/**
+ * Roughly how wide a string is, in pixels, at a given size.
+ *
+ * An estimate, and deliberately a cheap one: measuring text means a DOM, a
+ * layout pass and a number that arrives after the render that needed it.
+ * What it is for is deciding whether a card can carry a thing at all --
+ * "1 ..." where a duration should be says less than nothing, and a card is
+ * better off dropping the figure than cutting it in half.
+ *
+ * A CJK glyph is one em; Latin letters and digits are a little over half;
+ * punctuation and spaces are narrower again. Wrong by a few pixels either
+ * way, which is why every caller leaves a margin.
+ */
+export function textWidth(text: string, fontSize: number): number {
+  let ems = 0;
+  for (const character of text) {
+    const point = character.codePointAt(0) ?? 0;
+    if (point > 0x2e80) ems += 1;
+    else if (character === ' ') ems += 0.3;
+    else if (':.,'.includes(character)) ems += 0.32;
+    else if (character === '·' || character === '-') ems += 0.45;
+    else ems += 0.58;
+  }
+  return ems * fontSize;
+}
 
 export function tierFor(width: number): Tier {
   if (width >= 160) return 'A';
@@ -372,91 +782,13 @@ export function boxOf(item: TimelineItem, metrics: Metrics): { top: number; bott
  * top of one another. Grouping on the card's extent catches both, which is
  * why `boxOf` is what is compared and not the duration.
  */
-export function layOut(
-  items: readonly TimelineItem[],
-  metrics: Metrics = DEFAULT_METRICS,
-  maxColumns: number = MAX_COLUMNS,
-): DayLayout {
-  const { allDay, timed } = splitAllDay(items);
-
-  const sorted = [...timed].sort((a, b) =>
-    a.startMin - b.startMin || b.lengthMin - a.lengthMin || (a.key < b.key ? -1 : 1));
-
-  const clusters: Cluster[] = [];
-  let current: TimelineItem[] = [];
-  let reach = -1;
-
-  const close = (): void => {
-    if (current.length === 0) return;
-    const placed = assignColumns(current, metrics);
-    const columns = placed.reduce((most, one) => Math.max(most, one.column + 1), 1);
-    const first = current[0] as TimelineItem;
-    clusters.push({
-      key: `cluster:${first.startMin}:${first.key}`,
-      fromMin: first.startMin,
-      toMin: reach,
-      placed: placed.map((one) => ({ ...one, columns })),
-      crowded: columns > maxColumns,
-    });
-    current = [];
-  };
-
-  for (const item of sorted) {
-    const box = boxOf(item, metrics);
-    if (current.length > 0 && box.top >= reach) close();
-    current.push(item);
-    reach = current.length === 1 ? box.bottom : Math.max(reach, box.bottom);
-  }
-  close();
-
-  return { allDay, clusters };
-}
-
-/**
- * A column's share of the width, as fractions of the **event area**.
- *
- * Not of the whole page. The hour labels take a fixed strip off the left, and
- * an earlier version added that strip to the offset while still dividing the
- * full width -- so a single column ran 40px past the right edge, and so did
- * the last of any row. The screen turns these fractions into a `calc` that
- * subtracts the strip once.
- */
-export function columnSpan(placed: Placed): { left: number; width: number } {
-  return { left: placed.column / placed.columns, width: 1 / placed.columns };
-}
-
-/**
- * Where a day should open, in minutes from midnight.
- *
- * Today near the current hour; any other day on its first record, because
- * the top of an empty night is not where the day is. Null when there is
- * nothing to go to and the top will do.
- */
 export function openingMinute(
   isToday: boolean,
   nowMinutes: number | null,
   layout: DayLayout,
 ): number | null {
   if (isToday) return nowMinutes;
-  return layout.clusters[0]?.fromMin ?? null;
+  return layout.firstMin;
 }
 
 /** Greedy by start: the first column whose last card has finished. */
-function assignColumns(
-  items: readonly TimelineItem[],
-  metrics: Metrics,
-): { item: TimelineItem; column: number; columns: number }[] {
-  const ends: number[] = [];
-
-  return items.map((item) => {
-    const box = boxOf(item, metrics);
-    let column = ends.findIndex((end) => end <= box.top);
-    if (column === -1) {
-      column = ends.length;
-      ends.push(box.bottom);
-    } else {
-      ends[column] = box.bottom;
-    }
-    return { item, column, columns: 1 };
-  });
-}

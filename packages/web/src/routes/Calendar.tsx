@@ -8,9 +8,7 @@ import { SyncState } from '../components/SyncState.js';
 import { TIMELINE_GUTTER, Timeline } from '../components/Timeline.js';
 import { calendarDay } from '../lib/db.js';
 import type { DayEntry, StopDraft } from '../lib/db.js';
-import {
-  DEFAULT_METRICS, MINUTES_IN_DAY, columnsFor, itemsFor, layOut, openingMinute,
-} from '../lib/timeline.js';
+import { DEFAULT_METRICS, MINUTES_IN_DAY, itemsFor, layOut, openingMinute } from '../lib/timeline.js';
 import { useStore } from '../lib/store.js';
 import { useViewportWidth } from '../lib/viewport.js';
 
@@ -142,19 +140,18 @@ export function Calendar(): React.JSX.Element {
 
   const entries = useDay(date, stopDrafts);
 
-  // One day owns everything right of the hour labels. That width decides
-  // both how many cards fit across it and how much each one can say, so it
-  // is measured rather than assumed (spec 7.5).
+  // One day owns everything right of the hour labels. That width decides how
+  // much each card can say and whether an hour has to be collapsed at all,
+  // so it is measured rather than assumed (spec 7.5).
   const bandWidth = useViewportWidth() - TIMELINE_GUTTER;
-  const columns = columnsFor(bandWidth, DEFAULT_METRICS);
 
   const layout = useMemo(
     () => layOut(
       itemsFor(entries ?? [], unsynced, stopDrafts, isRealLocalDate(date) ? date : today, baby.timezone),
       DEFAULT_METRICS,
-      columns,
+      bandWidth,
     ),
-    [entries, unsynced, stopDrafts, date, today, baby.timezone, columns],
+    [entries, unsynced, stopDrafts, date, today, baby.timezone, bandWidth],
   );
 
   /**
@@ -183,7 +180,9 @@ export function Calendar(): React.JSX.Element {
 
   const nothing = entries !== null
     && layout.allDay.length === 0
-    && layout.clusters.length === 0;
+    && layout.spans.length === 0
+    && layout.pins.length === 0
+    && layout.chips.length === 0;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
