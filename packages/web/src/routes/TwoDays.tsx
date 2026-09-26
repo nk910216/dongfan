@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import {
@@ -12,7 +12,7 @@ import type { DayLayout } from '../lib/timeline.js';
 import { addQuery } from '../lib/dated-add.js';
 import { useDay, useDayScroll } from './Calendar.js';
 import { useStore } from '../lib/store.js';
-import { useViewportWidth } from '../lib/viewport.js';
+import { useMeasuredWidth } from '../lib/viewport.js';
 
 /**
  * Two days side by side, on one set of hours (spec 7.6).
@@ -51,7 +51,12 @@ export function TwoDays(): React.JSX.Element {
    * which is the state spec 7.5 says to offer an "N of them" entry for
    * rather than to draw (spec 7.6).
    */
-  const bandWidth = (useViewportWidth() - TIMELINE_GUTTER) / 2;
+  // Measured off the element rather than taken from the window: the shell
+  // is capped at `max-w-md`, so at a 1024px window this believed each
+  // column had 490px when it had about 202 -- and the reserve, the number
+  // of columns and which words to drop were all decided on that number.
+  const measure = useRef<HTMLDivElement | null>(null);
+  const bandWidth = Math.max((useMeasuredWidth(measure) - TIMELINE_GUTTER) / 2, 0);
 
   const left = useMemo<DayLayout>(
     () => layOut(
@@ -139,7 +144,10 @@ export function TwoDays(): React.JSX.Element {
       </div>
 
       <div
-        ref={scroller}
+        ref={(node) => {
+          scroller.current = node;
+          measure.current = node;
+        }}
         onScroll={onScroll}
         // Never sideways. The axis scrolls up and down and nothing else: a
         // card placed past the right-hand edge turned a phone into a screen

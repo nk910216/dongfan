@@ -77,17 +77,78 @@ export function setOnline(online: boolean): void {
 }
 
 /**
- * How wide the window is.
+ * The width the calendars measure off their container.
  *
- * Not decoration: it is what decides how many cards fit across a calendar
- * band, and therefore when a stretch is offered as an "N of them" entry
- * instead of laid out side by side (spec 7.5, 7.6). jsdom's default is a
- * desktop, so a test about a phone has to say so.
+ * Not decoration: it decides how many cards fit across a band, how much
+ * each can say, and whether an hour has to be folded (spec 7.5, 7.6).
+ *
+ * jsdom performs no layout at all, so `clientWidth` is zero and a
+ * `ResizeObserver` would have nothing to report. This stands in for the
+ * browser's measurement, and it stands in for the *shell* rather than the
+ * window: `App` is `max-w-md`, so a wide window gives a 448px container and
+ * a phone gives the whole of itself. Getting that wrong in the app is
+ * exactly the bug this exists to let a test catch.
  */
+const SHELL_MAX = 448;
+let measured: number | null = null;
+
 export function setViewportWidth(width: number): void {
   Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
   window.dispatchEvent(new Event('resize'));
+  notifyObservers();
 }
+
+/**
+ * Pins the container's width apart from the window's.
+ *
+ * For the case the shell's cap creates and nothing else can reach: a window
+ * far wider than the box the app is actually drawn in.
+ */
+export function setMeasuredWidth(width: number | null): void {
+  measured = width;
+  notifyObservers();
+}
+
+const containerWidth = (): number => measured ?? Math.min(window.innerWidth, SHELL_MAX);
+
+const observers = new Set<{ notify: () => void }>();
+const notifyObservers = (): void => observers.forEach((one) => one.notify());
+
+class StubResizeObserver {
+  private readonly callback: ResizeObserverCallback;
+
+  private readonly targets = new Set<Element>();
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+  }
+
+  observe(target: Element): void {
+    this.targets.add(target);
+    observers.add(this);
+    this.notify();
+  }
+
+  unobserve(target: Element): void {
+    this.targets.delete(target);
+  }
+
+  disconnect(): void {
+    this.targets.clear();
+    observers.delete(this);
+  }
+
+  notify(): void {
+    const width = containerWidth();
+    const entries = [...this.targets].map((target) => ({
+      target,
+      contentRect: { width, height: 0, top: 0, left: 0, bottom: 0, right: 0, x: 0, y: 0 },
+    })) as unknown as ResizeObserverEntry[];
+    if (entries.length > 0) this.callback(entries, this as unknown as ResizeObserver);
+  }
+}
+
+globalThis.ResizeObserver = StubResizeObserver as unknown as typeof ResizeObserver;
 
 const DESKTOP_WIDTH = window.innerWidth;
 
@@ -177,6 +238,7 @@ afterEach(async () => {
   resetUpdate();
   setOnline(true);
   // A phone in one test is not a phone in the next one.
+  setMeasuredWidth(null);
   setViewportWidth(DESKTOP_WIDTH);
   closeDb();
   globalThis.indexedDB = new IDBFactory();

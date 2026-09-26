@@ -231,9 +231,38 @@ export const SPAN_KEEP = 44;
 /** Beyond this, moments beside each other stop being worth telling apart. */
 export const MAX_PIN_COLUMNS = 4;
 
-/** Is this a range with a real extent, or a moment? */
-function isSpan(item: TimelineItem): boolean {
-  return item.lengthMin > 0;
+/**
+ * Is this record's card its own extent, or is the card bigger than it?
+ *
+ * **This, not "does it have a duration", is where the two layout problems
+ * divide.** A card is at least a fingertip tall whatever the record, so a
+ * five-minute nursing gets a 44px card covering 27.5 minutes of axis -- and
+ * that size is a fact about a fingertip, exactly as a moment's is. Laying it
+ * out by its real minutes, as though the card were those minutes, put two
+ * five-minute feeds ten minutes apart in the same column with 28px of one
+ * card on top of the other.
+ *
+ * When the card *is* the extent the arithmetic is safe, and that is the
+ * whole reason the line is here: if a card's height is its duration, then
+ * two records whose times do not intersect have cards that do not intersect
+ * either. Nothing else needs checking.
+ *
+ * It is also the same line that decides whether the tint fills the card.
+ */
+function isBlock(item: TimelineItem, metrics: Metrics): boolean {
+  return item.lengthMin >= minCardMinutes(metrics);
+}
+
+/**
+ * May this record be folded into an "N of them"?
+ *
+ * Only a record with no duration at all. A range always keeps its own block,
+ * however short it is and however narrow the screen (spec 7.5) -- being laid
+ * out among the moments is about *where* it is drawn, not about whether it
+ * can be hidden behind a count.
+ */
+function isMergeable(item: TimelineItem): boolean {
+  return item.lengthMin <= 0;
 }
 
 type Interval = { readonly from: number; readonly to: number };
@@ -311,10 +340,19 @@ export function layOut(
   const { allDay, timed } = splitAllDay(items);
   const width = bandWidth > 0 ? bandWidth : DEFAULT_BAND;
 
-  const spans = placeSpans(timed.filter(isSpan), metrics, width);
-  const { pins, chips } = placePins(timed.filter((one) => !isSpan(one)), spans, metrics, width);
+  const spans = placeSpans(timed.filter((one) => isBlock(one, metrics)), metrics, width);
+  const { pins, chips } = placePins(
+    timed.filter((one) => !isBlock(one, metrics)),
+    spans,
+    metrics,
+    width,
+  );
 
-  const starts = [...spans, ...pins].map(({ item }) => item.startMin);
+  const starts = [
+    ...spans.map(({ item }) => item.startMin),
+    ...pins.map(({ item }) => item.startMin),
+    ...chips.flatMap((chip) => chip.members.map((one) => one.startMin)),
+  ];
   return {
     allDay,
     spans: spans.map((span) => ({
@@ -382,9 +420,17 @@ function placeSpans(
   }
 
   // More concurrent ranges than the band can give a readable width to means
-  // narrow cards, not hidden ones. One baby can have at most one live timer
-  // per range type (spec 3.5), so this is a data anomaly rather than a day,
-  // and a card nobody can read still beats a record nobody can reach.
+  // narrow cards, not hidden ones -- a card nobody can read still beats a
+  // record nobody can reach, and a range may never be folded into an entry
+  // (spec 7.5).
+  //
+  // An earlier note here said this could barely happen, because spec 3.5
+  // allows one live timer per range type. That is wrong and was caught in
+  // review: `active = 1` constrains *running* timers and nothing else.
+  // Finished and back-filled ranges have no such limit, so ten overlapping
+  // sleeps can be written by hand. The behaviour above is therefore the
+  // defined answer for a real case rather than a formality: they share the
+  // band equally and get narrow.
   void bandWidth;
   return out;
 }
@@ -427,12 +473,31 @@ function reserveFor(box: Interval, spans: readonly Sized[], metrics: Metrics, ba
 /** Between a card and the next column. The screen uses the same number. */
 const GAP = 4;
 
+/**
+ * Everything whose card is bigger than its extent: moments, running timers,
+ * back-filled records with no end, and ranges too short to fill a card.
+ *
+ * Two rules hold here whatever the width:
+ *
+ * - **Nothing is ever stacked.** Columns are assigned greedily over real
+ *   intervals, so two cards can share a column only when they do not
+ *   overlap. When there is not enough width the columns get narrower than
+ *   `minCardWidth`; they never get put on top of one another. Placing an
+ *   overflowed record back into the last column was doing exactly that --
+ *   two nappies four minutes apart came out with identical geometry.
+ * - **Merging is the last resort and is bounded by the clock hour.** It
+ *   happens only when the columns would not otherwise fit, one hour at a
+ *   time, busiest first, and only ever to records with no duration.
+ */
 function placePins(
   items: readonly TimelineItem[],
   spans: readonly Sized[],
   metrics: Metrics,
   bandWidth: number,
 ): { pins: PlacedPin[]; chips: HourChip[] } {
+  const pins: PlacedPin[] = [];
+  const chips: HourChip[] = [];
+
   const entries = items.map((item) => {
     const box = boxOf(item, metrics);
     return {
@@ -441,9 +506,6 @@ function placePins(
     };
   });
 
-  const pins: PlacedPin[] = [];
-  const chips: HourChip[] = [];
-
   for (const group of groupBy(entries)) {
     // One reserve for the whole group, so its columns line up. Computed from
     // the widest any member needs: a grid that shifted from row to row would
@@ -451,99 +513,121 @@ function placePins(
     //
     // **Clamped to what the band actually has.** Asking for more than there
     // is and then widening the columns to the minimum anyway put records
-    // past the right-hand edge -- up to 43% past it on a narrow column, and
-    // 7% past it on a whole phone, which on a real iPhone is a screen you
-    // have to swipe sideways to read. When the two cannot both be had,
-    // being on the screen wins and the range gives up some of its reserve.
+    // past the right-hand edge -- up to 43% past it on a narrow column,
+    // which on a real iPhone is a screen you have to swipe sideways to
+    // read. When the two cannot both be had, being on the screen wins and
+    // the range gives up some of its reserve.
     const wanted = Math.max(
       ...group.map(({ at }) => reserveFor(at, spans, metrics, bandWidth)),
       0,
     );
     const reserve = Math.max(Math.min(wanted, bandWidth - metrics.minCardWidth), 0);
     const available = bandWidth - reserve;
-
-    const columns = assignColumns(group);
-    const needed = Math.max(...[...columns.values()].map((one) => one + 1), 1);
     const fits = Math.max(1, Math.min(
       Math.floor(available / metrics.minCardWidth),
       MAX_PIN_COLUMNS,
     ));
-    const count = Math.min(needed, fits);
+
+    // A box is one record, or one hour's worth of them behind an entry.
+    let boxes: Box[] = group.map(({ key, at }) => ({ members: [key], at }));
+    let columns = assignColumns(boxes.map((box) => ({ key: box, at: box.at })));
+    let count = widthOf(columns);
+
+    // Fold the busiest hour, then look again. One at a time and only while
+    // there is not room, so a day is never collapsed more than its width
+    // actually requires.
+    while (count > fits) {
+      const folded = foldBusiestHour(boxes, metrics);
+      if (folded === null) break;
+      boxes = folded;
+      columns = assignColumns(boxes.map((box) => ({ key: box, at: box.at })));
+      count = widthOf(columns);
+    }
+
     const columnWidth = available / count;
 
-    const placed: PlacedPin[] = [];
-    const overflow: TimelineItem[] = [];
+    for (const box of boxes) {
+      const column = columns.get(box) ?? 0;
+      const left = (reserve + column * columnWidth) / bandWidth;
+      const width = columnWidth / bandWidth;
+      const first = box.members[0] as TimelineItem;
 
-    for (const { key: item, at } of group) {
-      const column = columns.get(item) ?? 0;
-      if (column >= count) {
-        overflow.push(item);
-        continue;
-      }
-      placed.push({
-        item,
-        top: at.from,
-        height: at.to - at.from,
-        left: (reserve + column * columnWidth) / bandWidth,
-        width: columnWidth / bandWidth,
-        overSpan: spans.some((span) => overlaps(rowsOf(span), at)),
-      });
-    }
-
-    const rightmost = count - 1;
-    const hours = [...new Set(overflow.map((item) => Math.floor(item.startMin / 60)))];
-
-    for (const hour of hours) {
-      // Everything already in the rightmost column that started in this hour
-      // joins them, so the entry takes one column rather than sitting on top
-      // of a card that happens to be under it.
-      const evicted = placed.filter((one) =>
-        one.left * bandWidth >= reserve + rightmost * columnWidth - 0.5
-        && Math.floor(one.item.startMin / 60) === hour);
-      const members = [...evicted.map((one) => one.item),
-        ...overflow.filter((item) => Math.floor(item.startMin / 60) === hour)]
-        .sort((a, b) => a.startMin - b.startMin);
-
-      if (members.length === 1) {
-        // One record is not a list. It takes the column it was heading for.
-        const only = members[0] as TimelineItem;
-        if (!placed.some((one) => one.item === only)) {
-          const box = boxOf(only, metrics);
-          placed.push({
-            item: only,
-            top: minutesToPx(box.top, metrics),
-            height: minutesToPx(box.bottom - box.top, metrics),
-            left: (reserve + rightmost * columnWidth) / bandWidth,
-            width: columnWidth / bandWidth,
-            overSpan: spans.some((span) => overlaps(rowsOf(span), {
-              from: minutesToPx(box.top, metrics), to: minutesToPx(box.bottom, metrics),
-            })),
-          });
-        }
+      if (box.members.length === 1) {
+        pins.push({
+          item: first,
+          top: box.at.from,
+          height: box.at.to - box.at.from,
+          left,
+          width,
+          overSpan: spans.some((span) => overlaps(rowsOf(span), box.at)),
+        });
         continue;
       }
 
-      for (const gone of evicted) placed.splice(placed.indexOf(gone), 1);
-
-      const first = members[0] as TimelineItem;
-      const last = members[members.length - 1] as TimelineItem;
       chips.push({
-        key: `chip:${hour}:${first.key}`,
-        hour,
-        members,
-        top: minutesToPx(first.startMin, metrics),
-        height: minutesToPx(last.startMin - first.startMin, metrics) + metrics.minCardHeight,
-        left: (reserve + rightmost * columnWidth) / bandWidth,
-        width: columnWidth / bandWidth,
+        key: `chip:${Math.floor(first.startMin / 60)}:${first.key}`,
+        hour: Math.floor(first.startMin / 60),
+        members: box.members,
+        top: box.at.from,
+        height: box.at.to - box.at.from,
+        left,
+        width,
       });
     }
-
-    pins.push(...placed);
   }
 
   return { pins, chips };
 }
 
+/** One record, or the several from one clock hour that share an entry. */
+type Box = { readonly members: readonly TimelineItem[]; readonly at: Interval };
+
+const widthOf = (columns: Map<unknown, number>): number =>
+  Math.max(...[...columns.values()].map((one) => one + 1), 1);
+
+/**
+ * Folds the fullest clock hour into one entry, or answers that it cannot.
+ *
+ * Busiest first, so the fewest records are hidden for the width gained; the
+ * earliest hour breaks a tie, so the result does not depend on the order
+ * records happen to arrive in. An hour with one record is not folded,
+ * because a list of one is not a list.
+ */
+function foldBusiestHour(boxes: readonly Box[], metrics: Metrics): Box[] | null {
+  const hours = new Map<number, Box[]>();
+
+  for (const box of boxes) {
+    if (box.members.length !== 1) continue;
+    const only = box.members[0] as TimelineItem;
+    if (!isMergeable(only)) continue;
+    const hour = Math.floor(only.startMin / 60);
+    hours.set(hour, [...(hours.get(hour) ?? []), box]);
+  }
+
+  let chosen: { hour: number; boxes: Box[] } | null = null;
+  for (const [hour, found] of [...hours.entries()].sort((a, b) => a[0] - b[0])) {
+    if (found.length < 2) continue;
+    if (chosen === null || found.length > chosen.boxes.length) chosen = { hour, boxes: found };
+  }
+  if (chosen === null) return null;
+
+  const members = chosen.boxes
+    .map((box) => box.members[0] as TimelineItem)
+    .sort((a, b) => a.startMin - b.startMin);
+  const first = members[0] as TimelineItem;
+  const last = members[members.length - 1] as TimelineItem;
+
+  return [
+    ...boxes.filter((box) => !chosen.boxes.includes(box)),
+    {
+      members,
+      at: {
+        from: minutesToPx(first.startMin, metrics),
+        to: minutesToPx(last.startMin, metrics) + metrics.minCardHeight,
+      },
+    },
+  ];
+}
 /**
  * The widest strip of a range's card, from its own left edge, that nothing
  * covers across the rows its words live in.

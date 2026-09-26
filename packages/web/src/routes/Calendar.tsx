@@ -10,7 +10,7 @@ import { calendarDay } from '../lib/db.js';
 import type { DayEntry, StopDraft } from '../lib/db.js';
 import { DEFAULT_METRICS, MINUTES_IN_DAY, itemsFor, layOut, openingMinute } from '../lib/timeline.js';
 import { useStore } from '../lib/store.js';
-import { useViewportWidth } from '../lib/viewport.js';
+import { useMeasuredWidth } from '../lib/viewport.js';
 
 /**
  * One day, on a fixed 00:00-24:00 axis (spec 7.5).
@@ -140,10 +140,17 @@ export function Calendar(): React.JSX.Element {
 
   const entries = useDay(date, stopDrafts);
 
-  // One day owns everything right of the hour labels. That width decides how
-  // much each card can say and whether an hour has to be collapsed at all,
-  // so it is measured rather than assumed (spec 7.5).
-  const bandWidth = useViewportWidth() - TIMELINE_GUTTER;
+  /**
+   * One day owns everything right of the hour labels, and that width
+   * decides how much each card can say and whether an hour has to be
+   * folded (spec 7.5).
+   *
+   * Measured off the element, not taken from the window: the shell is
+   * capped at `max-w-md`, so on any wider screen the two are different
+   * numbers and every decision downstream would be made on the wrong one.
+   */
+  const measure = useRef<HTMLDivElement | null>(null);
+  const bandWidth = Math.max(useMeasuredWidth(measure) - TIMELINE_GUTTER, 0);
 
   const layout = useMemo(
     () => layOut(
@@ -232,7 +239,10 @@ export function Calendar(): React.JSX.Element {
       </header>
 
       <div
-        ref={scroller}
+        ref={(node) => {
+          scroller.current = node;
+          measure.current = node;
+        }}
         onScroll={onScroll}
         // Never sideways. The axis scrolls up and down and nothing else: a
         // card placed past the right-hand edge turned a phone into a screen

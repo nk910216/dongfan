@@ -17,7 +17,7 @@ import { scopeOf } from '../src/lib/db.js';
 import { earlierToday as atEarlierToday } from './fixtures/clock.js';
 import { formatClock } from '../src/lib/format.js';
 import { daysIn } from '../src/lib/stats-range.js';
-import { breakStorage, setOnline, setViewportWidth } from './setup.js';
+import { breakStorage, setMeasuredWidth, setOnline, setViewportWidth } from './setup.js';
 import { USER_CONTENT } from './fixtures/user-content.js';
 
 /**
@@ -1274,9 +1274,9 @@ describe('looking back at one day', () => {
     // hours. The entry names the types it holds and the stretch it covers
     // (docs/timeline-design.md).
     //
-    // Six inside one hour at a phone's width: four take the columns there
-    // are, and the last column is given up to the entry along with the two
-    // that had nowhere to go.
+    // Six inside one hour at a phone's width. When an hour will not fit,
+    // that whole hour becomes one entry -- which is the simplest rule that
+    // a parent can see the boundary of on the axis.
     setViewportWidth(390);
     const day = daysAgo(2);
     api.add({ typeId: 'bottle', startedAt: onDay(day, 9), value: 90 });
@@ -1289,17 +1289,17 @@ describe('looking back at one day', () => {
     openSignedIn(`/day/${day}`);
     const entry = await screen.findByTestId('crowded');
 
-    expect(entry).toHaveTextContent(interpolate(zhTW.calendar.crowded, { count: 3 }));
-    // Where the stretch begins, so a four-minute huddle cannot read like an
+    expect(entry).toHaveTextContent(interpolate(zhTW.calendar.crowded, { count: 6 }));
+    // Where the stretch begins, so a ten-minute huddle cannot read like an
     // evening. At a column this narrow the end is given up before the
     // beginning is, rather than half a range being printed with an
     // ellipsis after it.
-    expect(entry).toHaveTextContent(formatClock(onDay(day, 9, 6), BABY.timezone));
+    expect(entry).toHaveTextContent(formatClock(onDay(day, 9), BABY.timezone));
     // And every type inside it: as badges for the eye, in start order and
     // one per type however many of that type there are...
     expect([...entry.querySelectorAll('[data-testid="chip-type"]')]
       .map((one) => (one as HTMLElement).dataset['type']))
-      .toEqual(['solid_food', 'diaper', 'bottle']);
+      .toEqual(['bottle', 'diaper', 'solid_food']);
     // ...and named in full for a screen reader.
     for (const typeId of ['bottle', 'diaper', 'solid_food']) {
       expect(entry).toHaveTextContent(eventTypeName(typeId));
@@ -1318,7 +1318,7 @@ describe('looking back at one day', () => {
     const entry = await screen.findByTestId('crowded');
 
     expect(entry).toHaveTextContent(
-      `${formatClock(onDay(day, 9, 6), BABY.timezone)} - ${formatClock(onDay(day, 9, 10), BABY.timezone)}`,
+      `${formatClock(onDay(day, 9), BABY.timezone)} - ${formatClock(onDay(day, 9, 10), BABY.timezone)}`,
     );
   });
 
@@ -1336,6 +1336,12 @@ describe('looking back at one day', () => {
     await user.click(await screen.findByTestId('crowded'));
 
     const list = await screen.findByTestId('crowded-open');
+    // The whole band, not the entry's column: the rows inside are laid out
+    // for the width they are given, and an entry's column can be a fifth of
+    // it.
+    expect(list.style.left).toBe('0px');
+    expect(list.style.right).toBe('4px');
+
     const rows = [...list.querySelectorAll('[data-testid^="slot-"]')] as HTMLElement[];
     expect(rows.length).toBeGreaterThan(1);
 
@@ -1834,6 +1840,26 @@ describe('two days at once', () => {
     expect(rightBand.left).toContain('44px');
     expect(rightBand.left).not.toBe('44px');
     expect(leftBand.width).toBe(rightBand.width);
+  });
+
+  it('lays out for the box it is drawn in, not for the window', async () => {
+    // The shell is capped at `max-w-md`, so on anything wider the window is
+    // not the container. Believing it was, a 1024px window had the two-day
+    // layout give each column 490px when it had about 202 -- and the
+    // reserve, the column count and which words to drop were all decided
+    // on that number.
+    setViewportWidth(1024);
+    setMeasuredWidth(448);
+    const later = daysAgo(2);
+    api.add({ typeId: 'bottle', startedAt: onDay(later, 9), value: 120 });
+    api.add({ typeId: 'diaper', startedAt: onDay(later, 9, 4) });
+
+    openSignedIn(`/two/${later}`);
+    await screen.findByTestId('slot-bottle');
+
+    // (448 - 44) / 2 = 202 a column, halved between the two cards: 97px,
+    // which is what the card says it has. Off the window it would be 241.
+    expect(screen.getByTestId('slot-bottle').dataset['tier']).toBe('B');
   });
 
   it('narrows a card rather than collapsing it, at half a phone', async () => {

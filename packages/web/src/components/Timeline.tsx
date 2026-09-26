@@ -456,9 +456,14 @@ const ChipBody = memo(function ChipBody({ chip, day, timezone, metrics, bandWidt
     // words, and nothing in it is scaled by a duration. Drawing extents in
     // here would say that one of these lasted longer than another because
     // its row happened to be taller, which is not what a row means.
+    //
+    // And it takes the **whole day band**, not the entry's column. It is a
+    // layer over the day rather than a record in it, and the entry's column
+    // can be 54px -- where its rows were being laid out as though they had
+    // the band, so every one of them overflowed.
     return (
       <div
-        style={place}
+        style={{ top: `${chip.top}px`, left: 0, right: `${GAP}px` }}
         className="absolute z-10 rounded-lg border border-line bg-surface p-1 shadow-lg shadow-black/50"
         data-testid="crowded-open"
       >

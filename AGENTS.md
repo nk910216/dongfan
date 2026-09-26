@@ -322,10 +322,24 @@ because something else was close together, three hours earlier.
 
 `layOut` now returns `spans`, `pins` and `chips`:
 
-- a **span** has a real extent (`lengthMin > 0`), including a stop draft,
-  whose end is this device's answer for the end;
-- a **pin** has none -- a moment, a running timer, a back-filled record with
-  no end time. Their length is not a fact yet (spec 3.4.1 rule 3).
+- a **block** is a record whose card height *is* its extent -- long enough
+  not to be pushed up to the 44px minimum;
+- everything else goes in the other lane: moments, running timers,
+  back-filled records with no end, **and ranges too short to fill a card**.
+
+**The line is "is the card's size a fact", not "does it have a duration".**
+A five-minute nursing gets a 44px card covering 27.5 minutes of axis, and
+that size is a fact about a fingertip exactly as a moment's is. Laying it out
+by its real minutes drew two five-minute feeds ten minutes apart in the same
+column with 28px of one card on top of the other -- found in review, with a
+reproduction. The line matters because of what it buys: **when a card's
+height is its duration, records whose times do not intersect have cards that
+do not intersect either**, so nothing else has to be checked. It is also the
+same line that decides whether the tint fills the card.
+
+A short range is laid out among the moments but **may never be folded into an
+entry** (spec 7.5): where it is drawn and whether it can be hidden are
+different questions.
 
 **Two spans are concurrent when their times intersect. Never their boxes.** A
 pin's box is 27.5 minutes because of a fingertip; a span's extent is a fact,
@@ -340,12 +354,24 @@ an eight-minute feed inside a three-hour night halves the night for its whole
 length. A per-slice width would use the space better and be much harder to
 reason about.
 
-**Only pins merge, and a merge is bounded three ways**: by the clock hour, by
-kind, and by necessity. An eight o'clock record can never be behind the same
-entry as an eleven o'clock one -- the hour is a bound a parent can see on the
-axis rather than a number in the code. Two pins either side of an hour
-boundary therefore never merge however close they are, which is the price of
-that.
+**Only records with no duration merge, and a merge is bounded three ways**:
+by the clock hour, by kind, and by necessity. An eight o'clock record can
+never be behind the same entry as an eleven o'clock one -- the hour is a
+bound a parent can see on the axis rather than a number in the code. Two
+moments either side of an hour boundary therefore never merge however close
+they are, which is the price of that.
+
+A whole hour folds at once, busiest first, one hour at a time and only while
+the columns do not fit. "That hour was too busy to draw" is a sentence with a
+visible boundary; "the last two of that hour" is not.
+
+**Nothing is ever stacked.** Columns are assigned greedily over real
+intervals, so two cards share a column only when they do not overlap; when
+there is not enough width the columns get narrower than `minCardWidth`.
+Putting a record that found no column back into the last one regardless --
+which is what the first version did when an hour had a single leftover --
+came out as two nappies four minutes apart with identical geometry, one
+entirely on top of the other. Found in review.
 
 **A pin may not cover a span's stripe, its badge or its words.** `SPAN_KEEP`
 (44px) keeps the first two; `labelWidthFor(band)` keeps the third -- 96px
@@ -368,6 +394,16 @@ when has stopped being a timeline.
 bottom" each, because spans are placed before pins and items no longer arrive
 in start order.
 
+**The band is measured off the element, never taken from the window.** `App`
+is `max-w-md` and centred, so on any screen wider than 448px the window is
+not the container: at 1024px the two-day layout believed each column had
+490px when it had about 202, and the reserve, the column count and which
+words to drop were all decided on that number. `useMeasuredWidth` observes
+the scroller. jsdom performs no layout, so `test/setup.ts` stubs
+`ResizeObserver` the way it already stubs `matchMedia`, and it reports the
+*shell's* width rather than the window's -- which is what lets a test set the
+two apart and catch this.
+
 **Nothing may be placed past the edge of the band, and a test says so at
 every width.** The reserve a pin leaves for a range is clamped to what the
 band actually has; before that, asking for more than there was and widening
@@ -378,6 +414,11 @@ never binds, so the whole suite was green.** Both calendars also clip
 horizontal overflow, so the next mistake in this arithmetic shows up as a
 truncated card rather than as half a day off-screen. Any test about how this
 screen is laid out has to name a phone's width; the default is a desktop.
+
+**An expanded entry takes the whole day band**, not the column its entry sat
+in. It is a layer over the day rather than a record in it, and an entry's
+column can be 54px -- where its rows were being laid out as though they had
+the band, so every one of them overflowed. Found in review.
 
 **The `?open=` key is `${day}@h${hour}`**, not a minute. The day is in it
 because both two-day columns have a 09:00; the hour replaced the minute
