@@ -365,6 +365,12 @@ A whole hour folds at once, busiest first, one hour at a time and only while
 the columns do not fit. "That hour was too busy to draw" is a sentence with a
 visible boundary; "the last two of that hour" is not.
 
+**Every tight stretch is asked, not just the first.** A stretch with nothing
+foldable in it -- five short ranges, which may never be folded -- used to end
+the search, so a crowded eight o'clock left nine o'clock in five 35px columns
+with no entry at all. One stretch that cannot be helped says nothing about
+the next.
+
 **And it folds for the whole day, not for the stretch that ran out of room.**
 Two huddles forty minutes apart do not overlap, so `groupBy` separates them --
 and folding each separately made two entries both named `${day}@h9`, so

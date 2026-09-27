@@ -433,6 +433,26 @@ describe('what merges, and what bounds it', () => {
     expect(new Set(layout.chips.map((chip) => chip.hour)).size).toBe(layout.chips.length);
   });
 
+  it('still folds a busy hour when an earlier one cannot be folded', () => {
+    // Five short ranges at 08:00 may never be folded (spec 7.5), so that
+    // stretch has to stay in five narrow columns. Asking only the first
+    // tight stretch and stopping when it could not be helped left nine
+    // o'clock in five 35px columns too, with no entry at all -- a crowded
+    // morning switching the feature off for the rest of the day.
+    const shortRanges = Array.from({ length: 5 }, (_, i) =>
+      entry(event({
+        id: `r${i}`, typeId: 'nursing', startedAt: at(DAY, 8, i), endedAt: at(DAY, 8, i + 5),
+      })));
+
+    const layout = lay([...shortRanges, ...many(9, 5)], HALF);
+
+    expect(layout.chips).toHaveLength(1);
+    expect(layout.chips[0]?.hour).toBe(9);
+    expect(layout.chips[0]?.members).toHaveLength(5);
+    // And the ranges that could not be folded are all still drawn.
+    expect(layout.pins.filter((one) => one.item.lengthMin > 0)).toHaveLength(5);
+  });
+
   it('is as tall as it is drawn, so the record below it is clear', () => {
     // The entry carries three rows whatever the stretch it covers, so five
     // records in one minute is still 58px on the screen. Colliding against

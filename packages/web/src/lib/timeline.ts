@@ -518,16 +518,23 @@ function placePins(
     };
   });
 
-  // Group, place, and if any stretch of the day has run out of columns,
-  // fold its busiest hour **across the whole day** and start again. Each
-  // fold leaves that hour with one entry and no loose records, so the same
-  // hour cannot be chosen twice and this terminates.
+  // Group, place, and while any stretch of the day has run out of columns,
+  // fold a busy hour **across the whole day** and start again. Each fold
+  // leaves that hour with one entry and no loose records, so the same hour
+  // cannot be chosen twice and this terminates.
+  //
+  // **Every tight stretch is asked, not just the first.** A stretch with
+  // nothing foldable in it -- five short ranges, which may never be folded
+  // -- used to end the whole search, so a crowded eight o'clock left nine
+  // o'clock laid out in five 35px columns with no entry at all. One
+  // stretch that cannot be helped says nothing about the next one.
   let placed = placeBoxes(boxes, spans, metrics, bandWidth);
   for (;;) {
-    const tight = placed.find((group) => group.count > group.fits);
-    if (tight === undefined) break;
-    const hour = busiestHour(tight.boxes);
-    if (hour === null) break;
+    const hour = placed
+      .filter((group) => group.count > group.fits)
+      .map((group) => busiestHour(group.boxes))
+      .find((one): one is number => one !== null);
+    if (hour === undefined) break;
     boxes = foldHour(boxes, hour, metrics);
     placed = placeBoxes(boxes, spans, metrics, bandWidth);
   }
