@@ -3,7 +3,8 @@ import { MAX_EVENT_DURATION_MS, localToUtc, startOfLocalDay } from '@dongfan/sha
 import type { EventDto } from '@dongfan/shared';
 import type { DayEntry, QueuedCreate, StopDraft } from '../src/lib/db.js';
 import {
-  DEFAULT_METRICS, MINUTES_IN_DAY, MIN_EXTENT_PX, SPAN_KEEP, boxOf, extentOf, itemsFor,
+  CHIP_HEIGHT, DEFAULT_METRICS, MINUTES_IN_DAY, MIN_EXTENT_PX, SPAN_KEEP, boxOf, extentOf,
+  itemsFor,
   labelWidthFor, layOut, minCardMinutes, minutesToPx, openingMinute, splitAllDay, textWidth,
   tierFor,
 } from '../src/lib/timeline.js';
@@ -376,7 +377,9 @@ describe('what merges, and what bounds it', () => {
 
   const many = (hour: number, count: number, from = 0): DayEntry[] =>
     Array.from({ length: count }, (_, i) =>
-      entry(event({ id: `${hour}-${i}`, typeId: 'diaper', startedAt: at(DAY, hour, from + i) })));
+      entry(event({
+        id: `${hour}-${from}-${i}`, typeId: 'diaper', startedAt: at(DAY, hour, from + i),
+      })));
 
   it('merges nothing at all while there is room', () => {
     const layout = lay(many(9, 3), 346);
@@ -418,6 +421,38 @@ describe('what merges, and what bounds it', () => {
     expect(layout.pins).toHaveLength(2);
   });
 
+  it('gives a clock hour one entry for the whole day, not one per huddle', () => {
+    // Five at 09:00 and five at 09:40 do not overlap, so they are laid out
+    // as two separate stretches -- but they are one hour, and an hour is
+    // one entry. Folded separately they became two entries with the same
+    // name, and pressing either opened both, on top of each other.
+    const layout = lay([...many(9, 5), ...many(9, 5, 40)], HALF);
+
+    expect(layout.chips).toHaveLength(1);
+    expect(layout.chips[0]?.members).toHaveLength(10);
+    expect(new Set(layout.chips.map((chip) => chip.hour)).size).toBe(layout.chips.length);
+  });
+
+  it('is as tall as it is drawn, so the record below it is clear', () => {
+    // The entry carries three rows whatever the stretch it covers, so five
+    // records in one minute is still 58px on the screen. Colliding against
+    // 44px while drawing 58 put ten pixels of it over the next card.
+    // The next record is in the *next* hour, so it cannot be folded in --
+    // it has to be laid out around the entry instead.
+    const layout = lay([...many(9, 5, 40), entry(event({
+      id: 'after', typeId: 'bottle', startedAt: at(DAY, 10, 10),
+    }))], 346);
+
+    const chip = layout.chips[0];
+    expect(chip?.height).toBeGreaterThanOrEqual(CHIP_HEIGHT);
+
+    // Thirty minutes is 48px, so the two do collide -- and the layout has
+    // to have noticed.
+    const after = layout.pins.find((one) => one.item.eventId === 'after');
+    expect(minutesToPx(30, DEFAULT_METRICS)).toBeLessThan(CHIP_HEIGHT);
+    expect(after!.left).not.toBe(chip!.left);
+  });
+
   it('does not make an entry out of one record', () => {
     // A list of one is not a list; it takes the column it was heading for.
     const layout = lay(many(9, 4), HALF);
@@ -456,6 +491,17 @@ describe('nothing is ever placed past the edge of the band', () => {
       entry(event({ id: 's', typeId: 'sleep', startedAt: at(DAY, 17, 50), endedAt: at(DAY, 19, 20) })),
       entry(event({ id: 'p1', typeId: 'bottle', startedAt: at(DAY, 17, 58) })),
       entry(event({ id: 'p2', typeId: 'diaper', startedAt: at(DAY, 18, 2) })),
+    ],
+    'an entry with the next hour just below it': [
+      ...Array.from({ length: 5 }, (_, i) =>
+        entry(event({ id: `h${i}`, typeId: 'diaper', startedAt: at(DAY, 9, 40 + i) }))),
+      entry(event({ id: 'after', typeId: 'bottle', startedAt: at(DAY, 10, 10) })),
+    ],
+    'two huddles in one hour': [
+      ...Array.from({ length: 5 }, (_, i) =>
+        entry(event({ id: `a${i}`, typeId: 'diaper', startedAt: at(DAY, 9, i) }))),
+      ...Array.from({ length: 5 }, (_, i) =>
+        entry(event({ id: `b${i}`, typeId: 'bottle', startedAt: at(DAY, 9, 40 + i) }))),
     ],
     'three ranges at once': [
       entry(event({ id: 'x', typeId: 'sleep', startedAt: at(DAY, 9), endedAt: at(DAY, 12) })),

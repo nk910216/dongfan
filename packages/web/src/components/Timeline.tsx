@@ -47,18 +47,6 @@ const GUTTER = TIMELINE_GUTTER;
 /** Between a card and the next column, and the right-hand edge. */
 const GAP = 4;
 /**
- * The least a collapsed entry may be, with and without its time range.
- *
- * A chip has three rows to fit -- badges, count, range -- and a stretch of
- * six minutes is 10px of axis. Without a floor the words were cut in half by
- * the entry's own height. It is the same compromise a card's minimum height
- * is, and a chip is already drawn as a container rather than as a record, so
- * nothing here can be read as a duration.
- */
-const CHIP_MIN_HEIGHT = 58;
-const CHIP_MIN_HEIGHT_TERSE = 44;
-
-/**
  * How much of the type's colour a range's body carries.
  *
  * Only a range carries any. That is the whole of how the two kinds are told
@@ -515,13 +503,10 @@ const ChipBody = memo(function ChipBody({ chip, day, timezone, metrics, bandWidt
       type="button"
       onClick={() => setOpen(true)}
       data-testid="crowded"
-      style={{
-        ...place,
-        height: `${Math.max(
-          chip.height,
-          showRange ? CHIP_MIN_HEIGHT : CHIP_MIN_HEIGHT_TERSE,
-        )}px`,
-      }}
+      // The height the layout gave it, exactly. Adding to it here is what
+      // let an entry cover the top of the record below: the collisions were
+      // computed against one number and the screen drew another.
+      style={{ ...place, height: `${chip.height}px` }}
       className="absolute flex min-h-11 flex-col justify-start gap-0.5 overflow-hidden rounded-lg border border-line bg-surface py-[5px] pr-1.5 pl-[9px] text-left"
     >
       {/* One segment per member, in start order, in that member's colour. */}

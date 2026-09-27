@@ -232,6 +232,18 @@ export const SPAN_KEEP = 44;
 export const MAX_PIN_COLUMNS = 4;
 
 /**
+ * How tall a collapsed entry is, at the least.
+ *
+ * It carries three rows -- the badges of what is inside, the count, and the
+ * stretch it covers -- and a huddle of five records in one minute is no
+ * pixels of axis at all. The number lives here rather than in the screen
+ * because the layout has to collide against the height that is *drawn*:
+ * computing from 44px while drawing 58 let an entry cover the top of the
+ * next record by ten pixels.
+ */
+export const CHIP_HEIGHT = 58;
+
+/**
  * Is this record's card its own extent, or is the card bigger than it?
  *
  * **This, not "does it have a duration", is where the two layout problems
@@ -477,17 +489,20 @@ const GAP = 4;
  * Everything whose card is bigger than its extent: moments, running timers,
  * back-filled records with no end, and ranges too short to fill a card.
  *
- * Two rules hold here whatever the width:
+ * Three rules hold here whatever the width:
  *
  * - **Nothing is ever stacked.** Columns are assigned greedily over real
  *   intervals, so two cards can share a column only when they do not
  *   overlap. When there is not enough width the columns get narrower than
- *   `minCardWidth`; they never get put on top of one another. Placing an
- *   overflowed record back into the last column was doing exactly that --
- *   two nappies four minutes apart came out with identical geometry.
- * - **Merging is the last resort and is bounded by the clock hour.** It
+ *   `minCardWidth`; they never get put on top of one another.
+ * - **Folding is the last resort and is bounded by the clock hour.** It
  *   happens only when the columns would not otherwise fit, one hour at a
  *   time, busiest first, and only ever to records with no duration.
+ * - **A clock hour folds once, for the whole day.** Two huddles forty
+ *   minutes apart do not overlap, so they are laid out separately -- but
+ *   they are one hour, and an hour is one entry. Folding them separately
+ *   made two entries with the same name, and pressing either opened both
+ *   on top of each other.
  */
 function placePins(
   items: readonly TimelineItem[],
@@ -495,60 +510,37 @@ function placePins(
   metrics: Metrics,
   bandWidth: number,
 ): { pins: PlacedPin[]; chips: HourChip[] } {
-  const pins: PlacedPin[] = [];
-  const chips: HourChip[] = [];
-
-  const entries = items.map((item) => {
+  let boxes: Box[] = items.map((item) => {
     const box = boxOf(item, metrics);
     return {
-      key: item,
+      members: [item],
       at: { from: minutesToPx(box.top, metrics), to: minutesToPx(box.bottom, metrics) },
     };
   });
 
-  for (const group of groupBy(entries)) {
-    // One reserve for the whole group, so its columns line up. Computed from
-    // the widest any member needs: a grid that shifted from row to row would
-    // read as records jumping sideways down the screen.
-    //
-    // **Clamped to what the band actually has.** Asking for more than there
-    // is and then widening the columns to the minimum anyway put records
-    // past the right-hand edge -- up to 43% past it on a narrow column,
-    // which on a real iPhone is a screen you have to swipe sideways to
-    // read. When the two cannot both be had, being on the screen wins and
-    // the range gives up some of its reserve.
-    const wanted = Math.max(
-      ...group.map(({ at }) => reserveFor(at, spans, metrics, bandWidth)),
-      0,
-    );
-    const reserve = Math.max(Math.min(wanted, bandWidth - metrics.minCardWidth), 0);
-    const available = bandWidth - reserve;
-    const fits = Math.max(1, Math.min(
-      Math.floor(available / metrics.minCardWidth),
-      MAX_PIN_COLUMNS,
-    ));
+  // Group, place, and if any stretch of the day has run out of columns,
+  // fold its busiest hour **across the whole day** and start again. Each
+  // fold leaves that hour with one entry and no loose records, so the same
+  // hour cannot be chosen twice and this terminates.
+  let placed = placeBoxes(boxes, spans, metrics, bandWidth);
+  for (;;) {
+    const tight = placed.find((group) => group.count > group.fits);
+    if (tight === undefined) break;
+    const hour = busiestHour(tight.boxes);
+    if (hour === null) break;
+    boxes = foldHour(boxes, hour, metrics);
+    placed = placeBoxes(boxes, spans, metrics, bandWidth);
+  }
 
-    // A box is one record, or one hour's worth of them behind an entry.
-    let boxes: Box[] = group.map(({ key, at }) => ({ members: [key], at }));
-    let columns = assignColumns(boxes.map((box) => ({ key: box, at: box.at })));
-    let count = widthOf(columns);
+  const pins: PlacedPin[] = [];
+  const chips: HourChip[] = [];
 
-    // Fold the busiest hour, then look again. One at a time and only while
-    // there is not room, so a day is never collapsed more than its width
-    // actually requires.
-    while (count > fits) {
-      const folded = foldBusiestHour(boxes, metrics);
-      if (folded === null) break;
-      boxes = folded;
-      columns = assignColumns(boxes.map((box) => ({ key: box, at: box.at })));
-      count = widthOf(columns);
-    }
+  for (const group of placed) {
+    const columnWidth = group.available / group.count;
 
-    const columnWidth = available / count;
-
-    for (const box of boxes) {
-      const column = columns.get(box) ?? 0;
-      const left = (reserve + column * columnWidth) / bandWidth;
+    for (const box of group.boxes) {
+      const column = group.columns.get(box) ?? 0;
+      const left = (group.reserve + column * columnWidth) / bandWidth;
       const width = columnWidth / bandWidth;
       const first = box.members[0] as TimelineItem;
 
@@ -565,7 +557,7 @@ function placePins(
       }
 
       chips.push({
-        key: `chip:${Math.floor(first.startMin / 60)}:${first.key}`,
+        key: `chip:${Math.floor(first.startMin / 60)}`,
         hour: Math.floor(first.startMin / 60),
         members: box.members,
         top: box.at.from,
@@ -579,51 +571,115 @@ function placePins(
   return { pins, chips };
 }
 
-/** One record, or the several from one clock hour that share an entry. */
+type Group = {
+  readonly boxes: readonly Box[];
+  readonly columns: Map<Box, number>;
+  readonly reserve: number;
+  readonly available: number;
+  readonly count: number;
+  readonly fits: number;
+};
+
+function placeBoxes(
+  boxes: readonly Box[],
+  spans: readonly Sized[],
+  metrics: Metrics,
+  bandWidth: number,
+): Group[] {
+  return groupBy(boxes.map((box) => ({ key: box, at: box.at }))).map((group) => {
+    // One reserve for the whole group, so its columns line up. Computed
+    // from the widest any member needs: a grid that shifted from row to row
+    // would read as records jumping sideways down the screen.
+    //
+    // **Clamped to what the band actually has.** Asking for more than there
+    // is and then widening the columns to the minimum anyway put records
+    // past the right-hand edge -- up to 43% past it on a narrow column,
+    // which on a real iPhone is a screen you have to swipe sideways to
+    // read. When the two cannot both be had, being on the screen wins and
+    // the range gives up some of its reserve.
+    const wanted = Math.max(
+      ...group.map(({ at }) => reserveFor(at, spans, metrics, bandWidth)),
+      0,
+    );
+    const reserve = Math.max(Math.min(wanted, bandWidth - metrics.minCardWidth), 0);
+    const available = bandWidth - reserve;
+    const columns = assignColumns(group);
+
+    return {
+      boxes: group.map(({ key }) => key),
+      columns,
+      reserve,
+      available,
+      count: widthOf(columns),
+      fits: Math.max(1, Math.min(
+        Math.floor(available / metrics.minCardWidth),
+        MAX_PIN_COLUMNS,
+      )),
+    };
+  });
+}
+
+/** One record, or the clock hour's worth of them that share an entry. */
 type Box = { readonly members: readonly TimelineItem[]; readonly at: Interval };
 
 const widthOf = (columns: Map<unknown, number>): number =>
   Math.max(...[...columns.values()].map((one) => one + 1), 1);
 
 /**
- * Folds the fullest clock hour into one entry, or answers that it cannot.
+ * The fullest clock hour that could be folded, or null if none can be.
  *
  * Busiest first, so the fewest records are hidden for the width gained; the
  * earliest hour breaks a tie, so the result does not depend on the order
- * records happen to arrive in. An hour with one record is not folded,
+ * records happen to arrive in. An hour with one loose record is not folded,
  * because a list of one is not a list.
  */
-function foldBusiestHour(boxes: readonly Box[], metrics: Metrics): Box[] | null {
-  const hours = new Map<number, Box[]>();
+function busiestHour(boxes: readonly Box[]): number | null {
+  const hours = new Map<number, number>();
 
   for (const box of boxes) {
     if (box.members.length !== 1) continue;
     const only = box.members[0] as TimelineItem;
     if (!isMergeable(only)) continue;
     const hour = Math.floor(only.startMin / 60);
-    hours.set(hour, [...(hours.get(hour) ?? []), box]);
+    hours.set(hour, (hours.get(hour) ?? 0) + 1);
   }
 
-  let chosen: { hour: number; boxes: Box[] } | null = null;
-  for (const [hour, found] of [...hours.entries()].sort((a, b) => a[0] - b[0])) {
-    if (found.length < 2) continue;
-    if (chosen === null || found.length > chosen.boxes.length) chosen = { hour, boxes: found };
+  let chosen: number | null = null;
+  let most = 1;
+  for (const [hour, count] of [...hours.entries()].sort((a, b) => a[0] - b[0])) {
+    if (count > most) {
+      chosen = hour;
+      most = count;
+    }
   }
-  if (chosen === null) return null;
+  return chosen;
+}
 
-  const members = chosen.boxes
+/** Folds every loose record of one clock hour, day-wide, into one entry. */
+function foldHour(boxes: readonly Box[], hour: number, metrics: Metrics): Box[] {
+  const taken = boxes.filter((box) => box.members.length === 1
+    && isMergeable(box.members[0] as TimelineItem)
+    && Math.floor((box.members[0] as TimelineItem).startMin / 60) === hour);
+
+  const members = taken
     .map((box) => box.members[0] as TimelineItem)
     .sort((a, b) => a.startMin - b.startMin);
   const first = members[0] as TimelineItem;
   const last = members[members.length - 1] as TimelineItem;
+  const from = minutesToPx(first.startMin, metrics);
 
   return [
-    ...boxes.filter((box) => !chosen.boxes.includes(box)),
+    ...boxes.filter((box) => !taken.includes(box)),
     {
       members,
       at: {
-        from: minutesToPx(first.startMin, metrics),
-        to: minutesToPx(last.startMin, metrics) + metrics.minCardHeight,
+        from,
+        // **The height the entry is actually drawn at**, not the height of
+        // one card. It carries three rows -- badges, count, range -- and
+        // computing collisions from 44px while drawing 58 let an entry
+        // cover the top of the next record by ten pixels. One number,
+        // decided here, used as it is by the screen.
+        to: Math.max(minutesToPx(last.startMin, metrics) + metrics.minCardHeight, from + CHIP_HEIGHT),
       },
     },
   ];

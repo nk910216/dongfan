@@ -1322,6 +1322,46 @@ describe('looking back at one day', () => {
     );
   });
 
+  it('opens one list, not two, when an hour was busy twice', async () => {
+    // Two huddles forty minutes apart do not overlap, so they are laid out
+    // separately -- but they are one clock hour, and an hour is one entry.
+    // Folded separately they became two entries with the same name in the
+    // URL, and pressing either opened both, on top of each other.
+    setViewportWidth(390);
+    const day = daysAgo(2);
+    for (let i = 0; i < 5; i += 1) {
+      api.add({ typeId: 'diaper', startedAt: onDay(day, 9, i) });
+      api.add({ typeId: 'bottle', startedAt: onDay(day, 9, 40 + i), value: 100 });
+    }
+
+    const user = openSignedIn(`/day/${day}`);
+    const entries = await screen.findAllByTestId('crowded');
+    expect(entries).toHaveLength(1);
+
+    await user.click(entries[0] as HTMLElement);
+    expect(screen.getAllByTestId('crowded-open')).toHaveLength(1);
+  });
+
+  it('never draws a collapsed entry over the record below it', async () => {
+    // The entry carries three rows whatever stretch it covers, so five
+    // records in five minutes is still 58px on the screen. Colliding
+    // against 44px while drawing 58 put ten pixels of it over the next
+    // card -- the layout and the screen have to agree on one number.
+    setViewportWidth(390);
+    const day = daysAgo(2);
+    for (let i = 0; i < 5; i += 1) api.add({ typeId: 'diaper', startedAt: onDay(day, 9, 40 + i) });
+    api.add({ typeId: 'bottle', startedAt: onDay(day, 10, 10), value: 100 });
+
+    openSignedIn(`/day/${day}`);
+    const entry = await screen.findByTestId('crowded');
+    const after = screen.getByTestId('slot-bottle');
+
+    const bottom = topOf(entry) + Number.parseFloat(entry.style.height);
+    expect(Number.parseFloat(entry.style.height)).toBeGreaterThanOrEqual(58);
+    // Either clear of it, or somewhere else across the band -- never on top.
+    if (topOf(after) < bottom) expect(after.style.left).not.toBe(entry.style.left);
+  });
+
   it('lists a crowded stretch as rows, with no duration drawn in any of them', async () => {
     // A row in the list stands for a record, not for a stretch of time. A
     // stripe scaled by duration in here would say one of them lasted longer

@@ -365,6 +365,18 @@ A whole hour folds at once, busiest first, one hour at a time and only while
 the columns do not fit. "That hour was too busy to draw" is a sentence with a
 visible boundary; "the last two of that hour" is not.
 
+**And it folds for the whole day, not for the stretch that ran out of room.**
+Two huddles forty minutes apart do not overlap, so `groupBy` separates them --
+and folding each separately made two entries both named `${day}@h9`, so
+pressing either opened both, one over the other. An hour is one entry.
+
+**An entry collides at the height it is drawn at.** It carries three rows
+whatever stretch it covers, so five records in one minute is still 58px on
+the screen; computing collisions from 44px while drawing 58 put ten pixels of
+it over the next card. `CHIP_HEIGHT` lives in `timeline.ts` and the screen
+uses `chip.height` as it is -- there is one number and the renderer may not
+add to it. Both found in review.
+
 **Nothing is ever stacked.** Columns are assigned greedily over real
 intervals, so two cards share a column only when they do not overlap; when
 there is not enough width the columns get narrower than `minCardWidth`.
