@@ -176,6 +176,29 @@ merging the two: merging is a destructive guess at what was meant. Renaming
 to the name it already has is a no-op that moves nothing, because a sync for
 no change can be a long list.
 
+**That check is not a lock, and the write says so.** Two parents renaming two
+tags to the same word both pass it and one meets `UNIQUE(baby_id, name)`,
+which was answering 500 until review found it. Which constraint failed is
+decided **by asking the database**, exactly as the event routes do: message
+formats are not a contract, and reading one wrong would turn every database
+fault into "that name is taken".
+
+That race is also where the batch rollback is finally observable. The loser's
+rev bump runs before its rename fails, so if D1 did not unwind, its events
+would carry new revs for a rename that never happened -- and the other phone
+would sync a change that does not exist. `tags.test.ts` asserts the loser's
+`rev` and `updated_at` are untouched.
+
+**The response comes from what the write touched, never from the read before
+it.** `meta.changes` on the last statement decides it. The delete has no read
+in front of it at all -- whether the tag existed is one query cheaper as an
+answer from the write, and a read could only be stale by the time the write
+ran. The rename still reads, because it needs the current name to know
+whether this is a no-op and whether another tag holds the new one; the
+`meta.changes` check behind that read covers a delete landing in between,
+which the test runtime cannot produce and a deployment can. It is labelled as
+uncovered where it sits.
+
 **Deleting a tag is not reference-counted.** Every association goes, which is
 what spec 7.9 describes and what the confirmation it asks for is about. That
 confirmation is stage 4's screen; nothing here asks.

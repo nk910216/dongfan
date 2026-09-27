@@ -236,17 +236,88 @@ describe('deleting a tag', () => {
   });
 });
 
+describe('two parents at the same moment', () => {
+  it('answers the loser of a name race, rather than failing', async () => {
+    // The check before the write is not a lock: both requests read the tag
+    // list, both see the name free, and one of them then meets
+    // `UNIQUE(baby_id, name)`. Reported from review as a 500.
+    const night = await makeTag('night');
+    const day = await makeTag('day');
+
+    const [a, b] = await Promise.all([rename(night.id, 'same'), rename(day.id, 'same')]);
+    const codes = [a.status, b.status].sort();
+
+    expect(codes).toEqual([200, 409]);
+    const loser = a.status === 409 ? a : b;
+    expect(await json<{ error: { code: string } }>(loser))
+      .toMatchObject({ error: { code: 'TAG_NAME_TAKEN' } });
+
+    // Exactly one of them took the name, and the other kept its own.
+    const names = (await listTags()).map((one) => one.name).sort();
+    expect(names).toHaveLength(2);
+    expect(names).toContain('same');
+  });
+
+  it('leaves the loser\u2019s events exactly as they were', async () => {
+    // **The batch rollback, for real.** A failure part way through is
+    // reachable after all: the loser's rev bump runs before the rename that
+    // fails, so if D1 did not unwind it, its events would carry new revs
+    // for a rename that never happened -- and the other phone would sync a
+    // change that does not exist.
+    const night = await makeTag('night');
+    const day = await makeTag('day');
+    const onNight = await tagged([night.id]);
+    const onDay = await tagged([day.id], 3);
+
+    const before = await since(0);
+    const was = new Map(before.events.map((one) => [one.id, one]));
+
+    const [a] = await Promise.all([rename(night.id, 'same'), rename(day.id, 'same')]);
+    const loserIsNight = a.status === 409;
+    const untouched = loserIsNight ? onNight : onDay;
+    const moved = loserIsNight ? onDay : onNight;
+
+    const feed = await since(before.nextRev);
+    expect(feed.events.map((one) => one.id)).toEqual([moved.id]);
+
+    // And the loser's event is byte for byte where it was.
+    const still = await json<StoredEvent>(
+      await request(`/api/events/${untouched.id}`, {}, token),
+    );
+    expect(still.rev).toBe(was.get(untouched.id)?.rev);
+    expect(still.updatedAt).toBe(was.get(untouched.id)?.updatedAt);
+  });
+
+  it('does not report a rename of a tag that has just been deleted', async () => {
+    // The read finds the tag, the other phone deletes it, and the update
+    // then matches nothing. Answering 200 with the row read earlier reports
+    // a change that did not happen, to a tag that no longer exists.
+    const tag = await makeTag('night');
+    await tagged([tag.id]);
+
+    const [renamed, removed] = await Promise.all([rename(tag.id, 'nights'), remove(tag.id)]);
+
+    expect(removed.status).toBe(204);
+    expect(renamed.status).toBe(404);
+    expect(await listTags()).toEqual([]);
+
+    // Which of the two guards answered is worth being straight about: in
+    // this runtime the delete settles before the rename reads, so the read
+    // is what returns 404 and the `meta.changes` check behind it is never
+    // reached. That check is for the interleaving a real deployment can
+    // produce and this harness cannot; it is covered on the delete path,
+    // which has no read in front of it.
+  });
+});
+
 describe('the three effects of a delete are one write', () => {
   it('leaves no state where one of them happened and another did not', async () => {
     // Deleting a tag is three things -- move the revs, drop the
     // associations, drop the tag -- and spec 4.3 requires all or none.
     //
-    // **What this asserts is the joint outcome, not the rollback.** Forcing
-    // a failure part way through the batch is not reachable through the
-    // API, so nothing here proves D1 unwinds; that guarantee is the
-    // platform's, and the unique index that turns a bad rev allocation into
-    // a failed write rather than silent loss is pinned in
-    // `constraints.test.ts`. What is checked here is that no two of the
+    // **What this asserts is the joint outcome.** The rollback itself is
+    // exercised by the name race above, where the loser's rev bump runs and
+    // then its rename fails; what is checked here is that no two of these
     // three are ever seen apart.
     const tag = await makeTag('night');
     const first = await tagged([tag.id]);

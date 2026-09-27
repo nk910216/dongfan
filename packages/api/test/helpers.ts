@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:test';
 import { drizzle } from 'drizzle-orm/d1';
 import { hashPassword } from '@dongfan/shared';
+import type { EventDto } from '@dongfan/shared';
 import { users } from '../src/db/schema.js';
 import { requestCounting } from './query-count.js';
 
@@ -99,22 +100,15 @@ export function postEvent(token: string, babyId: string, body: EventBody): Promi
   );
 }
 
-export type StoredEvent = {
-  id: string;
-  babyId: string;
-  typeId: string;
-  startedAt: number;
-  endedAt: number | null;
-  localDate: string;
-  value: number;
-  note: string;
-  metadata: Record<string, string>;
-  version: number;
-  rev: number;
-  active: boolean;
-  deletedAt: number | null;
-  tagIds: string[];
-};
+/**
+ * What the API answers with, which is the contract and not a copy of it.
+ *
+ * This was a hand-written shape and had drifted: `createdAt`, `updatedAt`
+ * and `createdBy` are on the wire and were not here, so a test reading one
+ * of them compiled to `any` and asserted nothing. A test that drifts from
+ * the response contract is the drift the shared types exist to prevent.
+ */
+export type StoredEvent = EventDto;
 
 /** Posts an event and fails loudly if it did not land, so tests read shorter. */
 export async function createEvent(
