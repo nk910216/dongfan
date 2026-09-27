@@ -1,3 +1,4 @@
+import { env } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createBaby, createEvent, json, request, signedInUser } from './helpers.js';
 import type { StoredEvent } from './helpers.js';
@@ -300,13 +301,46 @@ describe('two parents at the same moment', () => {
     expect(removed.status).toBe(204);
     expect(renamed.status).toBe(404);
     expect(await listTags()).toEqual([]);
+  });
 
-    // Which of the two guards answered is worth being straight about: in
-    // this runtime the delete settles before the rename reads, so the read
-    // is what returns 404 and the `meta.changes` check behind it is never
-    // reached. That check is for the interleaving a real deployment can
-    // produce and this harness cannot; it is covered on the delete path,
-    // which has no read in front of it.
+  it('answers 404 when the delete lands between the read and the write', async () => {
+    // The interleaving `Promise.all` above cannot produce: this runtime
+    // settles one request before the other reads, so there the read is what
+    // answers. Here the delete is held until the rename's batch is about to
+    // run, which is the case the `meta.changes` guard exists for -- and an
+    // earlier note in this file wrongly said it could not be reached.
+    //
+    // Real D1 throughout. What is controlled is when the other request
+    // happens, not what the database does with it.
+    const tag = await makeTag('night');
+    const event = await tagged([tag.id]);
+
+    const db = env.DB as unknown as { batch: D1Database['batch'] };
+    const real = db.batch.bind(env.DB);
+    let armed = true;
+
+    db.batch = (async (statements: D1PreparedStatement[]) => {
+      if (armed) {
+        // Once only: the delete below uses this same path.
+        armed = false;
+        await remove(tag.id);
+      }
+      return real(statements);
+    }) as D1Database['batch'];
+
+    try {
+      expect((await rename(tag.id, 'nights')).status).toBe(404);
+    } finally {
+      db.batch = real;
+    }
+
+    // And the rename left nothing of itself behind: the delete moved the
+    // event, and the rename that lost did not move it again.
+    expect(await listTags()).toEqual([]);
+    const after = await json<StoredEvent>(
+      await request(`/api/events/${event.id}`, {}, token),
+    );
+    expect(after.tagIds).toEqual([]);
   });
 });
 
@@ -352,6 +386,63 @@ describe('the three effects of a delete are one write', () => {
     expect((await listTags())[0]).toMatchObject({ id: tag.id, name: 'nights' });
     const response = await request(`/api/events/${event.id}`, {}, token);
     expect((await json<StoredEvent>(response)).tagIds).toEqual([tag.id]);
+  });
+});
+
+describe('a tag id that belongs to another baby', () => {
+  /**
+   * The worst kind of wrong answer: a 404 with the damage already done.
+   *
+   * A batch does not unwind because its last statement matched nothing.
+   * With only the final `DELETE FROM tags` scoped to the baby on the path,
+   * a tag id from another family reached the two statements before it --
+   * so the other baby's associations were deleted, the response said 404,
+   * and nothing anywhere recorded that it had happened. The rev did not
+   * move either, so the other phone would never have been told.
+   */
+  let other: string;
+  let otherTag: Tag;
+  let otherEvent: StoredEvent;
+
+  beforeEach(async () => {
+    other = await createBaby(token, { nickname: 'Second', birthDate: '2026-03-08' });
+    otherTag = await makeTag('night', token, other);
+    otherEvent = await createEvent(token, other, {
+      id: crypto.randomUUID(),
+      typeId: 'bottle',
+      intent: 'record',
+      startedAt: Date.now() - HOUR,
+      value: 120,
+      tagIds: [otherTag.id],
+    });
+  });
+
+  const stillThere = async (): Promise<void> => {
+    // The tag, the association, and the event exactly as it was.
+    const list = await json<{ tags: Tag[] }>(
+      await request(`/api/babies/${other}/tags`, {}, token),
+    );
+    expect(list.tags.map((one) => one.id)).toEqual([otherTag.id]);
+
+    const after = await json<StoredEvent>(
+      await request(`/api/events/${otherEvent.id}`, {}, token),
+    );
+    expect(after.tagIds).toEqual([otherTag.id]);
+    expect(after.rev).toBe(otherEvent.rev);
+    expect(after.updatedAt).toBe(otherEvent.updatedAt);
+  };
+
+  it('is refused by a delete, and the other baby keeps everything', async () => {
+    expect((await remove(otherTag.id)).status).toBe(404);
+    await stillThere();
+  });
+
+  it('is refused by a rename, and the other baby keeps everything', async () => {
+    expect((await rename(otherTag.id, 'nights')).status).toBe(404);
+    await stillThere();
+    expect((await json<{ tags: Tag[] }>(
+      await request(`/api/babies/${other}/tags`, {}, token),
+    )).tags[0]?.name).toBe('night');
   });
 });
 

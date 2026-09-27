@@ -194,10 +194,30 @@ it.** `meta.changes` on the last statement decides it. The delete has no read
 in front of it at all -- whether the tag existed is one query cheaper as an
 answer from the write, and a read could only be stale by the time the write
 ran. The rename still reads, because it needs the current name to know
-whether this is a no-op and whether another tag holds the new one; the
-`meta.changes` check behind that read covers a delete landing in between,
-which the test runtime cannot produce and a deployment can. It is labelled as
-uncovered where it sits.
+whether this is a no-op and whether another tag holds the new one.
+
+The interleaving that guard exists for -- a delete landing between the read
+and the write -- **is** testable, and a note here previously said it was not.
+`Promise.all` cannot produce it, because this runtime settles one request
+before the other reads; holding the delete until the rename's batch is about
+to run can, with real D1 throughout. What is controlled is when the other
+request happens, not what the database does with it.
+
+### Every statement in a tag batch is scoped to the baby on the path
+
+`meta.changes` on the last statement decides the **response**. It does not
+undo the statements before it, and putting the only ownership check there was
+a P1: a tag id belonging to another family, sent to this baby's path, had its
+associations deleted and its `event_tags` rows gone -- and the answer was
+404, so nothing anywhere said it had happened. The rev did not move either,
+so the other phone would never have been told. That was introduced by
+dropping the delete's read, which had been carrying the check by accident.
+
+So `DETACH_ALL` and `BUMP_REV_FOR_TAG` both carry the path's baby id, and the
+allocator binds it four times. The allocation is the worst place to be loose:
+its base is that baby's `MAX(rev)`, so applied to another baby's events it
+would hand them revs from an unrelated sequence and break the cursor for
+both.
 
 **Deleting a tag is not reference-counted.** Every association goes, which is
 what spec 7.9 describes and what the confirmation it asks for is about. That

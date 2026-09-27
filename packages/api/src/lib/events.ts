@@ -46,18 +46,27 @@ export const NEXT_REV = '(SELECT COALESCE(MAX(rev), 0) + 1 FROM events WHERE bab
  * revs never move, and the other phone shows a tag that no longer exists
  * until somebody reinstalls the app.
  *
- * Parameters, in order: baby id, tag id, `updated_at`, tag id again.
+ * **Every clause is scoped to the baby on the path**, and the id is bound
+ * four times to say so. Not belt and braces: a tag id from one family
+ * reaching a handler for another must touch nothing at all, and the rev
+ * allocation is the worst place to be loose -- its base is that baby's
+ * `MAX(rev)`, so applying it to another baby's events would hand them revs
+ * from an unrelated sequence and break the cursor for both.
+ *
+ * Parameters, in order: baby id (the base), baby id (the target rows), tag
+ * id, `updated_at`, tag id and baby id (the tag's own ownership).
  */
 export const BUMP_REV_FOR_TAG = `
 WITH base AS (SELECT COALESCE(MAX(rev), 0) AS m FROM events WHERE baby_id = ?),
      tgt  AS (SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS n
                 FROM events
-               WHERE id IN (SELECT event_id FROM event_tags WHERE tag_id = ?))
+               WHERE baby_id = ?
+                 AND id IN (SELECT event_id FROM event_tags WHERE tag_id = ?))
 UPDATE events
    SET rev = (SELECT m FROM base) + (SELECT n FROM tgt WHERE tgt.id = events.id),
        updated_at = ?
  WHERE id IN (SELECT id FROM tgt)
-   AND EXISTS (SELECT 1 FROM tags WHERE id = ? AND tags.baby_id = events.baby_id)`;
+   AND EXISTS (SELECT 1 FROM tags WHERE id = ? AND baby_id = ?)`;
 
 export type EventRow = typeof events.$inferSelect;
 

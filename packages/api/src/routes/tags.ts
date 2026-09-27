@@ -85,7 +85,18 @@ tagRoutes.post('/:babyId/tags', requireBabyAccess(), async (c) => {
 /** Scoped to the baby on the path: a tag id from another family is a 404. */
 const RENAME_TAG = 'UPDATE tags SET name = ? WHERE id = ? AND baby_id = ?';
 
-const DETACH_ALL = 'DELETE FROM event_tags WHERE tag_id = ?';
+/**
+ * Scoped to the baby on the path, like everything else in the batch.
+ *
+ * On `tag_id` alone this deleted another family's associations when a tag
+ * id reached a handler for the wrong baby -- and the response was a 404, so
+ * nothing anywhere said it had happened. The last statement matching no
+ * rows does not undo the ones before it.
+ */
+const DETACH_ALL = `
+DELETE FROM event_tags
+ WHERE tag_id = ?
+   AND EXISTS (SELECT 1 FROM tags WHERE id = ? AND baby_id = ?)`;
 
 const DELETE_TAG = 'DELETE FROM tags WHERE id = ? AND baby_id = ?';
 
@@ -122,7 +133,7 @@ tagRoutes.patch('/:babyId/tags/:tagId', requireBabyAccess(), async (c) => {
   let results;
   try {
     results = await c.env.DB.batch([
-      c.env.DB.prepare(BUMP_REV_FOR_TAG).bind(babyId, tagId, now, tagId),
+      c.env.DB.prepare(BUMP_REV_FOR_TAG).bind(babyId, babyId, tagId, now, tagId, babyId),
       c.env.DB.prepare(RENAME_TAG).bind(parsed.data.name, tagId, babyId),
     ]);
   } catch (error) {
@@ -146,13 +157,6 @@ tagRoutes.patch('/:babyId/tags/:tagId', requireBabyAccess(), async (c) => {
   // matches nothing -- answering 200 with the row read earlier would report
   // a change that did not happen, to a tag that no longer exists
   // (spec 4.3).
-  //
-  // **On this path the guard is not observable from a test.** Reaching it
-  // needs a delete to land between the read above and the write below, and
-  // the test runtime settles one request entirely before the other reads,
-  // so the read is always the one that answers. It is reachable in
-  // production, where the two are separate invocations. The same helper is
-  // covered on the delete path, which has no read in front of it.
   if (changedRows(results) === 0) return fail(c, 'NOT_FOUND');
 
   return c.json({ id: tag.id, name: parsed.data.name, createdAt: tag.createdAt });
@@ -166,9 +170,13 @@ tagRoutes.delete('/:babyId/tags/:tagId', requireBabyAccess(), async (c) => {
   // touched, which is the same answer one query cheaper -- and a read
   // before the write could only ever be stale by the time the write ran.
   const now = Date.now();
+  // Every statement is scoped to the baby on the path. A guard on the last
+  // one is not enough: the ones before it have already committed by the
+  // time its `meta.changes` is read, so a tag id from another family used
+  // to take that family's associations with it and answer 404.
   const results = await c.env.DB.batch([
-    c.env.DB.prepare(BUMP_REV_FOR_TAG).bind(babyId, tagId, now, tagId),
-    c.env.DB.prepare(DETACH_ALL).bind(tagId),
+    c.env.DB.prepare(BUMP_REV_FOR_TAG).bind(babyId, babyId, tagId, now, tagId, babyId),
+    c.env.DB.prepare(DETACH_ALL).bind(tagId, tagId, babyId),
     c.env.DB.prepare(DELETE_TAG).bind(tagId, babyId),
   ]);
 
