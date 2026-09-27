@@ -125,6 +125,15 @@ export const deleteEventRequest = z.object({ version: z.number().int().positive(
 export const createTagRequest = z.object({ name: boundedText(30, 1) });
 
 /**
+ * Renaming one.
+ *
+ * The same field with the same bounds, and a separate schema all the same:
+ * the two requests are free to diverge, and a shared one would make that a
+ * breaking change rather than an edit.
+ */
+export const updateTagRequest = z.object({ name: boundedText(30, 1) });
+
+/**
  * Joining a baby with a code somebody shared.
  *
  * Only bounded here. What the code has to look like is decided after it
@@ -202,5 +211,6 @@ export type CreateEventRequest = z.infer<typeof createEventRequest>;
 export type UpdateEventRequest = z.infer<typeof updateEventRequest>;
 export type DeleteEventRequest = z.infer<typeof deleteEventRequest>;
 export type CreateTagRequest = z.infer<typeof createTagRequest>;
+export type UpdateTagRequest = z.infer<typeof updateTagRequest>;
 export type JoinBabyRequest = z.infer<typeof joinBabyRequest>;
 export type SyncQuery = z.infer<typeof syncQuery>;

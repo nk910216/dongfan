@@ -16,6 +16,7 @@ export const ERROR_CODES = [
   'RATE_LIMITED',
   'DAILY_LIMIT_EXCEEDED',
   'ACTIVE_TIMER_EXISTS',
+  'TAG_NAME_TAKEN',
   'INTERNAL',
 ] as const;
 

@@ -123,13 +123,15 @@ own rather than being folded into a screen.
 | | | |
 |---|---|---|
 | 1 | The two-day calendar (spec 7.6), on the single-day timeline | **done** |
-| 2 | Renaming and deleting a tag: the `rev` bump before the association goes (spec 7.9) | |
+| 2 | Renaming and deleting a tag: the `rev` bump before the association goes (spec 7.9) | **done** |
 | 3 | Tags on an event, in the add and edit forms (spec 7.3) | |
 | 4 | The tag page: filtering `GET /events` by tag, with paging (spec 7.9) | |
 | 5 | Data export: the endpoint and the settings entry (spec 5.1, 12) | |
 | 6 | The M4 acceptance: what is checkable locally, and the phone steps | |
 
-**Stage 2 is the one to be careful with.** Incremental sync only watches
+**Stage 2 is done.** See "A tag write is an event write" below.
+
+**Stage 2 was the one to be careful with.** Incremental sync only watches
 `events.rev` (spec 5.4), so deleting a tag by removing its `event_tags` rows
 leaves every other device showing a tag that no longer exists -- for ever, and
 without a symptom. The bump has to come **first**, in the same transaction,
@@ -137,8 +139,46 @@ because the numbering SQL finds the affected events *through* the associations
 it is about to delete. Renaming a tag and attaching or detaching one on an
 event carry the same rule.
 
-What exists already: `GET` and `POST` for tags. Renaming, deleting, filtering
+What exists already: `GET`, `POST`, `PATCH` and `DELETE` for tags. Filtering
 by tag, tags anywhere in the UI, and the whole export are all absent.
+
+### A tag write is an event write
+
+Renaming or deleting a tag has to move **every event carrying it**, because
+incremental sync watches `events.rev` and nothing else (spec 5.4). A rename
+that touched only the `tags` row leaves the other phone showing the old name
+for ever; a delete that removed only the `event_tags` rows leaves it showing
+a tag that no longer exists. Neither has a symptom on the device that did it.
+
+**The order is the whole of it**, and all three are one `batch()`:
+
+1. bump the revs, **while `event_tags` still has the rows** -- the numbering
+   SQL finds the affected events *through* the associations;
+2. delete the associations;
+3. delete the tag.
+
+Reversed, step 1 matches nothing and the change never syncs.
+
+**`BUMP_REV_FOR_TAG` in `lib/events.ts` is the only spelling of a batch
+allocation**, beside `NEXT_REV` for a single row (spec 5.4 rule 3). It is a
+window function because both obvious alternatives are wrong: a shared
+`MAX(rev) + 1` gives every row the same number, which makes pagination drop
+whatever did not fit in the page a client happened to read, for ever; and one
+`UPDATE` per event blows the fifty-query budget as soon as a tag is on fifty
+records, which is an ordinary number for a tag.
+
+`version` is **not** bumped, only `rev` and `updated_at`, which is what
+spec 7.9 asks for. Bumping it would turn every unsent edit draft on the other
+phone into a conflict over a change that touched nothing the draft holds.
+
+Renaming to a name the baby already has answers `TAG_NAME_TAKEN` rather than
+merging the two: merging is a destructive guess at what was meant. Renaming
+to the name it already has is a no-op that moves nothing, because a sync for
+no change can be a long list.
+
+**Deleting a tag is not reference-counted.** Every association goes, which is
+what spec 7.9 describes and what the confirmation it asks for is about. That
+confirmation is stage 4's screen; nothing here asks.
 
 Spec 7.10 also asks the page list to name six pages and to mark which one is
 showing; it currently names four and marks none.

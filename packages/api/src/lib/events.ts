@@ -23,6 +23,42 @@ import type { Env } from './types.js';
  */
 export const NEXT_REV = '(SELECT COALESCE(MAX(rev), 0) + 1 FROM events WHERE baby_id = ?)';
 
+/**
+ * The same allocation for a batch: **one rev per row, in one statement**.
+ *
+ * Renaming or deleting a tag moves every event carrying it, and spec 5.4
+ * names the two ways of getting this wrong:
+ *
+ * - `SET rev = (SELECT MAX(rev) + 1 ...)` gives **every** row the same
+ *   number. The subquery is uncorrelated, so SQLite evaluates it once. Three
+ *   rows sharing rev 4 means a client that reads two of them and stores
+ *   `next_rev = 4` never sees the third, for ever, with nothing on screen to
+ *   say so. `UNIQUE(baby_id, rev)` turns that into a failed write rather
+ *   than silent loss, which is the whole reason the index exists.
+ * - One `UPDATE` per event blows the fifty-query budget (spec 4.2) as soon
+ *   as a tag is on fifty records, which is an ordinary number for a tag.
+ *
+ * So: a window function numbers the affected rows and each takes the
+ * maximum plus its own offset.
+ *
+ * **It reads `event_tags` to find them, so it has to run before those rows
+ * are deleted** (spec 7.9). Ordered after the delete it matches nothing, the
+ * revs never move, and the other phone shows a tag that no longer exists
+ * until somebody reinstalls the app.
+ *
+ * Parameters, in order: baby id, tag id, `updated_at`, tag id again.
+ */
+export const BUMP_REV_FOR_TAG = `
+WITH base AS (SELECT COALESCE(MAX(rev), 0) AS m FROM events WHERE baby_id = ?),
+     tgt  AS (SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS n
+                FROM events
+               WHERE id IN (SELECT event_id FROM event_tags WHERE tag_id = ?))
+UPDATE events
+   SET rev = (SELECT m FROM base) + (SELECT n FROM tgt WHERE tgt.id = events.id),
+       updated_at = ?
+ WHERE id IN (SELECT id FROM tgt)
+   AND EXISTS (SELECT 1 FROM tags WHERE id = ? AND tags.baby_id = events.baby_id)`;
+
 export type EventRow = typeof events.$inferSelect;
 
 /** The wire shape lives in shared, beside the request schemas. */

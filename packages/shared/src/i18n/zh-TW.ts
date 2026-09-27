@@ -379,6 +379,8 @@ export const zhTW = {
     RATE_LIMITED: '操作太頻繁，請稍後再試',
     DAILY_LIMIT_EXCEEDED: '今日新增數量已達上限',
     ACTIVE_TIMER_EXISTS: '對方已經開始記錄這個項目',
+    /** Renaming a tag to a name this baby already has (spec 7.9). */
+    TAG_NAME_TAKEN: '已經有同名的標籤',
     INTERNAL: '伺服器發生錯誤，請稍後再試',
     UNKNOWN: '發生未預期的錯誤，請稍後再試',
     offline: '目前離線，無法完成這個操作',
