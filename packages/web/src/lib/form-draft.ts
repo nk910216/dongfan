@@ -31,11 +31,24 @@ const KEY = 'dongfan.form-drafts';
  */
 const KEEPS_FOR_MS = 12 * 60 * 60 * 1000;
 
+/**
+ * A draft as it comes back out of storage, which may predate a field.
+ *
+ * `tagIds` is optional here and required everywhere else, on purpose. A
+ * draft written before tags existed has **no opinion** about them, and that
+ * is not the same as having chosen none: on the add form the two happen to
+ * mean the same thing, and on the edit form they do not -- read as "none",
+ * saving an old draft sent an empty list and took every tag off the record.
+ * So the difference is kept until a screen that knows which it means
+ * decides.
+ */
+export type StoredDraft = Omit<EventDraft, 'tagIds'> & { tagIds?: string[] };
+
 export type SavedForm = {
   /** Account, baby, and which form: they must not see each other's. */
   key: string;
   intent: EventIntent;
-  draft: EventDraft;
+  draft: StoredDraft;
   savedAt: number;
   /**
    * The version of the event these changes were made on top of.
@@ -128,16 +141,7 @@ export function saveForm(
 export function readForm(key: string, now: number = Date.now()): SavedForm | null {
   const found = readAll().find((form) => form.key === key);
   if (!found) return null;
-  if (now - found.savedAt > KEEPS_FOR_MS) return null;
-
-  // A draft written before tags were a field has none. Completed here, once,
-  // rather than at each of the three screens that read one back: a missing
-  // field read as an empty list is the kind of difference that silently
-  // strips something, and it should be impossible to forget.
-  // `found.draft` is typed as complete and may not be, which is the whole
-  // point of this line.
-  const draft = found.draft as Partial<EventDraft>;
-  return { ...found, draft: { ...found.draft, tagIds: draft.tagIds ?? [] } };
+  return now - found.savedAt <= KEEPS_FOR_MS ? found : null;
 }
 
 /**

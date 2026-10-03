@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Check, Plus } from 'lucide-react';
 import { zhTW } from '@dongfan/shared';
 import type { StoredTag } from '../lib/db.js';
@@ -32,6 +32,40 @@ export function TagPicker({ tags, selected, onChange, onCreate, disabled = false
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
 
+  /**
+   * The props as they are *now*, for an answer that arrives later.
+   *
+   * Making a tag waits on the server, and the form does not stop while it
+   * waits: somebody types a note, changes the amount, picks another tag.
+   * The handler that pressed the button holds the props of that moment,
+   * and `onChange` from that moment carries the whole form as it was then
+   * -- so applying the new tag through it put the entire form back and
+   * silently undid everything typed in between. Found in review.
+   */
+  const latest = useRef({ selected, onChange });
+  useLayoutEffect(() => {
+    latest.current = { selected, onChange };
+  });
+
+  /**
+   * Whether this form is still on the screen.
+   *
+   * An answer that arrives after the form has been saved and left must do
+   * nothing at all. Applied, it wrote the old content back as a draft, and
+   * the next form opened holding this one's content.
+   *
+   * On the add form this overlaps with the form's own lock, which stays
+   * shut once the record has been handed over. **The edit form has no such
+   * lock**, so here this is the only thing between a late answer and a
+   * ghost draft carrying the version it was written on -- and that is the
+   * case its test exercises.
+   */
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
   const toggle = (id: string): void => {
     onChange(selected.includes(id) ? selected.filter((one) => one !== id) : [...selected, id]);
   };
@@ -43,6 +77,7 @@ export function TagPicker({ tags, selected, onChange, onCreate, disabled = false
     setBusy(true);
     setFailed(false);
     const made = await onCreate(wanted);
+    if (!mounted.current) return;
     setBusy(false);
 
     if (!made) {
@@ -52,7 +87,11 @@ export function TagPicker({ tags, selected, onChange, onCreate, disabled = false
     // Selected at once. Somebody who types a tag name into this form meant
     // to put it on this record, and making them tap it again is a step
     // that exists only because of how it was built.
-    if (!selected.includes(made.id)) onChange([...selected, made.id]);
+    //
+    // Merged into the selection and the form **as they are now**, not as
+    // they were when the button was pressed.
+    const now = latest.current;
+    if (!now.selected.includes(made.id)) now.onChange([...now.selected, made.id]);
     setName('');
     setAdding(false);
   };

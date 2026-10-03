@@ -131,7 +131,10 @@ export function EditEvent(): React.JSX.Element {
         // applying an absent field as an empty list would silently strip
         // every tag off the record (spec 2.1).
         setDraft(saved?.draft
-          ? saved.draft
+          // An existing record: a draft from before tags has no opinion about
+          // them, so the record keeps the ones it has. Only a list this build
+          // wrote -- empty included -- is somebody's choice.
+          ? { ...saved.draft, tagIds: saved.draft.tagIds ?? [...found.tagIds] }
           : {
             startedAt: found.startedAt,
             endedAt: found.endedAt,

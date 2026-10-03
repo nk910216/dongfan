@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
 import { deriveEventTimes, eventTypeName, getEventType, interpolate, zhTW } from '@dongfan/shared';
@@ -110,7 +110,9 @@ export function EventForm({ typeId: given, entryId }: {
     // What was being typed when the page went away wins over everything
     // below: it is the most recent thing the parent did, and the whole
     // reason it was written down.
-    if (restored) return restored.draft;
+    // A new record: a draft from before tags has no opinion, and no opinion
+    // on a record that does not exist yet is none.
+    if (restored) return { ...restored.draft, tagIds: restored.draft.tagIds ?? [] };
 
     // An add whose result is unknown comes back as it was sent, not as an
     // empty form: the screen has to show what is actually in doubt, and
@@ -155,6 +157,23 @@ export function EventForm({ typeId: given, entryId }: {
     };
   });
   const [localError, setLocalError] = useState<string | null>(null);
+
+  /**
+   * Set from the moment this form's content is handed over, until a
+   * refusal hands it back.
+   *
+   * The draft is marked with the id it is going out under just before it
+   * goes, and that mark is what stops a reload from turning one record
+   * into two (spec 3.8). The fieldset below freezes the fields for the same
+   * reason -- but a fieldset stops taps, not an answer arriving late. A tag
+   * made a moment before saving answered while the record was in the air,
+   * rewrote the draft without its mark, and left the record free to be sent
+   * a second time. Found in review's wake.
+   *
+   * A ref rather than state: it has to be true in the same tick the mark is
+   * written, not one render later.
+   */
+  const locked = useRef(false);
 
   if (!type) {
     return (
@@ -205,8 +224,11 @@ export function EventForm({ typeId: given, entryId }: {
     // draft that no longer passes would leave no way forward and no way
     // back (spec 6.1).
     if (create.outcomeUnknown) {
+      locked.current = true;
       saveForm(formId, intent, draft, { eventId: create.eventId });
-      finish(await create.retry());
+      const result = await create.retry();
+      if (result.kind === 'failed') locked.current = false;
+      finish(result);
       return;
     }
 
@@ -223,9 +245,10 @@ export function EventForm({ typeId: given, entryId }: {
     // Stamped before it goes, not after it comes back. A reload while the
     // request is still in the air would otherwise leave a draft that
     // looks untouched beside an entry the queue is already sending.
+    locked.current = true;
     saveForm(formId, intent, draft, { eventId: create.eventId });
 
-    finish(await create.submit({
+    const result = await create.submit({
       typeId: type.id,
       intent,
       startedAt: draft.startedAt,
@@ -234,7 +257,10 @@ export function EventForm({ typeId: given, entryId }: {
       note: draft.note,
       metadata: draft.metadata,
       tagIds: draft.tagIds,
-    }));
+    });
+    // Refused: the content is the parent's again, to correct and resend.
+    if (result.kind === 'failed') locked.current = false;
+    finish(result);
   };
 
   return (
@@ -278,6 +304,9 @@ export function EventForm({ typeId: given, entryId }: {
                   key={option}
                   type="button"
                   onClick={() => {
+                    // The same mark, the same reason: this rewrites the
+                    // draft too, and it sits outside the fieldset.
+                    if (locked.current) return;
                     setIntent(option);
                     saveForm(formId, option, draft);
                   }}
@@ -311,7 +340,14 @@ export function EventForm({ typeId: given, entryId }: {
             // Written down as it is typed. Saving on the way out would
             // miss the reload this exists for: the browser reclaiming a
             // background tab does not ask first (spec 2.1).
-            onChange={(next) => { setDraft(next); setLocalError(null); saveForm(formId, intent, next); }}
+            onChange={(next) => {
+              // Nothing may rewrite content that has been handed over, or
+              // that the queue holds and has not yet settled (spec 6.1).
+              if (locked.current || create.outcomeUnknown) return;
+              setDraft(next);
+              setLocalError(null);
+              saveForm(formId, intent, next);
+            }}
           />
         </fieldset>
 

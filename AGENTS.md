@@ -245,10 +245,53 @@ leaves the event and its tags both exactly as they were (spec 4.3) -- and the
 screen keeps what was chosen rather than throwing it away, because being told
 to look again is not a reason to lose somebody's work (spec 2.1).
 
-**A draft from before this field takes the event's tags, not an empty list.**
-Applying an absent field as "none" would silently strip every tag off the
-record. The stop confirmation sends no `tagIds` at all, which the API reads
-as "not being changed".
+**An absent tag list and an empty one are different, and storage keeps them
+apart.** A draft written before tags existed has *no opinion* about them;
+one this build wrote with `[]` chose none. `StoredDraft` leaves `tagIds`
+optional and `readForm` returns it as stored, so each screen decides what the
+absence means: none on the add form, the record's own tags on the edit form.
+
+This note previously claimed the second half while the code did the
+opposite. `readForm` filled the gap with `[]` "once, so nobody could forget"
+-- and the edit screen applied that, so saving an old draft sent an empty list
+and took every tag off the record. Its own comment said reading a missing
+field as empty "silently strips something". Found in review; completing a
+value at the one place that cannot know what it means is not the same as
+handling it.
+
+The stop confirmation sends no `tagIds` at all, which the API reads as "not
+being changed".
+
+### An answer that arrives late acts on the form as it is now, or not at all
+
+Making a tag waits on the server, and the form does not stop while it waits.
+The picker's handler held the props of the moment the button was pressed, and
+`onChange` from that moment carried the whole form as it was then -- so the
+answer put the entire form back and silently undid a note typed meanwhile,
+and an amount, and another tag. Found in review. The picker now applies the
+answer through the props of *now*.
+
+Two more fell out of following that mechanism, and both were worse:
+
+- **After the form is gone**, the same answer wrote the old content back as a
+  draft, and the next form of that type opened holding it. The picker does
+  nothing once unmounted; on the edit screen that is the only defence, and
+  its test is there.
+- **While the record is being sent**, the draft carries the id it is going
+  out under, which is what stops a reload turning one record into two
+  (spec 3.8). The fieldset freezes the fields for that reason, but **a
+  fieldset stops taps, not answers**: the late tag rewrote the draft without
+  its mark. The add form now has a lock, a ref set in the same tick the mark
+  is written and released only by a refusal, and every write to the draft
+  checks it -- the intent toggle too, which sits outside the fieldset.
+
+The rule underneath all three: **anything asynchronous that writes back into
+a form has to ask whether the form still accepts writes, and what it holds
+now.** Disabled controls answer neither question.
+
+The edit screen has no lock and no fieldset, so typing during an edit's save
+is possible and what is typed then is not part of the PATCH. That predates
+tags and is not fixed here.
 
 A tag the other parent deleted while a form was open stays selected and has
 no chip to show for it. It is sent and the server drops it, which is the

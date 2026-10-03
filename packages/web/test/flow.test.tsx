@@ -3368,6 +3368,25 @@ describe('recording with no signal', () => {
   });
 });
 
+/**
+ * Holds the next tag creation until the test lets it go.
+ *
+ * The server's answer arriving late is the ordinary case on a phone, and
+ * everything typed in the meantime is what is at stake.
+ */
+function holdTagCreation(): () => void {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  server.use(http.post('/api/babies/:babyId/tags', async ({ request }) => {
+    const body = (await request.json()) as { name: string };
+    await gate;
+    const made = { id: 'tag-new', name: body.name, createdAt: 0 };
+    api.tags.push(made);
+    return HttpResponse.json(made, { status: 201 });
+  }));
+  return release;
+}
+
 describe('tags on a record', () => {
   /** Walks to the bottle form, which has a value field and so a draft. */
   async function intoTheForm(): Promise<ReturnType<typeof userEvent.setup>> {
@@ -3475,6 +3494,98 @@ describe('tags on a record', () => {
     expect(chip(USER_CONTENT.tag)).toBeInTheDocument();
   });
 
+  it('keeps everything typed while a new tag was being made', async () => {
+    // Found in review: the answer to "make this tag" put back the whole form
+    // as it was when the button was pressed, so a note typed while it was
+    // in the air was silently undone -- and an amount, or another tag
+    // chosen meanwhile, with it.
+    api.tags = [{ id: 'tag-day', name: 'daytime', createdAt: 0 }];
+    const release = holdTagCreation();
+
+    const user = await intoTheForm();
+    await user.click(screen.getByTestId('add-tag'));
+    await user.type(screen.getByTestId('tag-name'), USER_CONTENT.tag);
+    await user.click(screen.getByTestId('save-tag'));
+
+    // While it is in the air: a note, a different amount, another tag.
+    await user.type(screen.getByLabelText(zhTW.addEvent.note), USER_CONTENT.note);
+    const amount = screen.getByLabelText(valueLabel('bottle'));
+    await user.clear(amount);
+    await user.type(amount, '180');
+    await user.click(chip('daytime'));
+
+    release();
+    await waitFor(() => expect(chip(USER_CONTENT.tag)).toHaveAttribute('aria-pressed', 'true'));
+
+    expect(screen.getByLabelText(zhTW.addEvent.note)).toHaveValue(USER_CONTENT.note);
+    expect(screen.getByLabelText(valueLabel('bottle'))).toHaveValue('180');
+    expect(chip('daytime')).toHaveAttribute('aria-pressed', 'true');
+
+    // And it is what reaches the server, not only what is on the screen.
+    await user.click(screen.getByTestId('submit'));
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    expect(api.events[0]?.note).toBe(USER_CONTENT.note);
+    expect(api.events[0]?.value).toBe(180);
+    expect([...(api.events[0]?.tagIds ?? [])].sort()).toEqual(['tag-day', 'tag-new']);
+  });
+
+  it('does not leave a draft behind when the tag answers after the form is gone', async () => {
+    // Saved while the tag was still being made: the form is cleared and the
+    // screen is gone. An answer arriving after that must not write the old
+    // content back as a draft, or the next bottle form would open holding
+    // this one's amount and note.
+    const release = holdTagCreation();
+
+    const user = await intoTheForm();
+    await user.click(screen.getByTestId('add-tag'));
+    await user.type(screen.getByTestId('tag-name'), USER_CONTENT.tag);
+    await user.click(screen.getByTestId('save-tag'));
+    await user.click(screen.getByTestId('submit'));
+    // Gone for real: the server having the record is not enough, because
+    // the form clears its draft only once it has heard back. Released any
+    // earlier, the late write lands before that clear and is hidden by it.
+    await waitForHome();
+
+    release();
+    await waitFor(() => expect(api.tags).toHaveLength(1));
+    // Let the answer land and anything it would do run.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(readForm(formKey(scopeOf(api.userId, BABY.id), 'add:bottle:'))).toBeNull();
+  });
+
+  it('does not touch a record that is already on its way to the server', async () => {
+    // While a record is being sent, its draft carries the id it is going
+    // out under, and that mark is what stops a reload from turning it into
+    // a second record (spec 3.8). The form is frozen for exactly that
+    // reason -- but a fieldset only stops taps, not an answer arriving
+    // late. Written over without the mark, the record would be offered
+    // again as a draft and could be sent twice.
+    const releaseTag = holdTagCreation();
+
+    const user = await intoTheForm();
+    await user.click(screen.getByTestId('add-tag'));
+    await user.type(screen.getByTestId('tag-name'), USER_CONTENT.tag);
+    await user.click(screen.getByTestId('save-tag'));
+
+    const releaseWrite = api.holdNextWrite();
+    await user.click(screen.getByTestId('submit'));
+    const key = formKey(scopeOf(api.userId, BABY.id), 'add:bottle:');
+    await waitFor(() => expect(readForm(key)?.eventId).toBeDefined());
+    const sending = readForm(key)?.eventId;
+
+    releaseTag();
+    await waitFor(() => expect(api.tags).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Still marked as being handed over, under the same id.
+    expect(readForm(key)?.eventId).toBe(sending);
+
+    releaseWrite();
+    await waitForHome();
+    expect(api.events).toHaveLength(1);
+  });
+
   it('keeps what was chosen through a reload', async () => {
     // The draft is written as it is typed, tags and all: the browser
     // reclaiming a background tab does not ask first (spec 2.1).
@@ -3530,6 +3641,91 @@ describe('tags on a record being edited', () => {
 
     await waitFor(() =>
       expect(api.events.find((one) => one.id === event.id)?.tagIds).toEqual(['tag-day']));
+  });
+
+  /**
+   * An edit draft as a build from before tags left it: a version it was
+   * written against, and no `tagIds` field at all.
+   */
+  function leaveDraftFromBeforeTags(event: { id: string; startedAt: number; version: number }): void {
+    const old = {
+      startedAt: event.startedAt,
+      endedAt: null,
+      displayValue: '160',
+      note: '',
+      metadata: {},
+    } as unknown as Parameters<typeof saveForm>[2];
+    saveForm(formKey(scopeOf(api.userId, BABY.id), `edit:${event.id}`), 'record', old, {
+      baseVersion: event.version,
+    });
+  }
+
+  it('keeps the record\u2019s tags when a draft from before tags is restored', async () => {
+    // Found in review. The draft has no opinion about tags -- the field did
+    // not exist when it was written -- so it must not be read as "none".
+    // Read that way, saving it sent an empty list and silently took every
+    // tag off the record.
+    api.tags = [{ id: 'tag-night', name: USER_CONTENT.tag, createdAt: 0 }];
+    const event = api.add({
+      typeId: 'bottle', value: 140, startedAt: earlierToday(HOUR), tagIds: ['tag-night'],
+    });
+    leaveDraftFromBeforeTags(event);
+
+    const user = openSignedIn(`/event/${event.id}`);
+    // The draft was applied...
+    expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('160');
+    // ...and the record's own tag is still chosen.
+    expect(chip(USER_CONTENT.tag)).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(screen.getByTestId('submit'));
+    await waitFor(() => expect(api.events.find((one) => one.id === event.id)?.value).toBe(160));
+    expect(api.events.find((one) => one.id === event.id)?.tagIds).toEqual(['tag-night']);
+  });
+
+  it('still clears them when the draft says it chose none', async () => {
+    // The other half: an empty list written by this build is a choice, and
+    // honouring it is the point. Only an absent field means "no opinion".
+    api.tags = [{ id: 'tag-night', name: USER_CONTENT.tag, createdAt: 0 }];
+    const event = api.add({
+      typeId: 'bottle', value: 140, startedAt: earlierToday(HOUR), tagIds: ['tag-night'],
+    });
+    saveForm(formKey(scopeOf(api.userId, BABY.id), `edit:${event.id}`), 'record', {
+      startedAt: event.startedAt,
+      endedAt: null,
+      displayValue: '160',
+      note: '',
+      metadata: {},
+      tagIds: [],
+    }, { baseVersion: event.version });
+
+    const user = openSignedIn(`/event/${event.id}`);
+    expect(await screen.findByLabelText(valueLabel('bottle'))).toHaveValue('160');
+    expect(chip(USER_CONTENT.tag)).toHaveAttribute('aria-pressed', 'false');
+
+    await user.click(screen.getByTestId('submit'));
+    await waitFor(() => expect(api.events.find((one) => one.id === event.id)?.value).toBe(160));
+    expect(api.events.find((one) => one.id === event.id)?.tagIds).toEqual([]);
+  });
+
+  it('does not leave an edit draft behind when the tag answers after saving', async () => {
+    // The edit screen has no lock of its own, so whether the picker acts
+    // once the screen has gone is the only thing standing between a late
+    // answer and a ghost draft -- one carrying the version it was written
+    // on, which would be applied the next time this record was opened.
+    const { user, event } = await intoTheEdit([]);
+    const release = holdTagCreation();
+
+    await user.click(screen.getByTestId('add-tag'));
+    await user.type(screen.getByTestId('tag-name'), 'new one');
+    await user.click(screen.getByTestId('save-tag'));
+    await user.click(screen.getByTestId('submit'));
+    await waitForHome();
+
+    release();
+    await waitFor(() => expect(api.tags.some((one) => one.id === 'tag-new')).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(readForm(formKey(scopeOf(api.userId, BABY.id), `edit:${event.id}`))).toBeNull();
   });
 
   it('keeps what was chosen when somebody else saved first', async () => {
@@ -4297,7 +4493,9 @@ describe('a reload, whoever asked for it', () => {
     const scope = scopeOf(api.userId, BABY.id);
     const key = formKey(scope, 'add:bottle:');
     const held = readForm(key);
-    saveForm(key, held?.intent ?? 'record', held!.draft, { eventId: 'half-sent-id' });
+    saveForm(key, held?.intent ?? 'record', { ...held!.draft, tagIds: held!.draft.tagIds ?? [] }, {
+      eventId: 'half-sent-id',
+    });
 
     closeApp();
     const next = openSignedIn('/add/bottle');
