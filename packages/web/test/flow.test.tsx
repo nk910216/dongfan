@@ -3368,6 +3368,186 @@ describe('recording with no signal', () => {
   });
 });
 
+describe('tags on a record', () => {
+  /** Walks to the bottle form, which has a value field and so a draft. */
+  async function intoTheForm(): Promise<ReturnType<typeof userEvent.setup>> {
+    const user = openSignedIn('/add/bottle');
+    // A bottle needs an amount, and there is no previous one to prefill
+    // from in these fixtures.
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    return user;
+  }
+
+  const chip = (name: string): HTMLElement =>
+    screen.getAllByTestId('tag-chip').find((one) => one.textContent?.includes(name)) as HTMLElement;
+
+  it('offers the baby’s tags and sends the ones that were chosen', async () => {
+    api.tags = [
+      { id: 'tag-night', name: USER_CONTENT.tag, createdAt: 0 },
+      { id: 'tag-day', name: 'daytime', createdAt: 0 },
+    ];
+
+    const user = await intoTheForm();
+    await user.click(chip(USER_CONTENT.tag));
+    await user.click(screen.getByTestId('submit'));
+
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    expect(api.events[0]?.tagIds).toEqual(['tag-night']);
+  });
+
+  it('sends none when none was chosen', async () => {
+    api.tags = [{ id: 'tag-night', name: USER_CONTENT.tag, createdAt: 0 }];
+
+    const user = await intoTheForm();
+    await user.click(screen.getByTestId('submit'));
+
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    expect(api.events[0]?.tagIds).toEqual([]);
+  });
+
+  it('lets one be made on the spot, and puts it on this record', async () => {
+    // Spec 7.3 asks for both: choosing from the list and adding one here.
+    // Making somebody tap the new tag again afterwards would be a step that
+    // exists only because of how it was built.
+    const user = await intoTheForm();
+
+    await user.click(screen.getByTestId('add-tag'));
+    await user.type(screen.getByTestId('tag-name'), USER_CONTENT.tag);
+    await user.click(screen.getByTestId('save-tag'));
+
+    await waitFor(() => expect(screen.getAllByTestId('tag-chip')).toHaveLength(1));
+    expect(chip(USER_CONTENT.tag)).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByTestId('submit'));
+
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    expect(api.tags.map((one) => one.name)).toEqual([USER_CONTENT.tag]);
+    expect(api.events[0]?.tagIds).toEqual([api.tags[0]?.id]);
+  });
+
+  it('carries the tags through the queue when there is no signal', async () => {
+    // The one that matters most. A feed written up with no signal and
+    // tagged has to arrive tagged: sent later as a second step it would be
+    // an edit, which the queue does not take, so the tags would simply be
+    // lost on the way (spec 6.1).
+    api.tags = [{ id: 'tag-night', name: USER_CONTENT.tag, createdAt: 0 }];
+
+    const user = openSignedIn();
+    await waitForHome();
+    // Synced while there was a signal, so the list is on the device.
+    await waitFor(() => expect(api.requests.some((one) => one.path.endsWith('/tags'))).toBe(true));
+
+    goOffline();
+    await user.click(screen.getByRole('link', {
+      name: `${zhTW.addEvent.title} ${eventTypeName('bottle')}`,
+    }));
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+
+    await user.click(chip(USER_CONTENT.tag));
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('unsynced-count');
+
+    comeBack();
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    expect(api.events[0]?.tagIds).toEqual(['tag-night']);
+  });
+
+  it('says a new tag needs a connection, and still offers the synced ones', async () => {
+    // The queue takes event creations and nothing else, and a tag minted on
+    // the device would carry an id the server never agreed to.
+    api.tags = [{ id: 'tag-night', name: USER_CONTENT.tag, createdAt: 0 }];
+
+    const user = openSignedIn();
+    await waitForHome();
+    await waitFor(() => expect(api.requests.some((one) => one.path.endsWith('/tags'))).toBe(true));
+
+    goOffline();
+    await user.click(screen.getByRole('link', {
+      name: `${zhTW.addEvent.title} ${eventTypeName('bottle')}`,
+    }));
+    await screen.findByTestId('submit');
+
+    await user.click(screen.getByTestId('add-tag'));
+    await user.type(screen.getByTestId('tag-name'), 'something new');
+    await user.click(screen.getByTestId('save-tag'));
+
+    expect(await screen.findByTestId('tag-offline')).toBeInTheDocument();
+    // And the ones already synced are still there to choose.
+    expect(chip(USER_CONTENT.tag)).toBeInTheDocument();
+  });
+
+  it('keeps what was chosen through a reload', async () => {
+    // The draft is written as it is typed, tags and all: the browser
+    // reclaiming a background tab does not ask first (spec 2.1).
+    api.tags = [{ id: 'tag-night', name: USER_CONTENT.tag, createdAt: 0 }];
+
+    const user = await intoTheForm();
+    await user.click(chip(USER_CONTENT.tag));
+
+    closeApp();
+    openSignedIn('/add/bottle');
+    await screen.findByTestId('submit');
+
+    await waitFor(() => expect(chip(USER_CONTENT.tag)).toHaveAttribute('aria-pressed', 'true'));
+  });
+});
+
+describe('tags on a record being edited', () => {
+  const chip = (name: string): HTMLElement =>
+    screen.getAllByTestId('tag-chip').find((one) => one.textContent?.includes(name)) as HTMLElement;
+
+  async function intoTheEdit(tagIds: string[] = []): Promise<{
+    user: ReturnType<typeof userEvent.setup>;
+    event: { id: string };
+  }> {
+    api.tags = [
+      { id: 'tag-night', name: USER_CONTENT.tag, createdAt: 0 },
+      { id: 'tag-day', name: 'daytime', createdAt: 0 },
+    ];
+    const event = api.add({ typeId: 'bottle', value: 140, startedAt: earlierToday(HOUR), tagIds });
+
+    const user = openSignedIn();
+    await waitForHome();
+    await user.click(screen.getByRole('link', {
+      name: interpolate(zhTW.event.open, { name: eventTypeName('bottle') }),
+    }));
+    await screen.findByTestId('submit');
+    return { user, event };
+  }
+
+  it('shows the tags the record already has', async () => {
+    await intoTheEdit(['tag-night']);
+
+    expect(chip(USER_CONTENT.tag)).toHaveAttribute('aria-pressed', 'true');
+    expect(chip('daytime')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('sends the whole list, so removing one removes it', async () => {
+    const { user, event } = await intoTheEdit(['tag-night']);
+
+    await user.click(chip(USER_CONTENT.tag));
+    await user.click(chip('daytime'));
+    await user.click(screen.getByTestId('submit'));
+
+    await waitFor(() =>
+      expect(api.events.find((one) => one.id === event.id)?.tagIds).toEqual(['tag-day']));
+  });
+
+  it('keeps what was chosen when somebody else saved first', async () => {
+    // The server refuses the whole update -- the body and the tags together
+    // -- so nothing of theirs is lost (spec 4.3). This screen must not lose
+    // the choice either: being told to look again is not a reason to throw
+    // away what was already picked (spec 2.1, 6.3).
+    const { user } = await intoTheEdit([]);
+
+    await user.click(chip('daytime'));
+    api.nextFailure = { status: 409, code: 'VERSION_CONFLICT' };
+    await user.click(screen.getByTestId('submit'));
+
+    expect(await screen.findByText(zhTW.conflict.body)).toBeInTheDocument();
+    expect(chip('daytime')).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
 describe('the list of records that would not send', () => {
   /** A refusal the server could only give for something it has not stored. */
   const REFUSED = {
@@ -4166,6 +4346,7 @@ describe('a reload, whoever asked for it', () => {
       endedAt: null,
       displayValue: '140',
       note: USER_CONTENT.note,
+      tagIds: [],
       metadata: {},
     });
   }

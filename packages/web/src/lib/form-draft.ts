@@ -128,7 +128,16 @@ export function saveForm(
 export function readForm(key: string, now: number = Date.now()): SavedForm | null {
   const found = readAll().find((form) => form.key === key);
   if (!found) return null;
-  return now - found.savedAt <= KEEPS_FOR_MS ? found : null;
+  if (now - found.savedAt > KEEPS_FOR_MS) return null;
+
+  // A draft written before tags were a field has none. Completed here, once,
+  // rather than at each of the three screens that read one back: a missing
+  // field read as an empty list is the kind of difference that silently
+  // strips something, and it should be impossible to forget.
+  // `found.draft` is typed as complete and may not be, which is the whole
+  // point of this line.
+  const draft = found.draft as Partial<EventDraft>;
+  return { ...found, draft: { ...found.draft, tagIds: draft.tagIds ?? [] } };
 }
 
 /**

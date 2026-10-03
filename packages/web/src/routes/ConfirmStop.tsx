@@ -102,7 +102,10 @@ export function ConfirmStop(): React.JSX.Element {
         endedAt,
         displayValue: draftForValue(type.value ?? null, event.value),
         note: event.note,
+        // Confirming a stop changes one thing, the end time. The tags are
+        // the event's own and are not being edited here.
         metadata: event.metadata,
+        tagIds: event.tagIds,
       },
       'record',
       { now: Date.now(), timeZone: baby.timezone, birthDate: baby.birthDate },

@@ -30,6 +30,7 @@ function input(overrides: Partial<NewEventInput> = {}): NewEventInput {
     startedAt: NOW,
     endedAt: null,
     value: 150,
+    tagIds: [],
     note: '',
     metadata: {},
     ...overrides,

@@ -187,6 +187,9 @@ class Api {
   /** What the next join answers with, when it is not this account's own. */
   joinsInto: BabyDto | null = null;
 
+  /** The baby's tags, as the server holds them (spec 3.7). */
+  tags: { id: string; name: string; createdAt: number }[] = [];
+
   reset(): void {
     // The baby is a shared object the settings screen edits in place, so
     // one test's rename must not become the next one's fixture.
@@ -197,6 +200,7 @@ class Api {
     this.invites = new Map();
     this.joinFails = false;
     this.joinsInto = null;
+    this.tags = [];
     this.serverVersion = APP_VERSION;
     this.accounts += 1;
     ME.user = { id: `user-${this.accounts}`, username: 'parent' };
@@ -463,6 +467,28 @@ export const server = setupServer(
     });
   }),
 
+  http.get('/api/babies/:babyId/tags', async ({ request }) => {
+    await record(request);
+    return HttpResponse.json({
+      tags: [...api.tags].sort((a, b) => (a.name < b.name ? -1 : 1)),
+    });
+  }),
+
+  http.post('/api/babies/:babyId/tags', async ({ request }) => {
+    const body = (await record(request)) as { name: string };
+    const failure = pending();
+    if (failure) return refuse(failure);
+
+    // A repeated name answers with the tag that already exists: two parents
+    // adding the same one on the same evening is ordinary (spec 3.7).
+    const already = api.tags.find((one) => one.name === body.name);
+    if (already) return HttpResponse.json(already, { status: 200 });
+
+    const made = { id: `tag-${api.tags.length + 1}`, name: body.name, createdAt: Date.now() };
+    api.tags.push(made);
+    return HttpResponse.json(made, { status: 201 });
+  }),
+
   http.get('/api/babies/:babyId/events/summary', async ({ request }) => {
     await record(request);
     return HttpResponse.json(api.summary());
@@ -538,6 +564,10 @@ export const server = setupServer(
       value: body['value'] === undefined ? 1 : Number(body['value']),
       note: String(body['note'] ?? ''),
       metadata: (body['metadata'] ?? {}) as Record<string, string>,
+      // Only ids this baby actually has, as the server's join does: a tag
+      // belonging to another family may never be hung on this event.
+      tagIds: ((body['tagIds'] ?? []) as string[])
+        .filter((id) => api.tags.some((tag) => tag.id === id)),
       active: body['intent'] === 'start_timer',
     });
     if (api.loseNextResponse) {
@@ -573,6 +603,12 @@ export const server = setupServer(
       value: body['value'] === undefined ? event.value : Number(body['value']),
       note: body['note'] === undefined ? event.note : String(body['note']),
       metadata: (body['metadata'] ?? event.metadata) as Record<string, string>,
+      // The whole list replaces the old one, filtered to this baby's tags.
+      // Absent means "not being changed", which is what lets the stop
+      // confirmation send a body without touching them.
+      tagIds: body['tagIds'] === undefined
+        ? event.tagIds
+        : (body['tagIds'] as string[]).filter((id) => api.tags.some((tag) => tag.id === id)),
       active: event.active && endedAt === null,
       version: event.version + 1,
     });

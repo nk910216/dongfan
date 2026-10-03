@@ -123,6 +123,7 @@ export const QUEUED: QueuedCreate[] = [{
     value: 160,
     note: '',
     metadata: {},
+    tagIds: [],
   },
   outcomeUnknown: false,
   attempts: 0,

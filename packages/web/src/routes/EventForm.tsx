@@ -34,7 +34,7 @@ export function EventForm({ typeId: given, entryId }: {
   const typeId = given ?? params['typeId'] ?? '';
   const navigate = useNavigate();
   const [search] = useSearchParams();
-  const { baby, scope, summary } = useStore();
+  const { baby, scope, summary, tags, createTag } = useStore();
   const type = getEventType(typeId);
 
   /**
@@ -123,6 +123,9 @@ export function EventForm({ typeId: given, entryId }: {
         displayValue: draftForValue(type?.value ?? null, resumed.value ?? null),
         note: resumed.note,
         metadata: { ...resumed.metadata },
+        // As it was sent, tags and all: the screen has to show what is
+        // actually in doubt (spec 6.1).
+        tagIds: [...resumed.tagIds],
       };
     }
 
@@ -148,6 +151,7 @@ export function EventForm({ typeId: given, entryId }: {
       displayValue: draftForValue(type?.value ?? null, typeSummary(summary, typeId)?.lastValue ?? null),
       note: '',
       metadata: {},
+      tagIds: [],
     };
   });
   const [localError, setLocalError] = useState<string | null>(null);
@@ -229,6 +233,7 @@ export function EventForm({ typeId: given, entryId }: {
       value: checked.value,
       note: draft.note,
       metadata: draft.metadata,
+      tagIds: draft.tagIds,
     }));
   };
 
@@ -301,6 +306,8 @@ export function EventForm({ typeId: given, entryId }: {
             draft={draft}
             timeZone={baby.timezone}
             showEnd={!isTimer}
+            tags={tags}
+            onCreateTag={createTag}
             // Written down as it is typed. Saving on the way out would
             // miss the reload this exists for: the browser reclaiming a
             // background tab does not ask first (spec 2.1).

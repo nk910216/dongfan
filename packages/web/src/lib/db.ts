@@ -22,7 +22,7 @@ import type { EventDto, EventIntent, SummaryDto } from '@dongfan/shared';
  */
 
 const DB_NAME = 'dongfan';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 /**
  * One account, one baby.
@@ -75,6 +75,17 @@ export type NewEventInput = {
   value?: number | undefined;
   note: string;
   metadata: Record<string, string>;
+  /**
+   * The tags chosen when it was written, carried to the server with it.
+   *
+   * Part of the queued entry rather than something applied afterwards: a
+   * feed written up with no signal and tagged "night" has to arrive tagged.
+   * Sent later as a second step it would be an edit, which the queue does
+   * not take (spec 6.1), so the tags would simply be lost on the way.
+   *
+   * Entries written by a build before this field default to none.
+   */
+  tagIds: string[];
 };
 
 /**
@@ -147,6 +158,22 @@ export type QueuedCreate = {
  * the other parent may have stopped or edited the same timer in the
  * meantime, and only a person can decide what to do about that.
  */
+/**
+ * A tag of this baby, as this device last heard it.
+ *
+ * Replaced wholesale on every sync rather than merged: the list is small
+ * and the server's copy is the truth. A rename therefore arrives as a
+ * different name under the same id, and a deleted tag simply stops being
+ * in the list -- which is the other half of what the rev bump on every
+ * affected event is for (spec 7.9).
+ */
+export type StoredTag = {
+  scope: Scope;
+  id: string;
+  name: string;
+  createdAt: number;
+};
+
 export type StopDraft = {
   scope: Scope;
   eventId: string;
@@ -220,6 +247,13 @@ interface DongfanDb extends DBSchema {
       'by-scope': Scope;
     };
   };
+  tags: {
+    key: [Scope, string];
+    value: StoredTag;
+    indexes: {
+      'by-scope': Scope;
+    };
+  };
 }
 
 let handle: Promise<IDBPDatabase<DongfanDb>> | null = null;
@@ -250,6 +284,14 @@ export function db(): Promise<IDBPDatabase<DongfanDb>> {
         // Everything the queue does is per account and baby: what it sends,
         // what it counts and what it shows (spec 6.1).
         outbox.createIndex('by-scope', 'scope');
+      }
+
+      if (!database.objectStoreNames.contains('tags')) {
+        // Kept on the device so a form can offer them with no signal. They
+        // are small, bounded by the family, and replaced wholesale on every
+        // sync -- there is no cursor here and no merge to get wrong.
+        const stored = database.createObjectStore('tags', { keyPath: ['scope', 'id'] });
+        stored.createIndex('by-scope', 'scope');
       }
 
       if (!database.objectStoreNames.contains('drafts')) {
@@ -546,13 +588,30 @@ export async function allEvents(scope: Scope): Promise<EventDto[]> {
  * random UUID, so the queue would drain in an order with no relation to
  * the order a parent recorded things in.
  */
+/**
+ * An entry written before tags were a field carries none.
+ *
+ * Read back rather than migrated, for the reason the file already gives
+ * about `SyncMeta`: a migration that runs once has to be right the first
+ * time, and a phone that opens the app after two upgrades has to land in
+ * the same place as one that opened after each.
+ */
+function queuedWithDefaults(entry: QueuedCreate): QueuedCreate {
+  return entry.input.tagIds === undefined
+    ? { ...entry, input: { ...entry.input, tagIds: [] } }
+    : entry;
+}
+
 export async function listQueued(scope: Scope): Promise<QueuedCreate[]> {
   const rows = await (await db()).getAllFromIndex('outbox', 'by-scope', scope);
-  return rows.sort((a, b) => a.queuedAt - b.queuedAt || (a.eventId < b.eventId ? -1 : 1));
+  return rows
+    .sort((a, b) => a.queuedAt - b.queuedAt || (a.eventId < b.eventId ? -1 : 1))
+    .map(queuedWithDefaults);
 }
 
 export async function getQueued(scope: Scope, eventId: string): Promise<QueuedCreate | null> {
-  return (await (await db()).get('outbox', [scope, eventId])) ?? null;
+  const row = await (await db()).get('outbox', [scope, eventId]);
+  return row ? queuedWithDefaults(row) : null;
 }
 
 export async function putQueued(entry: QueuedCreate): Promise<void> {
@@ -833,4 +892,35 @@ export async function reconcileDrafts(scope: Scope): Promise<StopDraft[]> {
 
   await tx.done;
   return listDrafts(scope);
+}
+
+/**
+ * The baby's tags, as this device last heard them.
+ *
+ * Sorted by name, which is the order the list is offered in and the order
+ * the server returns.
+ */
+export async function listTags(scope: Scope): Promise<StoredTag[]> {
+  const rows = await (await db()).getAllFromIndex('tags', 'by-scope', scope);
+  return rows.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
+/**
+ * Replaces the whole list for this account.
+ *
+ * Wholesale, in one transaction: a tag deleted on the other phone has to
+ * stop being offered here, and merging would keep it for ever. There is no
+ * cursor for tags and no partial page to reconcile.
+ */
+export async function putTags(scope: Scope, tags: readonly Omit<StoredTag, 'scope'>[]): Promise<void> {
+  const database = await db();
+  const tx = database.transaction('tags', 'readwrite');
+  const store = tx.objectStore('tags');
+
+  for (const row of await store.index('by-scope').getAll(scope)) {
+    await store.delete([scope, row.id]);
+  }
+  for (const tag of tags) await store.put({ ...tag, scope });
+
+  await tx.done;
 }

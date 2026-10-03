@@ -8,9 +8,10 @@ import type {
 import { ApiFailure, OfflineError, apiRequest, isOffline } from './api.js';
 import * as local from './db.js';
 import {
-  getQueued, keepDraft, listDrafts, listQueued, reconcileDrafts, removeDraft, scopeOf,
+  getQueued, keepDraft, listDrafts, listQueued, listTags, putTags, reconcileDrafts, removeDraft,
+  scopeOf,
 } from './db.js';
-import type { NewEventInput, QueuedCreate, StopDraft } from './db.js';
+import type { NewEventInput, QueuedCreate, StopDraft, StoredTag } from './db.js';
 import { reconcileForms } from './form-draft.js';
 import { runExclusive, runSerial } from './lane.js';
 import {
@@ -18,7 +19,7 @@ import {
   runOutbox,
 } from './outbox.js';
 import type { Attempt, Send } from './outbox.js';
-import { syncEvents, syncSummary } from './sync.js';
+import { syncEvents, syncSummary, syncTags } from './sync.js';
 import { useSession } from './session.js';
 
 /**
@@ -56,6 +57,13 @@ export type EventPatch = {
   value?: number;
   note?: string;
   metadata?: Record<string, string>;
+  /**
+   * The whole list, not a change to it.
+   *
+   * Sent under the same version guard as the body, so a conflict leaves
+   * the event and its tags both exactly as they were (spec 4.3, 6.3).
+   */
+  tagIds?: string[];
 };
 
 export type Store = {
@@ -93,6 +101,23 @@ export type Store = {
    * moment they were stopped at (spec 7.2).
    */
   stopDrafts: StopDraft[];
+  /**
+   * The baby's tags, as this device last heard them.
+   *
+   * On the device rather than fetched by the screen that needs them: a form
+   * has to offer them with no signal, and a second place that fetched them
+   * would be a second idea of what the list is.
+   */
+  tags: StoredTag[];
+  /**
+   * Makes one and returns it, or answers null when it cannot be done.
+   *
+   * Online only. The queue takes event creations and nothing else
+   * (spec 6.1), and a tag minted on the device would need an id the server
+   * does not know -- so the form offers what has been synced and says that
+   * a new one needs a connection.
+   */
+  createTag: (name: string) => Promise<StoredTag | null>;
   refresh: () => Promise<void>;
   /**
    * Sends one waiting add now, exactly as it stands, and resets its
@@ -195,6 +220,7 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
   const [syncedAt, setSyncedAt] = useState<number | null>(null);
   const [unsynced, setUnsynced] = useState<QueuedCreate[]>([]);
   const [stopDrafts, setStopDrafts] = useState<StopDraft[]>([]);
+  const [tags, setTags] = useState<StoredTag[]>([]);
   // When the queue should wake up next. Null while there is nothing
   // waiting, and null while it is paused, which is what stops a timer
   // firing against a session that has already been rejected.
@@ -238,16 +264,18 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     // either lose the typing or offer it back twice (spec 2.1, 3.8).
     await reconcileForms(scope);
 
-    const [day, meta, queued, drafts] = await Promise.all([
+    const [day, meta, queued, drafts, known] = await Promise.all([
       local.eventsOnDate(scope, today),
       local.readMeta(scope),
       listQueued(scope),
       reconcileDrafts(scope),
+      listTags(scope),
     ]);
     setEvents(allDayFirst(day));
     setSyncedAt(meta.syncedAt);
     setUnsynced(queued);
     setStopDrafts(drafts);
+    setTags(known);
     if (meta.summary) setSummary(meta.summary);
     return meta;
   }, [scope, today]);
@@ -266,6 +294,10 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     // Tagged with the cursor it was fetched at, which is the only thing
     // that orders two summaries.
     await syncSummary(scope, baby.id, call, cursor);
+    // The other half of spec 7.9: the events learn through their revs that
+    // their tags changed, and this is how the device learns what the tags
+    // now are -- including that one of them is gone.
+    await syncTags(scope, baby.id, call);
 
     // Everything on screen comes back out of the database rather than from
     // the replies that were just received. A reply can be refused for being
@@ -275,6 +307,7 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     setEvents(allDayFirst(await local.eventsOnDate(scope, today)));
     setUnsynced(await listQueued(scope));
     setStopDrafts(await reconcileDrafts(scope));
+    setTags(await listTags(scope));
     if (meta.summary) setSummary(meta.summary);
     setSyncedAt(meta.syncedAt);
   }, [call, readLocal, scope, baby.id, today]);
@@ -746,15 +779,46 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     [call, baby.id],
   );
 
+  /**
+   * Adds a tag and keeps it, so the form it was typed in can select it at
+   * once rather than waiting for the next sync.
+   *
+   * A repeated name comes back as the tag that already exists -- two
+   * parents adding "night" on the same evening is ordinary (spec 3.7) --
+   * so this is also how a race resolves itself.
+   */
+  const createTag = useCallback(async (name: string): Promise<StoredTag | null> => {
+    try {
+      const made = await call<{ id: string; name: string; createdAt: number }>(
+        `/babies/${baby.id}/tags`,
+        { method: 'POST', body: { name } },
+      );
+      const held = (await listTags(scope))
+        .filter((one) => one.id !== made.id)
+        .map((one) => ({ id: one.id, name: one.name, createdAt: one.createdAt }));
+      await putTags(scope, [...held, made]);
+
+      const stored = await listTags(scope);
+      setTags(stored);
+      return stored.find((one) => one.id === made.id) ?? null;
+    } catch {
+      // Offline, or refused. The form says a new tag needs a connection
+      // rather than pretending one was made.
+      return null;
+    }
+  }, [call, baby.id, scope]);
+
   const value = useMemo<Store>(
     () => ({
       baby, scope, events, summary: summary as SummaryDto, now, loading, stale, syncing, syncedAt,
-      unsynced, stopDrafts, refresh: settle, findEvent, addEvent, updateEvent, stopTimer,
+      unsynced, stopDrafts, tags, createTag,
+      refresh: settle, findEvent, addEvent, updateEvent, stopTimer,
       loadStats,
       discardStop, removeEvent, retryUnsynced, correctUnsynced, abandonUnsynced,
       listMembers, createInvite, removeMember, editBaby,
     }),
-    [baby, scope, events, summary, now, loading, stale, syncing, syncedAt, unsynced, stopDrafts, settle,
+    [baby, scope, events, summary, now, loading, stale, syncing, syncedAt, unsynced, stopDrafts,
+      tags, createTag, settle,
       loadStats,
       findEvent, addEvent, updateEvent, stopTimer, discardStop, removeEvent, retryUnsynced,
       correctUnsynced, abandonUnsynced, listMembers, createInvite, removeMember, editBaby],

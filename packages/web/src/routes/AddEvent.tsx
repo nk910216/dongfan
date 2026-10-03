@@ -67,6 +67,9 @@ export function AddEvent(): React.JSX.Element {
       endedAt: null,
       note: '',
       metadata: { diaper_kind: kind },
+      // The shortcut has no form, so it has no tags to carry. Tagging one
+      // is what the full form is for.
+      tagIds: [],
     });
 
     // Queued counts as recorded: it is written down, and the home screen

@@ -22,6 +22,7 @@ function draft(overrides: Partial<EventDraft> = {}): EventDraft {
     displayValue: '150',
     note: '',
     metadata: {},
+    tagIds: [],
     ...overrides,
   };
 }

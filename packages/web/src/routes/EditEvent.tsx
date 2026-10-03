@@ -31,7 +31,7 @@ export function EditEvent(): React.JSX.Element {
   // Back to the screen this was opened from -- the calendar, on the day
   // being read -- rather than always to the home screen.
   const back = useReturnTo();
-  const { baby, scope, findEvent, updateEvent, removeEvent } = useStore();
+  const { baby, scope, findEvent, updateEvent, removeEvent, tags, createTag } = useStore();
 
   const [event, setEvent] = useState<EventDto | null>(null);
   const [draft, setDraft] = useState<EventDraft | null>(null);
@@ -126,13 +126,20 @@ export function EditEvent(): React.JSX.Element {
         const saved = usable;
         if (reloads > 0) clearForm(formId);
 
-        setDraft(saved?.draft ?? {
-          startedAt: found.startedAt,
-          endedAt: found.endedAt,
-          displayValue: draftForValue(getEventType(found.typeId)?.value ?? null, found.value),
-          note: found.note,
-          metadata: { ...found.metadata },
-        });
+        // A draft written before tags were a field has none of its own, so
+        // it takes the event's: the parent never chose to remove them, and
+        // applying an absent field as an empty list would silently strip
+        // every tag off the record (spec 2.1).
+        setDraft(saved?.draft
+          ? saved.draft
+          : {
+            startedAt: found.startedAt,
+            endedAt: found.endedAt,
+            displayValue: draftForValue(getEventType(found.typeId)?.value ?? null, found.value),
+            note: found.note,
+            metadata: { ...found.metadata },
+            tagIds: [...found.tagIds],
+          });
         // A restored draft keeps the version it was written against. If
         // somebody else has saved since, the server refuses it and the
         // dialog below asks what to do -- rather than the change going
@@ -176,6 +183,11 @@ export function EditEvent(): React.JSX.Element {
         ...(checked.value === undefined ? {} : { value: checked.value }),
         note: draft.note,
         metadata: draft.metadata,
+        // Sent with the version the screen was opened on. If somebody else
+        // has saved since, the server refuses the whole update -- the body
+        // and the tags together -- and nothing here is applied over theirs
+        // (spec 6.3, 4.3).
+        tagIds: draft.tagIds,
       });
       clearForm(formId);
       navigate(back);
@@ -233,6 +245,8 @@ export function EditEvent(): React.JSX.Element {
           type={type}
           draft={draft}
           timeZone={baby.timezone}
+          tags={tags}
+          onCreateTag={createTag}
           // A running timer has no end time yet, but supplying one here is
           // exactly how it is stopped, so the field stays available.
           showEnd

@@ -252,6 +252,10 @@ export const zhTW = {
     notePlaceholder: '選填',
     tags: '標籤',
     addTag: '＋ 新增',
+    tagName: '標籤名稱',
+    tagsEmpty: '還沒有標籤',
+    /** The queue takes event creations only, so a new tag needs a connection. */
+    tagNeedsConnection: '新增標籤需要連線，已有的標籤離線時仍可選擇',
     save: '儲存',
     saving: '儲存中…',
     cancel: '取消',

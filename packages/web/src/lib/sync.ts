@@ -1,5 +1,5 @@
 import type { EventPageDto, SummaryDto } from '@dongfan/shared';
-import { applyPage, readMeta, writeSummary } from './db.js';
+import { applyPage, putTags, readMeta, writeSummary } from './db.js';
 import type { Scope } from './db.js';
 
 /**
@@ -88,4 +88,23 @@ export async function syncSummary(
   const summary = await fetch<SummaryDto>(`/babies/${babyId}/events/summary`);
   await writeSummary(scope, summary, atCursor);
   return summary;
+}
+
+/**
+ * Fetches the tag list and replaces the local copy.
+ *
+ * No cursor and no merge: the list is small, bounded by the family, and the
+ * server's copy is the truth. A rename arrives as a different name under
+ * the same id and a deleted tag simply stops being in the list, which is
+ * the half of spec 7.9 that the rev bump on every affected event does not
+ * cover -- the events learn that their tags changed, and this is how the
+ * device learns what the tags now are.
+ *
+ * Kept on the device because a form has to offer them with no signal.
+ */
+export async function syncTags(scope: Scope, babyId: string, fetch: Fetcher): Promise<void> {
+  const body = await fetch<{ tags: { id: string; name: string; createdAt: number }[] }>(
+    `/babies/${babyId}/tags`,
+  );
+  await putTags(scope, body.tags);
 }

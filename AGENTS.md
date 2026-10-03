@@ -124,7 +124,7 @@ own rather than being folded into a screen.
 |---|---|---|
 | 1 | The two-day calendar (spec 7.6), on the single-day timeline | **done** |
 | 2 | Renaming and deleting a tag: the `rev` bump before the association goes (spec 7.9) | **done** |
-| 3 | Tags on an event, in the add and edit forms (spec 7.3) | |
+| 3 | Tags on an event, in the add and edit forms (spec 7.3) | **done** |
 | 4 | The tag page: filtering `GET /events` by tag, with paging (spec 7.9) | |
 | 5 | Data export: the endpoint and the settings entry (spec 5.1, 12) | |
 | 6 | The M4 acceptance: what is checkable locally, and the phone steps | |
@@ -218,6 +218,43 @@ allocator binds it four times. The allocation is the worst place to be loose:
 its base is that baby's `MAX(rev)`, so applied to another baby's events it
 would hand them revs from an unrelated sequence and break the cursor for
 both.
+
+### Tags on a form travel with everything else
+
+The list is **on the device**, synced with the events and kept in IndexedDB,
+because a form has to offer them with no signal. `syncTags` replaces it
+wholesale -- no cursor, no merge -- which is the other half of spec 7.9: the
+events learn through their revs that their tags changed, and this is how the
+device learns what the tags now *are*, including that one of them is gone.
+
+**Chosen tags are part of the queued entry, not something applied
+afterwards.** `NewEventInput.tagIds` goes to the server with the record. Sent
+as a second step it would be an edit, which the queue does not take
+(spec 6.1), so a feed written up offline and tagged "night" would simply
+arrive untagged. Entries and drafts written by a build before the field
+default to none, read back rather than migrated -- `readForm` completes a
+stored draft once so none of the three screens that read one has to remember.
+
+**Making a tag needs a connection; choosing one does not.** A tag minted on
+the device would carry an id the server never agreed to, and two phones
+inventing one for the same word would make two tags. So the picker offers
+what has been synced and says plainly that a new one needs to be online.
+
+**An edit sends the whole list under the event's version**, so a conflict
+leaves the event and its tags both exactly as they were (spec 4.3) -- and the
+screen keeps what was chosen rather than throwing it away, because being told
+to look again is not a reason to lose somebody's work (spec 2.1).
+
+**A draft from before this field takes the event's tags, not an empty list.**
+Applying an absent field as "none" would silently strip every tag off the
+record. The stop confirmation sends no `tagIds` at all, which the API reads
+as "not being changed".
+
+A tag the other parent deleted while a form was open stays selected and has
+no chip to show for it. It is sent and the server drops it, which is the
+honest order of events: this device cannot know it is gone until it syncs,
+and silently editing what somebody chose is worse than sending something that
+turns out not to exist.
 
 **Deleting a tag is not reference-counted.** Every association goes, which is
 what spec 7.9 describes and what the confirmation it asks for is about. That

@@ -9,4 +9,6 @@ export const USER_CONTENT = {
   note: '喝完馬上吐了一點',
   foodName: '南瓜泥',
   milestone: '第一次翻身',
+  /** A tag name, which is user input and round-trips byte for byte. */
+  tag: '夜奶',
 } as const;

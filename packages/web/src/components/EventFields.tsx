@@ -6,6 +6,8 @@ import type {
   EventIntent, EventTypeConfig, FieldError, MetadataField, ValueSpec,
 } from '@dongfan/shared';
 import { DateTimeField } from './DateTimeField.js';
+import { TagPicker } from './TagPicker.js';
+import type { StoredTag } from '../lib/db.js';
 
 /**
  * The inputs for one event, shared by the add and edit screens.
@@ -22,6 +24,14 @@ export type EventDraft = {
   displayValue: string;
   note: string;
   metadata: Record<string, string>;
+  /**
+   * The tags chosen, by id.
+   *
+   * Part of the draft, so a reload keeps them along with everything else
+   * that was typed, and so a queued add carries them to the server. A draft
+   * written by a build before this field has none.
+   */
+  tagIds: string[];
 };
 
 export function draftForValue(spec: ValueSpec | null, stored: number | null): string {
@@ -75,13 +85,15 @@ export function checkDraft(
 }
 
 export function EventFields({
-  type, draft, timeZone, showEnd, onChange,
+  type, draft, timeZone, showEnd, tags, onCreateTag, onChange,
 }: {
   type: EventTypeConfig;
   draft: EventDraft;
   timeZone: string;
   /** False while a timer is running: its end time is not a field yet. */
   showEnd: boolean;
+  tags: readonly StoredTag[];
+  onCreateTag: (name: string) => Promise<StoredTag | null>;
   onChange: (next: EventDraft) => void;
 }): React.JSX.Element {
   const patch = (part: Partial<EventDraft>): void => onChange({ ...draft, ...part });
@@ -143,6 +155,13 @@ export function EventFields({
           className="w-full rounded-xl border border-line bg-surface px-4 py-3.5 text-base outline-none focus:border-ink-faint"
         />
       </Field>
+
+      <TagPicker
+        tags={tags}
+        selected={draft.tagIds}
+        onCreate={onCreateTag}
+        onChange={(tagIds) => patch({ tagIds })}
+      />
     </>
   );
 }
