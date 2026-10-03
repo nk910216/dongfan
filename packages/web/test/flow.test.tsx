@@ -3586,6 +3586,87 @@ describe('tags on a record', () => {
     expect(api.events).toHaveLength(1);
   });
 
+  /**
+   * A sleep whose answer was lost: the server may have it, the screen says
+   * the outcome is unknown, and the draft is marked with the id it went out
+   * under.
+   */
+  async function sleepInDoubt(): Promise<{
+    user: ReturnType<typeof userEvent.setup>;
+    key: string;
+    sending: string | undefined;
+  }> {
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/sleep');
+    await user.click(await screen.findByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    const key = formKey(scopeOf(api.userId, BABY.id), 'add:sleep:');
+    const sending = readForm(key)?.eventId;
+    expect(sending).toBeDefined();
+    return { user, key, sending };
+  }
+
+  it('cannot switch between timing and writing up while the outcome is unknown', async () => {
+    // Found in review. A lost answer is a failure to *hear*, not a refusal:
+    // the server may well have the record, so the content still belongs to
+    // the queue and the draft still has to say which id it went out as.
+    // The lock read every failure as "handed back" and opened, and the
+    // intent toggle -- outside the fieldset, checking only the lock --
+    // rewrote the draft without its mark. Reloaded, that is a draft that
+    // can be sent again as a second record (spec 3.8).
+    const { user, key, sending } = await sleepInDoubt();
+
+    expect(screen.getByRole('button', { name: zhTW.addEvent.record })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: zhTW.addEvent.record }));
+
+    expect(readForm(key)?.eventId).toBe(sending);
+    expect(readForm(key)?.intent).toBe('start_timer');
+  });
+
+  it('does not let a late tag rewrite a record whose outcome is unknown', async () => {
+    // The path disabled controls cannot close: an answer, not a tap. A tag
+    // made just before saving answers after the save was lost, and the form
+    // it lands in is holding a record the server may already have.
+    const release = holdTagCreation();
+    api.loseNextResponse = true;
+
+    const user = openSignedIn('/add/sleep');
+    await user.click(await screen.findByTestId('add-tag'));
+    await user.type(screen.getByTestId('tag-name'), USER_CONTENT.tag);
+    await user.click(screen.getByTestId('save-tag'));
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    const key = formKey(scopeOf(api.userId, BABY.id), 'add:sleep:');
+    const sending = readForm(key)?.eventId;
+    expect(sending).toBeDefined();
+
+    release();
+    await waitFor(() => expect(api.tags).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(readForm(key)?.eventId).toBe(sending);
+    expect(readForm(key)?.draft.tagIds).toEqual([]);
+  });
+
+  it('still cannot after a reload, when nothing in memory remembers the send', async () => {
+    // A reload starts every ref afresh, so a lock held in one is open again.
+    // What is still in doubt has to be asked of the queue, not remembered.
+    const { sending, key } = await sleepInDoubt();
+
+    closeApp();
+    const user = openSignedIn('/add/sleep');
+    await screen.findByTestId('outcome-unknown');
+
+    await user.click(screen.getByRole('button', { name: zhTW.addEvent.record }));
+
+    // Whatever is stored for this form, it is never a draft that has lost
+    // the id it went out under.
+    const after = readForm(key);
+    expect(after !== null && after.eventId !== sending).toBe(false);
+  });
+
   it('keeps what was chosen through a reload', async () => {
     // The draft is written as it is typed, tags and all: the browser
     // reclaiming a background tab does not ask first (spec 2.1).

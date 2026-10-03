@@ -289,6 +289,27 @@ The rule underneath all three: **anything asynchronous that writes back into
 a form has to ask whether the form still accepts writes, and what it holds
 now.** Disabled controls answer neither question.
 
+**And "failed" is not "not written".** The lock first opened on every failed
+submit, and a failed submit includes a lost answer -- the server may well
+have the record, and the content is the queue's until that is settled. The
+intent toggle, outside the fieldset and checking only the lock, then rewrote
+the draft without its mark while the screen was saying the outcome was
+unknown. Found in review. `SubmitResult`'s `failed` had a doc comment saying
+"the server refused it" while every error landed there; it now carries
+`inDoubt`, **read back from the queue entry** rather than inferred from the
+error, because the queue is what decides whether a record may be resent and
+a second classification would drift from it. The lock opens only on a
+refusal.
+
+Every write to the draft goes through one predicate, `writable()`: the lock
+for this session, the queue's `outcomeUnknown` for after a reload. The toggle
+is also disabled whenever the fields are. What the tests pin, stated
+exactly: the toggle being disabled in doubt, and the pair of halves together
+(a late tag answer into a record in doubt). Neither half alone is
+observable -- the queue's is only ever alone behind controls that are already
+disabled, and the lock's matters only in the gap between hearing the failure
+and the doubt reaching the screen. Both are labelled where they sit.
+
 The edit screen has no lock and no fieldset, so typing during an edit's save
 is possible and what is typed then is not part of the PATCH. That predates
 tags and is not fixed here.

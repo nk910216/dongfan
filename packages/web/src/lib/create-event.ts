@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { EventDto } from '@dongfan/shared';
 import { EntryGone } from './outbox.js';
+import { getQueued } from './db.js';
 import type { QueuedCreate } from './db.js';
 import { newClientId } from './ids.js';
 import { useStore } from './store.js';
@@ -38,8 +39,22 @@ export type SubmitResult =
    * (spec 6.1, 6.3).
    */
   | { kind: 'gone'; eventId: string }
-  /** The server refused it. `failure` says what it said. */
-  | { kind: 'failed' };
+  /**
+   * It did not go through -- which is **not** the same as "the server does
+   * not have it".
+   *
+   * This read "the server refused it" while every error landed here,
+   * including a lost answer: the record may be stored, and the content is
+   * the queue's until that is settled. A screen that took this as "handed
+   * back" unlocked the form and let its draft be rewritten without the id
+   * the record went out under (spec 3.8). Found in review.
+   *
+   * `inDoubt` is what the queue says about the entry after the attempt,
+   * read back from it rather than inferred from the error: the queue is
+   * what decides whether this may be retried, corrected or resent, and a
+   * second classification of the same error here could only drift from it.
+   */
+  | { kind: 'failed'; inDoubt: boolean };
 
 export type CreateEvent = {
   /**
@@ -101,7 +116,7 @@ function resumable(
  * what stops a second attempt becoming a second record (spec 3.8).
  */
 export function useCreateEvent(typeId: string, eventId?: string): CreateEvent {
-  const { addEvent, retryUnsynced, correctUnsynced, unsynced } = useStore();
+  const { addEvent, retryUnsynced, correctUnsynced, unsynced, scope } = useStore();
 
   // Read once, at mount, and only ever used to fill the form in. Letting
   // it follow the queue would swap the fields out from under a parent's
@@ -182,12 +197,13 @@ export function useCreateEvent(typeId: string, eventId?: string): CreateEvent {
 
         // Only for display. Whether this may be retried, corrected or
         // resent is decided by the entry, which the queue has just
-        // updated.
+        // updated -- so that is what is asked.
         setFailure(error);
-        return { kind: 'failed' };
+        const stored = await getQueued(scope, id);
+        return { kind: 'failed', inDoubt: stored?.outcomeUnknown ?? false };
       }
     },
-    [addEvent, retryUnsynced, correctUnsynced, id, outcomeUnknown, entry],
+    [addEvent, retryUnsynced, correctUnsynced, id, outcomeUnknown, entry, scope],
   );
 
   const retry = useCallback((): Promise<SubmitResult> => {

@@ -172,8 +172,36 @@ export function EventForm({ typeId: given, entryId }: {
    *
    * A ref rather than state: it has to be true in the same tick the mark is
    * written, not one render later.
+   *
+   * **Released only by a refusal, never by a failure to hear.** A lost
+   * answer comes back as a failure too, and the server may have the record:
+   * the content is still the queue's. Opening the lock on every failure let
+   * the intent toggle rewrite the draft without its mark while the screen
+   * was saying the outcome was unknown. Found in review.
    */
   const locked = useRef(false);
+
+  /**
+   * Whether the draft may be written at all. The one rule every write to it
+   * goes through.
+   *
+   * Two halves, because they cover different moments. The lock covers the
+   * send in this session, from the very tick the mark is written. The
+   * queue's own word covers everything after a reload, when every ref
+   * starts afresh and nothing in memory remembers that a send happened.
+   *
+   * **What the tests can and cannot see of this.** Removing both halves
+   * lets a late tag answer rewrite a record in doubt, and a test fails.
+   * Removing either one alone does not, because each covers the other
+   * there. The queue's half is the only thing standing after a reload, but
+   * by then every control that could write is disabled and no answer can
+   * be pending, so nothing reaches it through the screen. The lock's
+   * retention matters only between hearing the failure and the doubt
+   * reaching the screen, a window no test here can place an answer in.
+   * Both stay, because the rule is "failed is not the same as not written";
+   * neither is counted as covered on its own.
+   */
+  const writable = (): boolean => !locked.current && !create.outcomeUnknown;
 
   if (!type) {
     return (
@@ -227,7 +255,7 @@ export function EventForm({ typeId: given, entryId }: {
       locked.current = true;
       saveForm(formId, intent, draft, { eventId: create.eventId });
       const result = await create.retry();
-      if (result.kind === 'failed') locked.current = false;
+      if (result.kind === 'failed' && !result.inDoubt) locked.current = false;
       finish(result);
       return;
     }
@@ -259,7 +287,8 @@ export function EventForm({ typeId: given, entryId }: {
       tagIds: draft.tagIds,
     });
     // Refused: the content is the parent's again, to correct and resend.
-    if (result.kind === 'failed') locked.current = false;
+    // Not heard back: it is still the queue's, and stays locked.
+    if (result.kind === 'failed' && !result.inDoubt) locked.current = false;
     finish(result);
   };
 
@@ -303,10 +332,11 @@ export function EventForm({ typeId: given, entryId }: {
                 <button
                   key={option}
                   type="button"
+                  // Off whenever the fields are: it rewrites the draft as
+                  // they do, and it sits outside their fieldset.
+                  disabled={create.busy || create.outcomeUnknown}
                   onClick={() => {
-                    // The same mark, the same reason: this rewrites the
-                    // draft too, and it sits outside the fieldset.
-                    if (locked.current) return;
+                    if (!writable()) return;
                     setIntent(option);
                     saveForm(formId, option, draft);
                   }}
@@ -343,7 +373,7 @@ export function EventForm({ typeId: given, entryId }: {
             onChange={(next) => {
               // Nothing may rewrite content that has been handed over, or
               // that the queue holds and has not yet settled (spec 6.1).
-              if (locked.current || create.outcomeUnknown) return;
+              if (!writable()) return;
               setDraft(next);
               setLocalError(null);
               saveForm(formId, intent, next);
