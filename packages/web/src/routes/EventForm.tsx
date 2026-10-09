@@ -305,10 +305,15 @@ export function EventForm({ typeId: given, entryId }: {
         >
           <ChevronLeft size={22} />
         </Link>
-        <div className="-ml-11 flex flex-1 items-center justify-center gap-2">
+        <div className="flex flex-1 items-center justify-center gap-2">
           <EventIcon icon={type.icon} color={type.color} size={18} />
           <span className="text-base font-medium">{eventTypeName(type.id)}</span>
         </div>
+        {/* As wide as the back button, so the title is centred without
+            overlapping it. A negative margin did the centring before, and
+            the title then lay over the button and took most taps meant for
+            it -- only the icon's corner still worked. Found on a phone. */}
+        <span className="size-11 shrink-0" aria-hidden />
       </header>
 
       {/* A form for the 18th looks exactly like a form for now. Saying so

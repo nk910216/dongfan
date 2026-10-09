@@ -61,7 +61,12 @@ function Header({ title }: { title: string }): React.JSX.Element {
       <Link to={back} aria-label={zhTW.a11y.back} className="flex size-11 items-center justify-center text-ink-muted">
         <ChevronLeft size={22} />
       </Link>
-      <span className="-ml-11 flex-1 text-center text-base font-medium">{title}</span>
+      <span className="flex-1 text-center text-base font-medium">{title}</span>
+      {/* As wide as the back button, so the title is centred without
+          overlapping it. A negative margin did the centring before, and
+          the title then lay over the button and took most taps meant for
+          it -- only the icon's corner still worked. Found on a phone. */}
+      <span className="size-11 shrink-0" aria-hidden />
     </header>
   );
 }

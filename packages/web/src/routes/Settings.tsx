@@ -24,7 +24,12 @@ export function Settings(): React.JSX.Element {
         <Link to="/" aria-label={zhTW.a11y.back} className="flex size-11 items-center justify-center text-ink-muted">
           <ChevronLeft size={22} />
         </Link>
-        <span className="-ml-11 flex-1 text-center text-base font-medium">{zhTW.settings.title}</span>
+        <span className="flex-1 text-center text-base font-medium">{zhTW.settings.title}</span>
+        {/* As wide as the back button, so the title is centred without
+            overlapping it. A negative margin did the centring before, and
+            the title then lay over the button and took most taps meant for
+            it -- only the icon's corner still worked. Found on a phone. */}
+        <span className="size-11 shrink-0" aria-hidden />
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4.5 pt-4 pb-10">

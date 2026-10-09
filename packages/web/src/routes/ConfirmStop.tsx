@@ -150,10 +150,15 @@ export function ConfirmStop(): React.JSX.Element {
         <Link to={back} aria-label={zhTW.a11y.back} className="flex size-11 items-center justify-center text-ink-muted">
           <ChevronLeft size={22} />
         </Link>
-        <div className="-ml-11 flex flex-1 items-center justify-center gap-2">
+        <div className="flex flex-1 items-center justify-center gap-2">
           {type ? <EventIcon icon={type.icon} color={type.color} size={18} /> : null}
           <span className="text-base font-medium">{zhTW.stopDraft.title}</span>
         </div>
+        {/* As wide as the back button, so the title is centred without
+            overlapping it. A negative margin did the centring before, and
+            the title then lay over the button and took most taps meant for
+            it -- only the icon's corner still worked. Found on a phone. */}
+        <span className="size-11 shrink-0" aria-hidden />
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4.5 pt-4">
