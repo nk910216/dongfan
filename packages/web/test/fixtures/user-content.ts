@@ -11,4 +11,6 @@ export const USER_CONTENT = {
   milestone: '第一次翻身',
   /** A tag name, which is user input and round-trips byte for byte. */
   tag: '夜奶',
+  /** A second tag name, for renaming one to something in Chinese. */
+  otherTag: '白天',
 } as const;

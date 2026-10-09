@@ -3,7 +3,8 @@ import type { ReactNode } from 'react';
 import { getEventType, toLocalDate, zhTW } from '@dongfan/shared';
 import { Message } from '../components/Message.js';
 import type {
-  BabyDto, EventDto, InviteDto, MemberDto, MembersDto, StatsDto, SummaryDto, TypeSummaryDto,
+  BabyDto, EventDto, InviteDto, MemberDto, MembersDto, StatsDto, SummaryDto, TaggedEventsDto,
+  TypeSummaryDto,
 } from '@dongfan/shared';
 import { ApiFailure, OfflineError, apiRequest, isOffline } from './api.js';
 import * as local from './db.js';
@@ -118,6 +119,30 @@ export type Store = {
    * a new one needs a connection.
    */
   createTag: (name: string) => Promise<StoredTag | null>;
+  /**
+   * Renames a tag, then syncs.
+   *
+   * Throws what the server answered -- `TAG_NAME_TAKEN` above all -- so the
+   * screen can say it. Online only, like every edit (spec 6.1).
+   */
+  renameTag: (tagId: string, name: string) => Promise<void>;
+  /**
+   * Deletes a tag, then syncs, so the records on this device lose it as the
+   * server's have (spec 7.9).
+   *
+   * A tag that is already gone -- the other parent deleted it first -- is
+   * thrown as the `NOT_FOUND` it is, after the sync has taken it off the
+   * list, so the screen can say so rather than claiming a deletion it did
+   * not make.
+   */
+  deleteTag: (tagId: string) => Promise<void>;
+  /**
+   * One page of the records carrying any of the given tags (spec 7.9).
+   *
+   * The server's, like the statistics: a page of a list the device may not
+   * hold all of is not something to assemble here.
+   */
+  loadTagged: (query: TaggedQuery) => Promise<TaggedEventsDto>;
   refresh: () => Promise<void>;
   /**
    * Sends one waiting add now, exactly as it stands, and resets its
@@ -195,6 +220,15 @@ export type Store = {
   createInvite: () => Promise<InviteDto>;
   removeMember: (userId: string) => Promise<void>;
   editBaby: (patch: { nickname?: string; gender?: string; birthDate?: string }) => Promise<void>;
+};
+
+export type TaggedQuery = {
+  tagIds: readonly string[];
+  from?: string | undefined;
+  to?: string | undefined;
+  sort: 'recent' | 'oldest';
+  limit: number;
+  offset: number;
 };
 
 const StoreContext = createContext<Store | null>(null);
@@ -808,17 +842,69 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     }
   }, [call, baby.id, scope]);
 
+  /** The synced list with one tag changed, kept until the sync replaces it. */
+  const keepTags = useCallback(async (change: (held: StoredTag[]) => StoredTag[]): Promise<void> => {
+    const held = change(await listTags(scope))
+      .map((one) => ({ id: one.id, name: one.name, createdAt: one.createdAt }));
+    await putTags(scope, held);
+    setTags(await listTags(scope));
+  }, [scope]);
+
+  const renameTag = useCallback(async (tagId: string, name: string): Promise<void> => {
+    if (isOffline()) throw new OfflineError();
+    const renamed = await call<{ id: string; name: string; createdAt: number }>(
+      `/babies/${baby.id}/tags/${tagId}`,
+      { method: 'PATCH', body: { name } },
+    );
+    // Shown at once rather than after the sync, which can be slow and can
+    // fail; the sync then brings the moved events and the whole list.
+    await keepTags((held) => held.map((one) => (one.id === renamed.id ? { ...one, name: renamed.name } : one)));
+    await settle();
+  }, [call, baby.id, keepTags, settle]);
+
+  const deleteTag = useCallback(async (tagId: string): Promise<void> => {
+    if (isOffline()) throw new OfflineError();
+    try {
+      await call(`/babies/${baby.id}/tags/${tagId}`, { method: 'DELETE' });
+    } catch (error) {
+      // Gone already. The sync is what makes this device agree, and the
+      // error still goes up: "deleted" would be a claim about this press.
+      if (error instanceof ApiFailure && error.code === 'NOT_FOUND') await settle();
+      throw error;
+    }
+    await keepTags((held) => held.filter((one) => one.id !== tagId));
+    // The records lose the tag through their revs, which only a sync
+    // brings. Without it this device would go on showing a deleted tag's
+    // id on every record that had it (spec 7.9).
+    await settle();
+  }, [call, baby.id, keepTags, settle]);
+
+  const loadTagged = useCallback(
+    (query: TaggedQuery): Promise<TaggedEventsDto> => {
+      const params = new URLSearchParams({
+        tags: query.tagIds.join(','),
+        sort: query.sort,
+        limit: String(query.limit),
+        offset: String(query.offset),
+      });
+      if (query.from !== undefined) params.set('from', query.from);
+      if (query.to !== undefined) params.set('to', query.to);
+      return call<TaggedEventsDto>(`/babies/${baby.id}/events?${params.toString()}`);
+    },
+    [call, baby.id],
+  );
+
   const value = useMemo<Store>(
     () => ({
       baby, scope, events, summary: summary as SummaryDto, now, loading, stale, syncing, syncedAt,
-      unsynced, stopDrafts, tags, createTag,
+      unsynced, stopDrafts, tags, createTag, renameTag, deleteTag, loadTagged,
       refresh: settle, findEvent, addEvent, updateEvent, stopTimer,
       loadStats,
       discardStop, removeEvent, retryUnsynced, correctUnsynced, abandonUnsynced,
       listMembers, createInvite, removeMember, editBaby,
     }),
     [baby, scope, events, summary, now, loading, stale, syncing, syncedAt, unsynced, stopDrafts,
-      tags, createTag, settle,
+      tags, createTag, renameTag, deleteTag, loadTagged, settle,
       loadStats,
       findEvent, addEvent, updateEvent, stopTimer, discardStop, removeEvent, retryUnsynced,
       correctUnsynced, abandonUnsynced, listMembers, createInvite, removeMember, editBaby],

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { CalendarDays, CalendarRange, ChartColumn, House, Menu, Settings } from 'lucide-react';
+import { CalendarDays, CalendarRange, ChartColumn, House, Menu, Settings, Tags } from 'lucide-react';
 import { zhTW } from '@dongfan/shared';
 
 /**
@@ -18,18 +18,13 @@ export function PageMenu(): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const { pathname } = useLocation();
 
-  /**
-   * The six pages spec 7.10 names, in its order.
-   *
-   * The tag page is not built yet and is deliberately absent rather than
-   * present and dead: a list entry that goes nowhere is worse than one that
-   * is not there.
-   */
+  /** The six pages spec 7.10 names, in its order. */
   const pages = [
     { to: '/', icon: House, label: zhTW.nav.home, match: (p: string) => p === '/' },
     { to: '/day', icon: CalendarDays, label: zhTW.nav.calendar, match: (p: string) => p.startsWith('/day') },
     { to: '/two', icon: CalendarRange, label: zhTW.nav.twoDays, match: (p: string) => p.startsWith('/two') },
     { to: '/stats', icon: ChartColumn, label: zhTW.nav.stats, match: (p: string) => p.startsWith('/stats') },
+    { to: '/tags', icon: Tags, label: zhTW.nav.tags, match: (p: string) => p.startsWith('/tags') },
     { to: '/settings', icon: Settings, label: zhTW.nav.settings, match: (p: string) => p.startsWith('/settings') },
   ];
 

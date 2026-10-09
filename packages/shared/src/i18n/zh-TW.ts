@@ -189,6 +189,50 @@ export const zhTW = {
     times: '{count} 次',
   },
 
+  tagPage: {
+    title: '標籤',
+    /** What tapping a tag does here, said once above the list. */
+    pick: '選擇標籤查看紀錄，可複選',
+    empty: '還沒有標籤，可以在下方新增，或在新增紀錄時建立',
+    add: '新增標籤',
+    addButton: '新增',
+    manage: '管理「{name}」',
+    rename: '改名',
+    save: '儲存',
+    cancel: '取消',
+    delete: '刪除',
+    /** Spec 7.9's "any of them", said where the choice is made. */
+    anyOf: '顯示含有任一所選標籤的紀錄',
+    sort: '排序',
+    recent: '由近到遠',
+    oldest: '由遠到近',
+    from: '起始日期',
+    to: '結束日期',
+    clearRange: '清除日期',
+    count: '共 {count} 筆',
+    noResults: '沒有符合的紀錄',
+    more: '載入更多',
+    failed: '讀不到紀錄',
+    retry: '重試',
+    /** The results are the server's, so a queued record is not among them. */
+    unsynced: '此手機有 {count} 筆帶有所選標籤的紀錄尚未同步，還不在清單裡。',
+    needsConnection: '改名、刪除與查看紀錄需要連線',
+    confirmTitle: '刪除「{name}」？',
+    checking: '正在確認有多少紀錄使用這個標籤…',
+    /** Spec 7.9: say it is in use, and what confirming does to the records. */
+    inUse: '這個標籤目前用在 {count} 筆紀錄上。刪除後，這些紀錄會一併移除這個標籤，紀錄本身不會被刪除。',
+    notInUse: '目前沒有紀錄使用這個標籤。',
+    /*
+     * Records on this phone the server has not seen, which the count leaves
+     * out. Said plainly because it is a real cost: the server refuses a tag
+     * that no longer exists, so those records stop being able to send.
+     */
+    inUseHere: '此手機還有 {count} 筆未同步的紀錄選了這個標籤，刪除後它們會無法送出。',
+    countFailed: '無法確認使用狀況，請連線後再試',
+    confirmDelete: '確認刪除',
+    gone: '這個標籤已經被刪除了',
+  },
+
   calendar: {
     title: '行事曆',
     date: '日期',

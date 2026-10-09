@@ -13,7 +13,8 @@ import { BABY, TOKEN, api, server } from './server.js';
 import { resetLanes } from '../src/lib/lane.js';
 import { offerUpdate, setWorkerCheck } from '../src/lib/update.js';
 import { formKey, readForm, saveForm } from '../src/lib/form-draft.js';
-import { scopeOf } from '../src/lib/db.js';
+import { findEvent as findLocalEvent, scopeOf } from '../src/lib/db.js';
+import { queueAdd } from '../src/lib/outbox.js';
 import { earlierToday as atEarlierToday } from './fixtures/clock.js';
 import { formatClock } from '../src/lib/format.js';
 import { daysIn } from '../src/lib/stats-range.js';
@@ -3822,6 +3823,406 @@ describe('tags on a record being edited', () => {
 
     expect(await screen.findByText(zhTW.conflict.body)).toBeInTheDocument();
     expect(chip('daytime')).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+describe('the tag page', () => {
+  /** Noon in Taipei on a named September day, so the order is the fixture's. */
+  const noonOn = (day: number): number => Date.UTC(2026, 8, day, 4, 0);
+
+  function twoTags(): void {
+    api.tags = [
+      { id: 'tag-night', name: USER_CONTENT.tag, createdAt: 0 },
+      { id: 'tag-day', name: 'daytime', createdAt: 0 },
+    ];
+  }
+
+  async function intoThePage(path = '/tags'): Promise<ReturnType<typeof userEvent.setup>> {
+    const user = openSignedIn(path);
+    await screen.findByTestId('tag-list');
+    return user;
+  }
+
+  const row = (name: string): HTMLElement =>
+    screen.getAllByTestId('tag-row').find((one) => one.textContent?.includes(name)) as HTMLElement;
+  const choose = (name: string): HTMLElement => within(row(name)).getByTestId('tag-choose');
+
+  /** The ids of the records showing, in order, read off their links. */
+  function shownIds(): string[] {
+    const rows = screen.queryByTestId('tag-result-rows');
+    if (!rows) return [];
+    return within(rows).getAllByRole('link')
+      .map((link) => (link.getAttribute('href') ?? '').replace(/^\/event\//, '').replace(/\?.*$/, ''));
+  }
+
+  function filterRequests(): URLSearchParams[] {
+    return api.requests
+      .filter((entry) => entry.method === 'GET' && entry.query.has('tags'))
+      .map((entry) => entry.query);
+  }
+
+  it('is in the page list, and says so when it is the page showing', async () => {
+    // Spec 7.10 names six pages. Until this stage the tag page was left
+    // out rather than listed and dead.
+    twoTags();
+    const user = await intoThePage();
+
+    await user.click(screen.getByTestId('open-menu'));
+    const link = screen.getByRole('link', { name: new RegExp(zhTW.nav.tags) });
+    expect(link).toHaveAttribute('aria-current', 'page');
+    expect(link).toHaveTextContent(zhTW.nav.current);
+  });
+
+  it('shows the tags this device has, and says what to do when there are none', async () => {
+    twoTags();
+    await intoThePage();
+    expect(screen.getAllByTestId('tag-row').map((one) => one.textContent)).toEqual(['daytime', USER_CONTENT.tag]);
+    closeApp();
+
+    api.tags = [];
+    openSignedIn('/tags');
+    expect(await screen.findByText(zhTW.tagPage.empty)).toBeInTheDocument();
+  });
+
+  it('asks the server for any of the chosen tags, newest first, fifty at a time', async () => {
+    twoTags();
+    const night = api.add({ typeId: 'bottle', startedAt: noonOn(10), tagIds: ['tag-night'] });
+    const both = api.add({ typeId: 'bottle', startedAt: noonOn(12), tagIds: ['tag-night', 'tag-day'] });
+    const day = api.add({ typeId: 'bottle', startedAt: noonOn(11), tagIds: ['tag-day'] });
+    api.add({ typeId: 'bottle', startedAt: noonOn(13), tagIds: [] });
+
+    const user = await intoThePage();
+    await user.click(choose(USER_CONTENT.tag));
+    await user.click(choose('daytime'));
+
+    await waitFor(() => expect(shownIds()).toEqual([both.id, day.id, night.id]));
+    expect(screen.getByTestId('tag-count')).toHaveTextContent(interpolate(zhTW.tagPage.count, { count: 3 }));
+    const last = filterRequests().at(-1);
+    expect(last?.get('tags')?.split(',').sort()).toEqual(['tag-day', 'tag-night']);
+    expect(last?.get('sort')).toBe('recent');
+    expect(last?.get('limit')).toBe('50');
+    expect(last?.get('offset')).toBe('0');
+    // Said where the choice is made: two tags is "either", not "both".
+    expect(screen.getByText(zhTW.tagPage.anyOf)).toBeInTheDocument();
+  });
+
+  it('turns round, and keeps to a range, when asked', async () => {
+    twoTags();
+    const early = api.add({ typeId: 'bottle', startedAt: noonOn(9), tagIds: ['tag-night'] });
+    const inside = api.add({ typeId: 'bottle', startedAt: noonOn(10), tagIds: ['tag-night'] });
+    const late = api.add({ typeId: 'bottle', startedAt: noonOn(12), tagIds: ['tag-night'] });
+
+    const user = await intoThePage();
+    await user.click(choose(USER_CONTENT.tag));
+    await waitFor(() => expect(shownIds()).toEqual([late.id, inside.id, early.id]));
+
+    await user.click(screen.getByTestId('tag-sort-oldest'));
+    await waitFor(() => expect(shownIds()).toEqual([early.id, inside.id, late.id]));
+
+    fireEvent.change(screen.getByTestId('tag-from'), { target: { value: '2026-09-10' } });
+    fireEvent.change(screen.getByTestId('tag-to'), { target: { value: '2026-09-11' } });
+    await waitFor(() => expect(shownIds()).toEqual([inside.id]));
+    const last = filterRequests().at(-1);
+    expect(last?.get('from')).toBe('2026-09-10');
+    expect(last?.get('to')).toBe('2026-09-11');
+    expect(last?.get('sort')).toBe('oldest');
+
+    await user.click(screen.getByTestId('tag-clear-range'));
+    await waitFor(() => expect(shownIds()).toHaveLength(3));
+  });
+
+  it('pages through a long list, and shows a record once when the list moves between pages', async () => {
+    // Offsets are positions in a list other people can change. A record
+    // added at the top between two pages pushes the one at the boundary
+    // onto the next page as well; shown twice, it would be two records
+    // where there is one.
+    twoTags();
+    for (let i = 0; i < 60; i += 1) {
+      api.add({ typeId: 'diaper', startedAt: noonOn(1) + i * HOUR, tagIds: ['tag-night'] });
+    }
+
+    const user = await intoThePage();
+    await user.click(choose(USER_CONTENT.tag));
+    await waitFor(() => expect(shownIds()).toHaveLength(50));
+    expect(screen.getByTestId('tag-count')).toHaveTextContent(interpolate(zhTW.tagPage.count, { count: 60 }));
+
+    // The other parent, meanwhile, at the top of the list.
+    api.add({ typeId: 'diaper', startedAt: noonOn(28), tagIds: ['tag-night'] });
+
+    await user.click(screen.getByTestId('tag-more'));
+    await waitFor(() => expect(screen.queryByTestId('tag-more')).not.toBeInTheDocument());
+    const ids = shownIds();
+    expect(filterRequests().at(-1)?.get('offset')).toBe('50');
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toHaveLength(60);
+  });
+
+  it('asks again after a sync without shortening what had been loaded', async () => {
+    // The list is the server's, so catching up re-asks it. Starting again
+    // from fifty would take away the part somebody had scrolled down to.
+    twoTags();
+    for (let i = 0; i < 60; i += 1) {
+      api.add({ typeId: 'diaper', startedAt: noonOn(1) + i * HOUR, tagIds: ['tag-night'] });
+    }
+
+    const user = await intoThePage();
+    await user.click(choose(USER_CONTENT.tag));
+    await waitFor(() => expect(shownIds()).toHaveLength(50));
+    await user.click(screen.getByTestId('tag-more'));
+    await waitFor(() => expect(shownIds()).toHaveLength(60));
+    const before = filterRequests().length;
+
+    await user.click(screen.getByTestId('sync-state'));
+
+    await waitFor(() => expect(filterRequests().length).toBeGreaterThan(before));
+    expect(filterRequests().at(-1)?.get('offset')).toBe('0');
+    expect(filterRequests().at(-1)?.get('limit')).toBe('60');
+    await waitFor(() => expect(shownIds()).toHaveLength(60));
+  });
+
+  it('keeps what was chosen when a record is opened and closed again', async () => {
+    // The choice is in the address. Held in state, it went with the screen
+    // when the record was opened -- and with it the reason for being here.
+    twoTags();
+    const event = api.add({ typeId: 'bottle', value: 120, startedAt: noonOn(10), tagIds: ['tag-night'] });
+
+    const user = await intoThePage();
+    await user.click(choose(USER_CONTENT.tag));
+    await waitFor(() => expect(shownIds()).toEqual([event.id]));
+
+    await user.click(within(screen.getByTestId('tag-result-rows')).getByRole('link'));
+    await screen.findByTestId('submit');
+    await user.click(screen.getByTestId('submit'));
+
+    await screen.findByTestId('tag-list');
+    expect(choose(USER_CONTENT.tag)).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => expect(shownIds()).toEqual([event.id]));
+  });
+
+  it('says it could not ask rather than showing an empty list, and asks again', async () => {
+    twoTags();
+    api.add({ typeId: 'bottle', startedAt: noonOn(10), tagIds: ['tag-night'] });
+    api.failTagged = true;
+
+    const user = await intoThePage();
+    await user.click(choose(USER_CONTENT.tag));
+
+    expect(await screen.findByTestId('tag-failed')).toBeInTheDocument();
+    expect(screen.queryByText(zhTW.tagPage.noResults)).not.toBeInTheDocument();
+
+    api.failTagged = false;
+    await user.click(screen.getByTestId('tag-retry'));
+    await waitFor(() => expect(shownIds()).toHaveLength(1));
+  });
+
+  it('drops an answer to a question that is no longer the one on screen', async () => {
+    // Chosen one tag, then another before the first answer came back. The
+    // late answer is about a list nobody is looking at; applied, it would
+    // put the wrong records under the two chosen tags.
+    twoTags();
+    api.add({ typeId: 'bottle', startedAt: noonOn(10), tagIds: ['tag-night'] });
+    api.add({ typeId: 'bottle', startedAt: noonOn(11), tagIds: ['tag-day'] });
+
+    const user = await intoThePage();
+    const release = api.holdNextTagged();
+    await user.click(choose(USER_CONTENT.tag));
+    await waitFor(() => expect(filterRequests()).toHaveLength(1));
+    await user.click(choose('daytime'));
+    await waitFor(() => expect(shownIds()).toHaveLength(2));
+
+    release();
+    // The held request has now answered; give it the chance to land.
+    await waitFor(() => expect(filterRequests()).toHaveLength(2));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(shownIds()).toHaveLength(2);
+    expect(screen.getByTestId('tag-count')).toHaveTextContent(interpolate(zhTW.tagPage.count, { count: 2 }));
+  });
+
+  it('says that a record waiting on this phone is not in the list yet', async () => {
+    twoTags();
+    api.add({ typeId: 'bottle', startedAt: noonOn(10), tagIds: ['tag-night'] });
+    // Refused for good, so it stays in the queue with its tags.
+    api.nextFailure = { status: 429, code: 'DAILY_LIMIT_EXCEEDED' };
+    await queueAdd(api.userId, BABY.id, 'queued-1', {
+      typeId: 'bottle', intent: 'record', startedAt: earlierToday(HOUR), endedAt: null,
+      value: 100, note: '', metadata: {}, tagIds: ['tag-night'],
+    });
+
+    const user = await intoThePage();
+    await user.click(choose(USER_CONTENT.tag));
+
+    expect(await screen.findByTestId('tag-unsynced'))
+      .toHaveTextContent(interpolate(zhTW.tagPage.unsynced, { count: 1 }));
+  });
+
+  describe('renaming one', () => {
+    it('sends the new name and shows it', async () => {
+      twoTags();
+      const user = await intoThePage();
+
+      await user.click(within(row('daytime')).getByTestId('tag-manage'));
+      const input = screen.getByTestId('tag-rename-input');
+      await user.clear(input);
+      await user.type(input, USER_CONTENT.otherTag);
+      await user.click(screen.getByTestId('tag-rename-save'));
+
+      await waitFor(() => expect(screen.queryByTestId('tag-editor')).not.toBeInTheDocument());
+      expect(row(USER_CONTENT.otherTag)).toBeDefined();
+      expect(api.lastRequest('/tags/tag-day')?.body).toEqual({ name: USER_CONTENT.otherTag });
+      expect(api.tags.find((one) => one.id === 'tag-day')?.name).toBe(USER_CONTENT.otherTag);
+    });
+
+    it('says the name is taken, and keeps what was typed', async () => {
+      twoTags();
+      const user = await intoThePage();
+
+      await user.click(within(row('daytime')).getByTestId('tag-manage'));
+      const input = screen.getByTestId('tag-rename-input');
+      await user.clear(input);
+      await user.type(input, USER_CONTENT.tag);
+      await user.click(screen.getByTestId('tag-rename-save'));
+
+      expect(await screen.findByTestId('tag-manage-error')).toHaveTextContent(zhTW.error.TAG_NAME_TAKEN);
+      expect(screen.getByTestId('tag-rename-input')).toHaveValue(USER_CONTENT.tag);
+      expect(api.tags.find((one) => one.id === 'tag-day')?.name).toBe('daytime');
+    });
+
+    it('needs a connection, and sends nothing without one', async () => {
+      twoTags();
+      const user = await intoThePage();
+      goOffline();
+
+      await user.click(within(row('daytime')).getByTestId('tag-manage'));
+      await user.type(screen.getByTestId('tag-rename-input'), 's');
+      await user.click(screen.getByTestId('tag-rename-save'));
+
+      expect(await screen.findByTestId('tag-manage-error')).toHaveTextContent(zhTW.error.needsConnection);
+      expect(patches()).toHaveLength(0);
+    });
+  });
+
+  describe('deleting one', () => {
+    async function intoTheConfirm(name: string): Promise<ReturnType<typeof userEvent.setup>> {
+      const user = await intoThePage();
+      await user.click(within(row(name)).getByTestId('tag-manage'));
+      await user.click(screen.getByTestId('tag-delete'));
+      await screen.findByTestId('tag-delete-confirm');
+      return user;
+    }
+
+    it('says how many records carry it, and what confirming does to them', async () => {
+      // Spec 7.9: in use is said, and so is what happens to the records.
+      // Counted by the server, because the other parent's records count
+      // and this device may not hold them all.
+      twoTags();
+      for (let i = 0; i < 3; i += 1) api.add({ typeId: 'bottle', startedAt: noonOn(10 + i), tagIds: ['tag-night'] });
+
+      await intoTheConfirm(USER_CONTENT.tag);
+
+      await waitFor(() => expect(screen.getByTestId('tag-delete-impact'))
+        .toHaveTextContent(interpolate(zhTW.tagPage.inUse, { count: 3 })));
+      expect(screen.getByTestId('tag-delete-yes')).toBeEnabled();
+      expect(api.tags).toHaveLength(2);
+    });
+
+    it('says when nothing carries it', async () => {
+      twoTags();
+      await intoTheConfirm('daytime');
+      await waitFor(() => expect(screen.getByTestId('tag-delete-impact'))
+        .toHaveTextContent(zhTW.tagPage.notInUse));
+    });
+
+    it('does not offer the delete until it has said what the delete does', async () => {
+      twoTags();
+      api.add({ typeId: 'bottle', startedAt: noonOn(10), tagIds: ['tag-night'] });
+      const release = api.holdNextTagged();
+
+      await intoTheConfirm(USER_CONTENT.tag);
+
+      expect(screen.getByTestId('tag-delete-impact')).toHaveTextContent(zhTW.tagPage.checking);
+      expect(screen.getByTestId('tag-delete-yes')).toBeDisabled();
+      release();
+      await waitFor(() => expect(screen.getByTestId('tag-delete-yes')).toBeEnabled());
+    });
+
+    it('says it could not count rather than saying nothing carries it', async () => {
+      // "Not in use" on a failed request is the worst wrong answer this
+      // sheet could give: it is the one that makes deleting look free.
+      twoTags();
+      api.add({ typeId: 'bottle', startedAt: noonOn(10), tagIds: ['tag-night'] });
+      api.failTagged = true;
+
+      await intoTheConfirm(USER_CONTENT.tag);
+
+      await waitFor(() => expect(screen.getByTestId('tag-delete-impact'))
+        .toHaveTextContent(zhTW.tagPage.countFailed));
+      expect(screen.getByTestId('tag-delete-impact')).not.toHaveTextContent(zhTW.tagPage.notInUse);
+      expect(screen.getByTestId('tag-delete-yes')).toBeDisabled();
+    });
+
+    it('warns about records still waiting on this phone that carry it', async () => {
+      twoTags();
+      api.nextFailure = { status: 429, code: 'DAILY_LIMIT_EXCEEDED' };
+      await queueAdd(api.userId, BABY.id, 'queued-1', {
+        typeId: 'bottle', intent: 'record', startedAt: earlierToday(HOUR), endedAt: null,
+        value: 100, note: '', metadata: {}, tagIds: ['tag-night'],
+      });
+
+      await intoTheConfirm(USER_CONTENT.tag);
+
+      expect(await screen.findByTestId('tag-delete-waiting'))
+        .toHaveTextContent(interpolate(zhTW.tagPage.inUseHere, { count: 1 }));
+    });
+
+    it('cancels without sending anything', async () => {
+      twoTags();
+      const user = await intoTheConfirm('daytime');
+      await user.click(screen.getByTestId('tag-delete-cancel'));
+
+      expect(screen.queryByTestId('tag-delete-confirm')).not.toBeInTheDocument();
+      expect(api.requests.filter((entry) => entry.method === 'DELETE')).toHaveLength(0);
+      expect(api.tags).toHaveLength(2);
+    });
+
+    it('deletes it, takes it out of the choice, and the records on this device lose it', async () => {
+      // The second half is spec 7.9's warning: the records learn through
+      // their revs, so without the sync after the delete this device would
+      // go on showing a tag that no longer exists on every record it held.
+      twoTags();
+      const event = api.add({ typeId: 'bottle', value: 120, startedAt: earlierToday(HOUR), tagIds: ['tag-night'] });
+
+      const user = await intoThePage(`/tags?t=tag-night`);
+      await waitFor(() => expect(shownIds()).toEqual([event.id]));
+      await user.click(within(row(USER_CONTENT.tag)).getByTestId('tag-manage'));
+      await user.click(screen.getByTestId('tag-delete'));
+      await waitFor(() => expect(screen.getByTestId('tag-delete-yes')).toBeEnabled());
+      await user.click(screen.getByTestId('tag-delete-yes'));
+
+      await waitFor(() => expect(screen.queryByTestId('tag-delete-confirm')).not.toBeInTheDocument());
+      expect(screen.getAllByTestId('tag-row').map((one) => one.textContent)).toEqual(['daytime']);
+      expect(screen.queryByTestId('tag-results')).not.toBeInTheDocument();
+      expect(api.tags.map((one) => one.id)).toEqual(['tag-day']);
+
+      // And on the record itself, read from this device's own copy. Not
+      // through the edit form: a selected id with no tag to draw has no
+      // chip, so the form looks identical whether the sync happened or not.
+      const scope = scopeOf(api.userId, BABY.id);
+      await waitFor(async () => expect((await findLocalEvent(scope, event.id))?.tagIds).toEqual([]));
+    });
+
+    it('says when the other parent deleted it first, rather than claiming this did', async () => {
+      twoTags();
+      const user = await intoTheConfirm('daytime');
+      await waitFor(() => expect(screen.getByTestId('tag-delete-yes')).toBeEnabled());
+
+      // Gone on the server meanwhile.
+      api.tags = api.tags.filter((one) => one.id !== 'tag-day');
+      await user.click(screen.getByTestId('tag-delete-yes'));
+
+      expect(await screen.findByTestId('tag-gone')).toHaveTextContent(zhTW.tagPage.gone);
+      await waitFor(() => expect(screen.getAllByTestId('tag-row').map((one) => one.textContent))
+        .toEqual([USER_CONTENT.tag]));
+    });
   });
 });
 

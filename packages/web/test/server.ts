@@ -189,6 +189,47 @@ class Api {
 
   /** The baby's tags, as the server holds them (spec 3.7). */
   tags: { id: string; name: string; createdAt: number }[] = [];
+  /**
+   * Ids handed out so far. A count of the list would hand a deleted tag's
+   * id to the next one made, which is a collision the real server cannot
+   * have.
+   */
+  private tagsMade = 0;
+  /** Makes the tag page's filter fail, to test what the page says then. */
+  failTagged = false;
+  /** Holds the next request to the tag filter (see `holdNextTagged`). */
+  private taggedGate: Promise<void> | null = null;
+
+  newTagId(): string {
+    this.tagsMade += 1;
+    return `tag-${this.tagsMade}`;
+  }
+
+  /** Makes the next tag-filter request hang until released. */
+  holdNextTagged(): () => void {
+    let release = (): void => undefined;
+    this.taggedGate = new Promise<void>((resolve) => { release = resolve; });
+    return release;
+  }
+
+  async waitForTagged(): Promise<void> {
+    const gate = this.taggedGate;
+    this.taggedGate = null;
+    if (gate) await gate;
+  }
+
+  /**
+   * Moves every event carrying a tag, one rev each, as the real batch does
+   * (spec 7.9). Without it the tests could not see whether the device
+   * learns that a tag changed on records it already holds.
+   */
+  bumpTagged(tagId: string): void {
+    for (const event of this.events) {
+      if (!event.tagIds.includes(tagId)) continue;
+      event.rev = this.nextRev();
+      event.updatedAt = Date.now();
+    }
+  }
 
   reset(): void {
     // The baby is a shared object the settings screen edits in place, so
@@ -201,6 +242,9 @@ class Api {
     this.joinFails = false;
     this.joinsInto = null;
     this.tags = [];
+    this.tagsMade = 0;
+    this.failTagged = false;
+    this.taggedGate = null;
     this.serverVersion = APP_VERSION;
     this.accounts += 1;
     ME.user = { id: `user-${this.accounts}`, username: 'parent' };
@@ -328,6 +372,56 @@ function refuse(failure: Failure): Response {
   );
 }
 
+/**
+ * The real API's answer to a tag this baby does not have: a 422 naming each
+ * one, not a quiet drop (`unknownTags` in the events route).
+ *
+ * This mock used to filter them out instead, so the web suite was testing a
+ * contract that does not exist -- and a note in AGENTS.md said the server
+ * drops them, on the strength of it. A tag deleted by the other parent while
+ * a record waited in this phone's queue is exactly this case.
+ */
+function unknownTagFailure(tagIds: readonly string[]): Failure | null {
+  const fields = tagIds
+    .map((id, index) => ({ id, index }))
+    .filter(({ id }) => !api.tags.some((tag) => tag.id === id))
+    .map(({ id, index }) => ({ field: `tagIds.${index}`, code: 'INVALID_ENUM', params: { id } }));
+  return fields.length === 0 ? null : { status: 422, code: 'VALIDATION_FAILED', fields };
+}
+
+/**
+ * The tag page's filter, with the semantics the API suite proves against a
+ * real database: any of the tags, each record once, live records only, the
+ * local date closed at both ends, a total order with the id breaking ties
+ * (spec 7.9).
+ */
+async function tagged(url: URL): Promise<Response> {
+  await api.waitForTagged();
+  if (api.failTagged) return refuse({ status: 500, code: 'INTERNAL' });
+
+  const wanted = (url.searchParams.get('tags') ?? '').split(',').filter((id) => id !== '');
+  const from = url.searchParams.get('from');
+  const to = url.searchParams.get('to');
+  const oldest = url.searchParams.get('sort') === 'oldest';
+  const limit = Number(url.searchParams.get('limit') ?? 50);
+  const offset = Number(url.searchParams.get('offset') ?? 0);
+
+  const matching = api.events
+    .filter((event) => event.deletedAt === null)
+    .filter((event) => event.tagIds.some((id) => wanted.includes(id)))
+    .filter((event) => (from === null || event.localDate >= from) && (to === null || event.localDate <= to))
+    .sort((a, b) => {
+      const order = a.startedAt - b.startedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      return oldest ? order : -order;
+    });
+  const page = matching.slice(offset, offset + limit);
+  return HttpResponse.json({
+    events: page,
+    total: matching.length,
+    hasMore: offset + page.length < matching.length,
+  });
+}
+
 /** Takes the queued failure, if the test armed one. */
 function pending(): Failure | null {
   const failure = api.nextFailure;
@@ -447,6 +541,7 @@ export const server = setupServer(
   http.get('/api/babies/:babyId/events', async ({ request }) => {
     await record(request);
     const url = new URL(request.url);
+    if (url.searchParams.has('tags')) return tagged(url);
     const since = Number(url.searchParams.get('since') ?? 0);
     const limit = Number(url.searchParams.get('limit') ?? 200);
 
@@ -484,9 +579,40 @@ export const server = setupServer(
     const already = api.tags.find((one) => one.name === body.name);
     if (already) return HttpResponse.json(already, { status: 200 });
 
-    const made = { id: `tag-${api.tags.length + 1}`, name: body.name, createdAt: Date.now() };
+    const made = { id: api.newTagId(), name: body.name, createdAt: Date.now() };
     api.tags.push(made);
     return HttpResponse.json(made, { status: 201 });
+  }),
+
+  http.patch('/api/babies/:babyId/tags/:tagId', async ({ request, params }) => {
+    const body = (await record(request)) as { name: string };
+    const failure = pending();
+    if (failure) return refuse(failure);
+
+    const tag = api.tags.find((one) => one.id === params['tagId']);
+    if (!tag) return refuse({ status: 404, code: 'NOT_FOUND' });
+    if (tag.name === body.name) return HttpResponse.json(tag);
+    if (api.tags.some((one) => one.id !== tag.id && one.name === body.name)) {
+      return refuse({ status: 409, code: 'TAG_NAME_TAKEN' });
+    }
+    api.bumpTagged(tag.id);
+    tag.name = body.name;
+    return HttpResponse.json(tag);
+  }),
+
+  http.delete('/api/babies/:babyId/tags/:tagId', async ({ request, params }) => {
+    await record(request);
+    const failure = pending();
+    if (failure) return refuse(failure);
+
+    const tagId = String(params['tagId']);
+    if (!api.tags.some((one) => one.id === tagId)) return refuse({ status: 404, code: 'NOT_FOUND' });
+    // The order the real batch keeps: the revs move while the records
+    // still say which ones carry it, then the associations go, then the tag.
+    api.bumpTagged(tagId);
+    for (const event of api.events) event.tagIds = event.tagIds.filter((id) => id !== tagId);
+    api.tags = api.tags.filter((one) => one.id !== tagId);
+    return new HttpResponse(null, { status: 204 });
   }),
 
   http.get('/api/babies/:babyId/events/summary', async ({ request }) => {
@@ -556,6 +682,10 @@ export const server = setupServer(
     const already = api.find(String(body['id']));
     if (already) return HttpResponse.json(already, { status: 200 });
 
+    const wantedTags = (body['tagIds'] ?? []) as string[];
+    const unknown = unknownTagFailure(wantedTags);
+    if (unknown) return refuse(unknown);
+
     const created = api.add({
       id: String(body['id']),
       typeId: String(body['typeId']),
@@ -564,10 +694,7 @@ export const server = setupServer(
       value: body['value'] === undefined ? 1 : Number(body['value']),
       note: String(body['note'] ?? ''),
       metadata: (body['metadata'] ?? {}) as Record<string, string>,
-      // Only ids this baby actually has, as the server's join does: a tag
-      // belonging to another family may never be hung on this event.
-      tagIds: ((body['tagIds'] ?? []) as string[])
-        .filter((id) => api.tags.some((tag) => tag.id === id)),
+      tagIds: wantedTags,
       active: body['intent'] === 'start_timer',
     });
     if (api.loseNextResponse) {
@@ -590,6 +717,10 @@ export const server = setupServer(
 
     const event = api.find(String(params['eventId']));
     if (!event) return refuse({ status: 404, code: 'NOT_FOUND' });
+    if (body['tagIds'] !== undefined) {
+      const unknown = unknownTagFailure(body['tagIds'] as string[]);
+      if (unknown) return refuse(unknown);
+    }
     if (event.version !== Number(body['version'])) return refuse({ status: 409, code: 'VERSION_CONFLICT' });
 
     const endedAt = body['endedAt'] === undefined
@@ -603,12 +734,10 @@ export const server = setupServer(
       value: body['value'] === undefined ? event.value : Number(body['value']),
       note: body['note'] === undefined ? event.note : String(body['note']),
       metadata: (body['metadata'] ?? event.metadata) as Record<string, string>,
-      // The whole list replaces the old one, filtered to this baby's tags.
-      // Absent means "not being changed", which is what lets the stop
-      // confirmation send a body without touching them.
-      tagIds: body['tagIds'] === undefined
-        ? event.tagIds
-        : (body['tagIds'] as string[]).filter((id) => api.tags.some((tag) => tag.id === id)),
+      // The whole list replaces the old one. Absent means "not being
+      // changed", which is what lets the stop confirmation send a body
+      // without touching them.
+      tagIds: body['tagIds'] === undefined ? event.tagIds : [...(body['tagIds'] as string[])],
       active: event.active && endedAt === null,
       version: event.version + 1,
     });
@@ -631,6 +760,10 @@ export const server = setupServer(
 
     const event = api.find(String(params['eventId']));
     if (!event) return refuse({ status: 404, code: 'NOT_FOUND' });
+    if (body['tagIds'] !== undefined) {
+      const unknown = unknownTagFailure(body['tagIds'] as string[]);
+      if (unknown) return refuse(unknown);
+    }
     if (event.version !== Number(body['version'])) return refuse({ status: 409, code: 'VERSION_CONFLICT' });
 
     event.deletedAt = Date.now();

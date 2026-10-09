@@ -13,6 +13,7 @@ import { Home } from './routes/Home.js';
 import { Login } from './routes/Login.js';
 import { Settings } from './routes/Settings.js';
 import { Stats } from './routes/Stats.js';
+import { Tags } from './routes/Tags.js';
 import { TwoDays } from './routes/TwoDays.js';
 import { ConfirmStop } from './routes/ConfirmStop.js';
 import { CorrectUnsynced, Unsynced } from './routes/Unsynced.js';
@@ -76,6 +77,7 @@ function Shell(): React.JSX.Element {
         <Route path="/event/:eventId" element={<EditEvent />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/stats" element={<Stats />} />
+        <Route path="/tags" element={<Tags />} />
         <Route path="/stop/:eventId" element={<ConfirmStop />} />
         <Route path="/unsynced" element={<Unsynced />} />
         <Route path="/unsynced/:eventId" element={<CorrectUnsynced />} />

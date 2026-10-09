@@ -66,3 +66,16 @@ export function formatClock(instant: number, timeZone: string): string {
     hour12: true,
   }).format(new Date(instant));
 }
+
+/**
+ * A stored local date as the short day a list prints: `9/10` this year,
+ * `2025/9/10` any other, judged against `today` (also a local date).
+ *
+ * From `local_date`, never from the instant: the server decided which day a
+ * record belongs to, in the baby's timezone (spec 5.3).
+ */
+export function formatShortDate(localDate: string, today: string): string {
+  const [year, month, day] = localDate.split('-');
+  const short = `${Number(month)}/${Number(day)}`;
+  return year === today.slice(0, 4) ? short : `${year}/${short}`;
+}

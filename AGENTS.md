@@ -125,7 +125,7 @@ own rather than being folded into a screen.
 | 1 | The two-day calendar (spec 7.6), on the single-day timeline | **done** |
 | 2 | Renaming and deleting a tag: the `rev` bump before the association goes (spec 7.9) | **done** |
 | 3 | Tags on an event, in the add and edit forms (spec 7.3) | **done** |
-| 4 | The tag page: filtering `GET /events` by tag, with paging (spec 7.9) | |
+| 4 | The tag page: filtering `GET /events` by tag, with paging (spec 7.9) | **done** |
 | 5 | Data export: the endpoint and the settings entry (spec 5.1, 12) | |
 | 6 | The M4 acceptance: what is checkable locally, and the phone steps | |
 
@@ -139,8 +139,9 @@ because the numbering SQL finds the affected events *through* the associations
 it is about to delete. Renaming a tag and attaching or detaching one on an
 event carry the same rule.
 
-What exists already: `GET`, `POST`, `PATCH` and `DELETE` for tags. Filtering
-by tag, tags anywhere in the UI, and the whole export are all absent.
+What exists already: `GET`, `POST`, `PATCH` and `DELETE` for tags, tags on
+the add and edit forms, and the tag page with its filter. The export is
+absent.
 
 ### A tag write is an event write
 
@@ -315,17 +316,104 @@ is possible and what is typed then is not part of the PATCH. That predates
 tags and is not fixed here.
 
 A tag the other parent deleted while a form was open stays selected and has
-no chip to show for it. It is sent and the server drops it, which is the
-honest order of events: this device cannot know it is gone until it syncs,
-and silently editing what somebody chose is worse than sending something that
-turns out not to exist.
+no chip to show for it, and it is sent: this device cannot know it is gone
+until it syncs, and silently editing what somebody chose is worse than
+sending something that turns out not to exist.
+
+**The server refuses it**, with `VALIDATION_FAILED` and `tagIds.N:
+INVALID_ENUM` -- it does **not** drop it. This note said "the server drops
+it" until stage 4, and it was never true of the API: `unknownTags` in the
+events route has refused unknown ids since M1. The claim came from the MSW
+mock, which filtered them out, so the web suite was testing a contract that
+did not exist. The mock now refuses as the API does.
+
+What that costs, and it is **not resolved**: a record written offline with
+a tag, waiting in the queue while that tag is deleted, is refused for good
+when it is sent. Its correction form cannot fix it either -- the picker
+draws only tags the device has, so the deleted id is selected with no chip
+to un-select. Abandoning it is the only way out. Whether the server should
+drop an unknown tag of the right shape, or the device strip one a sync has
+shown to be gone, or the picker draw it so it can be removed, is a product
+question put to the owner rather than decided here. The delete sheet on the
+tag page warns when this phone holds such a record, which is a warning and
+not a fix.
 
 **Deleting a tag is not reference-counted.** Every association goes, which is
-what spec 7.9 describes and what the confirmation it asks for is about. That
-confirmation is stage 4's screen; nothing here asks.
+what spec 7.9 describes and what the tag page's confirmation is about.
 
-Spec 7.10 also asks the page list to name six pages and to mark which one is
-showing; it currently names four and marks none.
+### The tag page, and the filter under it
+
+`GET /babies/:id/events?tags=` is the tag page's question, told apart from
+the incremental sync by `tags` being present; sending a sync cursor with it
+is refused rather than half-honoured. It answers `{ events, total, hasMore }`.
+
+Three ways the filter loses or repeats a record with every response a 200,
+and each has a test that fails when the guard is removed:
+
+- **A record carrying two of the chosen tags joins twice.** `DISTINCT` makes
+  it one row, and it is applied **before** `LIMIT`/`OFFSET`. Paging over the
+  joined rows counts the duplicate against the page, which comes up short,
+  and the next one starts too late.
+- **The order has to be total.** `started_at` alone is not -- two nappies in
+  the same second are ordinary -- so `id` breaks every tie, in the same
+  direction as the sort. The test that pins it checks the order of seven
+  records sharing one instant; SQLite happens to return ties consistently
+  here, so dropping the tiebreak shows as a wrong order rather than as a lost
+  record, and it is the order that is asserted.
+- **The tag list is one bound parameter**, a JSON array read with
+  `json_each`. Bound one by one, a hundred ids plus the baby and the paging
+  is over D1's limit (spec 4.2), and the test asking with a hundred answers
+  500 when that is tried.
+
+The page, its tags and the count are one `batch()`, so `total` and `hasMore`
+describe the same moment as the rows -- and `hasMore` comes from the total,
+not from "the page was full", which is wrong exactly when the last page is.
+
+`AND t.baby_id = e.baby_id` on the tag join cannot change a result today:
+associations only ever join a tag to an event of the same baby, because the
+write path checks it. It is there so a foreign tag id selects nothing by
+construction rather than by an invariant held in another file, and removing
+it passes every test. Said here rather than counted as covered.
+
+**Offsets are positions in a list other people can change.** Spec 7.9 asks
+for `limit`/`offset`, and with it a record added at the top between two pages
+pushes the one at the boundary onto the next page as well; a record deleted
+above the boundary pulls one back past it, and that one is never shown. The
+screen drops the first by id. **The second it cannot see**, and nothing
+short of a cursor on `(started_at, id)` would -- that is a change to the
+contract spec 7.9 writes down, so it has been put to the owner rather than
+made.
+
+The screen keeps the choice, the order and the range **in the address**,
+because opening a record from the results unmounts it. An answer to a query
+that is no longer the one on screen is dropped, and so is a "more" whose
+question has moved -- stage 3's rule, for a list. A re-ask after a sync asks
+for as many rows as are showing, so catching up does not shorten the list
+somebody had scrolled down.
+
+**What is chosen is filtered to the tags the device has.** That one rule is
+how a deleted tag leaves the choice, whether this phone deleted it or a sync
+said the other one did; an explicit un-choose on delete was a second
+mechanism nobody could see working, and it was removed.
+
+The delete sheet asks the **server** how many records carry the tag, because
+the claim is about every record and the device may not hold them all. Until
+the count is in, the delete is not offered; if it cannot be had, the sheet
+says so and still does not offer it -- "not in use" on a failed request is
+the worst wrong answer the sheet could give. Records in this phone's queue
+are counted and said separately, since the server cannot see them (see the
+deleted-tag gap above). A delete that meets `NOT_FOUND` says the tag was
+already gone rather than claiming the deletion, after the sync has taken it
+off the list.
+
+After a rename or a delete the store syncs, because the records learn of the
+change only through their revs (spec 7.9). A test reads the device's own copy
+of a record after a delete, not the edit form: an id with no tag to draw has
+no chip, so the form looks the same whether the sync happened or not.
+
+The rename also writes the new name into the stored list before that sync,
+so the screen is right at once. Not separately observable -- the sync
+straight after brings the same name -- and not counted as covered.
 
 ### Two days, one set of hours
 
@@ -376,10 +464,9 @@ sizing, overlap or where a tap goes is duplicated -- both screens run the
 same `itemsFor` and `layOut`, and `useDay` reads a day the same way for both
 so they cannot develop separate ideas of what one contains.
 
-Spec 7.10's page list now names five of its six pages and marks the one
-showing, with a word as well as a colour. The tag page is absent rather than
-present and dead until stage 4 builds it: an entry that goes nowhere is worse
-than one that is not there yet.
+Spec 7.10's page list names all six of its pages and marks the one showing,
+with a word as well as a colour. The tag page joined it in stage 4 and was
+left out until then rather than listed and dead.
 
 ### A day's calendar is a timeline, not a list
 

@@ -451,7 +451,7 @@ npm run dev:all
 ```
 
 Open `http://<ip>:5180` on the phone, sign in, and reach it from the icon at
-the top left: the page list has home, calendar, statistics and settings.
+the top left.
 
 ### What to look at
 
@@ -568,6 +568,87 @@ npm run restore:drill -- backup-YYYY-MM-DD.sql --compare-local
 
 A real drill on a real backup is still outstanding, but the mechanism and
 the checks are exercised here against synthetic data.
+
+## The tag page
+
+**No HTTPS needed here either.** Nothing on it touches the service worker:
+
+```sh
+npm run dev:all
+```
+
+Open `http://<ip>:5180` on the phone, sign in, and open the page list from
+the icon at the top left. It now names all six pages spec 7.10 lists; choose
+the tags page, fifth in the list.
+
+The results and every change to a tag need the API. The list of tags itself
+is the phone's own copy, so it shows with the API stopped.
+
+### What to look at
+
+**Getting started**
+
+1. On a baby with no tags, the page says there are none and how to make one,
+   rather than showing nothing.
+2. Add two tags from the box under the list, one of them in Chinese. Both
+   appear at once, Chinese exactly as typed.
+3. Put each on two or three records from the add form, and one record with
+   both.
+
+**Choosing**
+
+4. Tap one tag. Its records appear newest first, each with its day and time,
+   and a line says how many there are.
+5. Tap the second as well. The list now has the records carrying **either**,
+   and the one carrying both appears **once**. The line above the list says
+   it is "any of", not "all of".
+6. Switch to oldest first, then set a start and an end date. The list
+   follows each change; the dates are inclusive. Clear them and everything
+   comes back.
+7. Open one of the records and save or go back. You land on the tag page
+   with the same tags chosen and the same order and dates.
+
+**Long lists**
+
+8. With more than fifty records under one tag, the first fifty show with a
+   button for more underneath. Pressing it adds the rest, with nothing
+   repeated. (Fifty records under one tag takes a while to make by hand; it
+   is pinned by the tests, so skip it if there are not that many.)
+
+**Renaming**
+
+9. Tap the pencil beside a tag, change the name and save. The new name shows
+   at once. Open a record carrying it on the **other** phone after it syncs:
+   it shows the new name there too.
+10. Rename one tag to the other's name. It is refused with a sentence saying
+    the name is taken, and what you typed stays in the box.
+
+**Deleting**
+
+11. Tap the pencil, then delete. The sheet that opens says how many records
+    carry the tag and that they keep everything but the tag. The delete
+    button is unavailable until that count has arrived.
+12. Cancel. Nothing changes.
+13. Delete for real. The tag leaves the list and the choice, and on both
+    phones (after a sync) the records that had it no longer show it. The
+    records themselves are still there.
+14. Delete a tag nobody uses: the sheet says nothing uses it.
+
+**Without the API**
+
+15. Stop the worker with Ctrl-C (run the halves separately, as in "Reading
+    without the API" above). Choosing a tag says it could not read the
+    records, with a retry button, rather than an empty list. Renaming says a
+    connection is needed. The delete sheet says it cannot confirm the usage
+    and does not offer the delete.
+
+### Known gap, not something to report
+
+A record written offline with a tag, sitting in this phone's queue, while
+that tag is deleted -- here or on the other phone -- is refused by the
+server when it is finally sent, because the tag no longer exists. The
+delete sheet warns when this phone holds such a record. What the server
+should do instead has not been decided; see AGENTS.md.
 
 ## What cannot be checked here
 

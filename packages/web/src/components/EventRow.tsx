@@ -5,7 +5,8 @@ import {
 import type { EventDto } from '@dongfan/shared';
 import { EventIconBadge, FALLBACK_COLOR } from './EventIcon.js';
 import type { QueuedCreate } from '../lib/db.js';
-import { formatClock, formatDuration } from '../lib/format.js';
+import { formatClock, formatDuration, formatShortDate } from '../lib/format.js';
+import { linkBack } from '../lib/return-to.js';
 
 /**
  * One line of a day, wherever that day is being shown.
@@ -72,17 +73,26 @@ export function WaitingRow({ entry, timezone }: {
   );
 }
 
-export function EventRow({ event, timezone, drafted }: {
+export function EventRow({ event, timezone, drafted, today, from }: {
   event: EventDto;
   timezone: string;
   /** Stopped on this device, with nobody having confirmed when yet. */
   drafted: boolean;
+  /**
+   * Given, the row leads with its day as well as the clock -- with the year
+   * when it is not this one. A day's list does not need it; the tag page's
+   * spans months, and "08:12" alone there says nothing.
+   */
+  today?: string;
+  /** Where the edit screen goes back to; home when nothing says otherwise. */
+  from?: string;
 }): React.JSX.Element {
   const type = getEventType(event.typeId);
   const color = type?.color ?? FALLBACK_COLOR;
   const spec = type?.value ?? null;
 
   const details: string[] = [];
+  if (today !== undefined) details.push(formatShortDate(event.localDate, today));
   if (type?.allDay) details.push(zhTW.event.allDay);
   else details.push(formatClock(event.startedAt, timezone));
 
@@ -95,7 +105,7 @@ export function EventRow({ event, timezone, drafted }: {
 
   return (
     <Link
-      to={`/event/${event.id}`}
+      to={from === undefined ? `/event/${event.id}` : linkBack(`/event/${event.id}`, from)}
       aria-label={interpolate(zhTW.event.open, { name: eventTypeName(event.typeId) })}
       className="flex items-center gap-2.5 border-b border-line-soft px-1 py-2.5"
       data-testid={`event-row-${event.typeId}`}
