@@ -394,10 +394,16 @@ asks again **from the top** as long as what is showing -- the one request
 that brings a skipped record back. A test deletes a record between two
 pages, shows the skipped one missing, and shows the refresh restoring it.
 
-**Two requests can fail here, and they retry differently.** The failure
-remembers which one it was: a failed re-ask is retried from the top, with
-the old rows left on screen and said to be old; a failed "more" is retried
-as the same page. The retry used to be chosen by whether rows were showing,
+**Two requests can fail here, and they are two facts, kept apart.**
+`stale` says the last ask from the top failed, so the rows are older than
+the server's; **only an ask from the top that succeeds clears it**.
+`moreFailed` says the next page failed, and is retried as that page. Both
+carry the query they are about. They were one value until review found,
+twice, what that costs: a failed "more" overwrote a failed re-ask, and a
+"more" that then succeeded left unrefreshed rows on screen with nothing
+saying so. A test walks exactly that sequence -- re-ask fails, "more" fails,
+"more" succeeds, the warning is still there; the ask from the top succeeds,
+it goes. The retry used to be chosen by whether rows were showing,
 so a re-ask that failed after a sync was retried as "more" -- offset 1, the
 error gone and the old rows never asked for again. Found in review. The
 first version of the test for it passed with the bug in, because a later

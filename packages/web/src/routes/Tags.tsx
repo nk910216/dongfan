@@ -104,17 +104,26 @@ export function Tags(): React.JSX.Element {
   const [results, setResults] = useState<Results | null>(null);
   const [loading, setLoading] = useState(false);
   /**
-   * What failed, and **which request** it was.
+   * Two failures, kept apart because they are two different facts.
    *
-   * Two requests can fail on this screen and their retries are different
-   * operations: asking the list again from the top, and fetching the page
-   * after it. The retry used to be chosen by whether a list was already
-   * showing -- so a re-ask after a sync that failed, with yesterday's rows
-   * still on screen, was "retried" by fetching the *next* page. The error
-   * went away and the rows it was about were never asked for again. Found
-   * in review.
+   * `stale`: the last attempt to ask this list **from the top** failed, so
+   * the rows showing are older than the server's. Only a successful ask
+   * from the top makes that untrue, and nothing else clears it.
+   *
+   * `moreFailed`: fetching the page after them failed. Retried as that
+   * page, and irrelevant once the list has been asked again from the top.
+   *
+   * Both were once one value, twice found wrong in review. Chosen by
+   * whether rows were showing, the retry of a failed re-ask fetched the
+   * *next* page. Then, as one slot, a failed "more" overwrote the failed
+   * re-ask -- and a "more" that then succeeded left rows nobody had
+   * refreshed on screen with nothing saying so.
+   *
+   * Each carries the query it is about, so a change of tags, order or range
+   * leaves the old one behind without anything having to clear it.
    */
-  const [failure, setFailure] = useState<{ during: 'list' | 'more'; error: unknown } | null>(null);
+  const [stale, setStale] = useState<{ key: string; error: unknown } | null>(null);
+  const [moreFailed, setMoreFailed] = useState<{ key: string; error: unknown } | null>(null);
   /** Bumped to ask the list again from the top, since nothing else has changed. */
   const [attempt, setAttempt] = useState(0);
   /** The query on screen now, for answers that come back after it moved. */
@@ -139,13 +148,16 @@ export function Tags(): React.JSX.Element {
   useEffect(() => {
     if (chosen.length === 0) {
       setResults(null);
-      setFailure(null);
       setLoading(false);
       return;
     }
     const asking = key;
     setLoading(true);
-    setFailure(null);
+    // `stale` is left as it is: asking again is not having been answered,
+    // and the rows are exactly as old as they were. Not observable today --
+    // the warning is hidden while `loading` -- so clearing it here would
+    // pass every test; it is left because it is true, not because a test
+    // holds it.
     // As long as what is showing, when this is a re-ask for the same
     // question after a sync: starting again from fifty would take away the
     // part of the list somebody had scrolled to.
@@ -153,6 +165,9 @@ export function Tags(): React.JSX.Element {
     query(0, limit)
       .then((page) => {
         if (current.current !== asking) return;
+        // The one thing that makes the rows current again.
+        setStale(null);
+        setMoreFailed(null);
         setResults({
           key: asking,
           events: page.events,
@@ -164,7 +179,7 @@ export function Tags(): React.JSX.Element {
       })
       .catch((error: unknown) => {
         if (current.current !== asking) return;
-        setFailure({ during: 'list', error });
+        setStale({ key: asking, error });
         setLoading(false);
       });
     // `syncedAt` is not read in here. It is the signal that the app has
@@ -187,8 +202,9 @@ export function Tags(): React.JSX.Element {
     const asking = key;
     setMore(true);
     // Only its own. A failed re-ask is still true of the rows above, and
-    // fetching more of them does not make them fresh.
-    setFailure((before) => (before?.during === 'more' ? null : before));
+    // fetching more of them -- successfully or not -- does not make them
+    // fresh.
+    setMoreFailed(null);
     try {
       const page = await query(results.consumed, TAG_FILTER_DEFAULT_LIMIT);
       if (current.current !== asking) return;
@@ -208,13 +224,15 @@ export function Tags(): React.JSX.Element {
         };
       });
     } catch (error) {
-      if (current.current === asking) setFailure({ during: 'more', error });
+      if (current.current === asking) setMoreFailed({ key: asking, error });
     } finally {
       setMore(false);
     }
   };
 
   const showing = results !== null && results.key === key ? results : null;
+  const staleNow = stale !== null && stale.key === key ? stale : null;
+  const moreFailedNow = moreFailed !== null && moreFailed.key === key ? moreFailed : null;
   const today = toLocalDate(now, baby.timezone);
 
   /**
@@ -477,8 +495,8 @@ export function Tags(): React.JSX.Element {
             ) : null}
 
             {showing === null ? (
-              failure !== null && !loading ? (
-                <Failed failure={failure.error} onRetry={askAgain} />
+              staleNow !== null && !loading ? (
+                <Failed failure={staleNow.error} onRetry={askAgain} />
               ) : (
                 <p className="py-6 text-center text-sm text-ink-dim" data-testid="tag-loading">…</p>
               )
@@ -502,11 +520,11 @@ export function Tags(): React.JSX.Element {
                     {zhTW.tagPage.refresh}
                   </button>
                 </div>
-                {failure?.during === 'list' && !loading ? (
+                {staleNow !== null && !loading ? (
                   // The rows below are from the last answer that came back.
                   // Said, because a list that failed to refresh looks exactly
                   // like one that did.
-                  <Failed failure={failure.error} onRetry={askAgain} stale />
+                  <Failed failure={staleNow.error} onRetry={askAgain} stale />
                 ) : null}
                 {showing.events.length === 0 ? (
                   <EmptyDay title={zhTW.tagPage.noResults} />
@@ -524,8 +542,8 @@ export function Tags(): React.JSX.Element {
                     ))}
                   </div>
                 )}
-                {failure?.during === 'more' ? (
-                  <Failed failure={failure.error} onRetry={() => void loadMore()} />
+                {moreFailedNow !== null ? (
+                  <Failed failure={moreFailedNow.error} onRetry={() => void loadMore()} more />
                 ) : showing.hasMore ? (
                   <button
                     type="button"
@@ -567,20 +585,23 @@ export function Tags(): React.JSX.Element {
   );
 }
 
-function Failed({ failure, onRetry, stale = false }: {
+function Failed({ failure, onRetry, stale = false, more = false }: {
   failure: unknown;
   onRetry: () => void;
   /** Older rows are still showing underneath. */
   stale?: boolean;
+  /** The page after the rows, which can fail while the rows are also old. */
+  more?: boolean;
 }): React.JSX.Element {
+  const id = more ? 'tag-more' : 'tag';
   return (
-    <div className="flex flex-col items-center gap-2 py-6" data-testid="tag-failed">
+    <div className="flex flex-col items-center gap-2 py-6" data-testid={`${id}-failed`}>
       <p className="text-sm text-ink-muted">{stale ? zhTW.tagPage.staleList : zhTW.tagPage.failed}</p>
       <p className="text-xs text-ink-dim">{describeFailure(failure)}</p>
       <button
         type="button"
         onClick={onRetry}
-        data-testid="tag-retry"
+        data-testid={`${id}-retry`}
         className="min-h-11 rounded-xl border border-line px-4 text-sm text-ink-muted"
       >
         {zhTW.tagPage.retry}

@@ -4032,6 +4032,41 @@ describe('the tag page', () => {
     expect(screen.getByText(zhTW.tagPage.staleList)).toBeInTheDocument();
   });
 
+  it('keeps saying the list is old through a "more" that fails and then succeeds', async () => {
+    // Found in review: the two failures shared one slot, so a failed
+    // "more" overwrote the failed re-ask, and once the retry of "more"
+    // succeeded the rows nobody had refreshed were on screen with nothing
+    // saying so. Only an ask from the top that succeeds makes them current.
+    twoTags();
+    for (let i = 0; i < 55; i += 1) {
+      api.add({ typeId: 'diaper', startedAt: noonOn(1) + i * HOUR, tagIds: ['tag-night'] });
+    }
+
+    const user = await intoThePage();
+    await user.click(choose(USER_CONTENT.tag));
+    await waitFor(() => expect(shownIds()).toHaveLength(50));
+
+    api.failTagged = true;
+    await user.click(screen.getByTestId('tag-refresh'));
+    await screen.findByText(zhTW.tagPage.staleList);
+
+    await user.click(screen.getByTestId('tag-more'));
+    await screen.findByTestId('tag-more-failed');
+    // Both are true at once, and both are said.
+    expect(screen.getByText(zhTW.tagPage.staleList)).toBeInTheDocument();
+
+    api.failTagged = false;
+    await user.click(screen.getByTestId('tag-more-retry'));
+    await waitFor(() => expect(shownIds()).toHaveLength(55));
+    expect(screen.queryByTestId('tag-more-failed')).not.toBeInTheDocument();
+    expect(screen.getByText(zhTW.tagPage.staleList)).toBeInTheDocument();
+
+    // And the ask from the top that succeeds is what clears it.
+    await user.click(screen.getByTestId('tag-retry'));
+    await waitFor(() => expect(screen.queryByText(zhTW.tagPage.staleList)).not.toBeInTheDocument());
+    expect(shownIds()).toHaveLength(55);
+  });
+
   it('retries a failed "more" as the same page', async () => {
     twoTags();
     for (let i = 0; i < 55; i += 1) {
@@ -4044,12 +4079,12 @@ describe('the tag page', () => {
 
     api.failTagged = true;
     await user.click(screen.getByTestId('tag-more'));
-    expect(await screen.findByText(zhTW.tagPage.failed)).toBeInTheDocument();
+    expect(await screen.findByTestId('tag-more-failed')).toHaveTextContent(zhTW.tagPage.failed);
     expect(shownIds()).toHaveLength(50);
 
     api.failTagged = false;
     const before = filterRequests().length;
-    await user.click(screen.getByTestId('tag-retry'));
+    await user.click(screen.getByTestId('tag-more-retry'));
 
     await waitFor(() => expect(filterRequests().length).toBeGreaterThan(before));
     expect(filterRequests()[before]?.get('offset')).toBe('50');
