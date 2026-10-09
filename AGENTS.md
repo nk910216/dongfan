@@ -327,16 +327,21 @@ events route has refused unknown ids since M1. The claim came from the MSW
 mock, which filtered them out, so the web suite was testing a contract that
 did not exist. The mock now refuses as the API does.
 
-What that costs, and it is **not resolved**: a record written offline with
-a tag, waiting in the queue while that tag is deleted, is refused for good
-when it is sent. Its correction form cannot fix it either -- the picker
-draws only tags the device has, so the deleted id is selected with no chip
-to un-select. Abandoning it is the only way out. Whether the server should
-drop an unknown tag of the right shape, or the device strip one a sync has
-shown to be gone, or the picker draw it so it can be removed, is a product
-question put to the owner rather than decided here. The delete sheet on the
-tag page warns when this phone holds such a record, which is a warning and
-not a fix.
+What that cost: a record written offline with a tag, waiting in the queue
+while that tag is deleted, is refused for good when it is sent -- and its
+correction form could not fix it, because the picker drew only tags the
+device has, so the deleted id was selected with no chip to un-select.
+Abandoning the record was the only way out.
+
+**The owner chose to make it removable, not to make the server lenient.**
+The picker now draws a selected id it has no tag for as "deleted or
+unavailable", and tapping it takes it off through the form's ordinary
+`onChange`: the correction then resends under the same event id with every
+other field as it was, and while an outcome is unknown the fieldset freezes
+it like everything else. The server still refuses an unknown tag; quietly
+dropping input to get round a dead end in the interface was ruled out. The
+delete sheet on the tag page still warns when this phone holds such a
+record, because the record does still need somebody to open it.
 
 **Deleting a tag is not reference-counted.** Every association goes, which is
 what spec 7.9 describes and what the tag page's confirmation is about.
@@ -379,10 +384,25 @@ it passes every test. Said here rather than counted as covered.
 for `limit`/`offset`, and with it a record added at the top between two pages
 pushes the one at the boundary onto the next page as well; a record deleted
 above the boundary pulls one back past it, and that one is never shown. The
-screen drops the first by id. **The second it cannot see**, and nothing
-short of a cursor on `(started_at, id)` would -- that is a change to the
-contract spec 7.9 writes down, so it has been put to the owner rather than
-made.
+screen drops the first by id. **The second it cannot see.**
+
+The owner chose to keep spec 7.9's offsets and say so rather than move to a
+cursor: for one family's records the gap is narrow, and a cursor does not
+give a complete snapshot either once a record's time or tags change between
+pages. What the screen offers instead is a refresh beside the count, which
+asks again **from the top** as long as what is showing -- the one request
+that brings a skipped record back. A test deletes a record between two
+pages, shows the skipped one missing, and shows the refresh restoring it.
+
+**Two requests can fail here, and they retry differently.** The failure
+remembers which one it was: a failed re-ask is retried from the top, with
+the old rows left on screen and said to be old; a failed "more" is retried
+as the same page. The retry used to be chosen by whether rows were showing,
+so a re-ask that failed after a sync was retried as "more" -- offset 1, the
+error gone and the old rows never asked for again. Found in review. The
+first version of the test for it passed with the bug in, because a later
+re-ask from the sync machinery fixed the list up on its own; it now asserts
+the request the button sent, not what the list eventually shows.
 
 The screen keeps the choice, the order and the range **in the address**,
 because opening a record from the results unmounts it. An answer to a query

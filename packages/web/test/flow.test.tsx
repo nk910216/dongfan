@@ -3980,6 +3980,116 @@ describe('the tag page', () => {
     await waitFor(() => expect(shownIds()).toHaveLength(60));
   });
 
+  it('retries a failed re-ask from the top, not by fetching the next page', async () => {
+    // Found in review: the retry was chosen by whether rows were showing,
+    // so a re-ask that failed with the old rows on screen was retried as
+    // "more" -- offset 1, the error gone, the old rows never asked again.
+    twoTags();
+    const first = api.add({ typeId: 'bottle', startedAt: noonOn(10), tagIds: ['tag-night'] });
+
+    const user = await intoThePage();
+    await user.click(choose(USER_CONTENT.tag));
+    await waitFor(() => expect(shownIds()).toEqual([first.id]));
+
+    api.failTagged = true;
+    await user.click(screen.getByTestId('sync-state'));
+    expect(await screen.findByText(zhTW.tagPage.staleList)).toBeInTheDocument();
+    // Still the old rows, said to be old.
+    expect(shownIds()).toEqual([first.id]);
+
+    api.failTagged = false;
+    const second = api.add({ typeId: 'bottle', startedAt: noonOn(11), tagIds: ['tag-night'] });
+    const before = filterRequests().length;
+    await user.click(screen.getByTestId('tag-retry'));
+
+    // The request the button sent, not whatever the list ends up showing:
+    // a later re-ask from the sync machinery can paper over a wrong retry,
+    // and did -- the first version of this test passed with the bug in.
+    await waitFor(() => expect(filterRequests().length).toBeGreaterThan(before));
+    expect(filterRequests()[before]?.get('offset')).toBe('0');
+    await waitFor(() => expect(shownIds()).toEqual([second.id, first.id]));
+    expect(screen.queryByTestId('tag-failed')).not.toBeInTheDocument();
+  });
+
+  it('keeps saying the list is old when more of it is fetched', async () => {
+    // Fetching the next page does not make the rows above it fresh.
+    twoTags();
+    for (let i = 0; i < 55; i += 1) {
+      api.add({ typeId: 'diaper', startedAt: noonOn(1) + i * HOUR, tagIds: ['tag-night'] });
+    }
+
+    const user = await intoThePage();
+    await user.click(choose(USER_CONTENT.tag));
+    await waitFor(() => expect(shownIds()).toHaveLength(50));
+
+    api.failTagged = true;
+    await user.click(screen.getByTestId('sync-state'));
+    await screen.findByText(zhTW.tagPage.staleList);
+
+    api.failTagged = false;
+    await user.click(screen.getByTestId('tag-more'));
+    await waitFor(() => expect(shownIds()).toHaveLength(55));
+    expect(screen.getByText(zhTW.tagPage.staleList)).toBeInTheDocument();
+  });
+
+  it('retries a failed "more" as the same page', async () => {
+    twoTags();
+    for (let i = 0; i < 55; i += 1) {
+      api.add({ typeId: 'diaper', startedAt: noonOn(1) + i * HOUR, tagIds: ['tag-night'] });
+    }
+
+    const user = await intoThePage();
+    await user.click(choose(USER_CONTENT.tag));
+    await waitFor(() => expect(shownIds()).toHaveLength(50));
+
+    api.failTagged = true;
+    await user.click(screen.getByTestId('tag-more'));
+    expect(await screen.findByText(zhTW.tagPage.failed)).toBeInTheDocument();
+    expect(shownIds()).toHaveLength(50);
+
+    api.failTagged = false;
+    const before = filterRequests().length;
+    await user.click(screen.getByTestId('tag-retry'));
+
+    await waitFor(() => expect(filterRequests().length).toBeGreaterThan(before));
+    expect(filterRequests()[before]?.get('offset')).toBe('50');
+    await waitFor(() => expect(shownIds()).toHaveLength(55));
+  });
+
+  it('brings back, from the top, a record the offsets skipped', async () => {
+    // The limit of spec 7.9's offsets, shown rather than described: a
+    // record deleted above the boundary between two pages pulls the next
+    // one back past it, and "more" never shows it. Nothing on screen can
+    // tell. Asking again from the top can.
+    twoTags();
+    const written: { id: string }[] = [];
+    for (let i = 0; i < 60; i += 1) {
+      written.push(api.add({ typeId: 'diaper', startedAt: noonOn(1) + i * HOUR, tagIds: ['tag-night'] }));
+    }
+    // Newest first, so the fifty-first shown is the tenth written.
+    const skipped = written[9];
+
+    const user = await intoThePage();
+    await user.click(choose(USER_CONTENT.tag));
+    await waitFor(() => expect(shownIds()).toHaveLength(50));
+
+    // The other parent deletes one already on the first page.
+    const top = api.events.find((event) => event.id === written[59]?.id);
+    if (top) top.deletedAt = Date.now();
+
+    await user.click(screen.getByTestId('tag-more'));
+    await waitFor(() => expect(screen.queryByTestId('tag-more')).not.toBeInTheDocument());
+    expect(shownIds()).not.toContain(skipped?.id);
+
+    const before = filterRequests().length;
+    await user.click(screen.getByTestId('tag-refresh'));
+
+    await waitFor(() => expect(filterRequests().length).toBeGreaterThan(before));
+    expect(filterRequests()[before]?.get('offset')).toBe('0');
+    await waitFor(() => expect(shownIds()).toContain(skipped?.id));
+    expect(shownIds()).toHaveLength(59);
+  });
+
   it('keeps what was chosen when a record is opened and closed again', async () => {
     // The choice is in the address. Held in state, it went with the screen
     // when the record was opened -- and with it the reason for being here.
@@ -4223,6 +4333,78 @@ describe('the tag page', () => {
       await waitFor(() => expect(screen.getAllByTestId('tag-row').map((one) => one.textContent))
         .toEqual([USER_CONTENT.tag]));
     });
+  });
+});
+
+describe('a tag on a record that no longer exists', () => {
+  // The server refuses a tag the baby does not have. A record written with
+  // one that has since been deleted is refused for good -- and before the
+  // picker drew such a tag, its correction form had nothing to tap to take
+  // it off, so abandoning the record was the only way out.
+
+  it('can be taken off in the correction form, which then sends under the same id', async () => {
+    api.tags = [{ id: 'tag-day', name: 'daytime', createdAt: 0 }];
+    await queueAdd(api.userId, BABY.id, 'queued-1', {
+      typeId: 'bottle', intent: 'record', startedAt: earlierToday(HOUR), endedAt: null,
+      value: 100, note: USER_CONTENT.note, metadata: {}, tagIds: ['tag-gone', 'tag-day'],
+    });
+
+    const user = openSignedIn('/');
+    await waitForHome();
+    // Sent, and refused: the tag is gone.
+    await user.click(await screen.findByTestId('unsynced-count'));
+    await user.click(await screen.findByTestId('unsynced-correct'));
+
+    const gone = await screen.findByTestId('tag-missing');
+    expect(gone).toHaveTextContent(zhTW.addEvent.tagMissing);
+    expect(gone).toBeEnabled();
+    await user.click(gone);
+    expect(screen.queryByTestId('tag-missing')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('submit'));
+
+    await waitFor(() => expect(api.events).toHaveLength(1));
+    // The same record, everything else as it was.
+    expect(api.events[0]).toMatchObject({
+      id: 'queued-1', value: 100, note: USER_CONTENT.note, tagIds: ['tag-day'],
+    });
+  });
+
+  it('is shown and left alone on an edit, until somebody takes it off', async () => {
+    api.tags = [{ id: 'tag-day', name: 'daytime', createdAt: 0 }];
+    // A record that synced carrying a tag this device has not heard of.
+    api.add({ typeId: 'bottle', value: 140, startedAt: earlierToday(HOUR), tagIds: ['tag-gone'] });
+
+    const user = openSignedIn();
+    await waitForHome();
+    await user.click(screen.getByRole('link', {
+      name: interpolate(zhTW.event.open, { name: eventTypeName('bottle') }),
+    }));
+    await user.click(await screen.findByTestId('tag-missing'));
+    await user.click(screen.getByTestId('submit'));
+
+    await waitFor(() => expect(patches()).toHaveLength(1));
+    expect(patches()[0]?.body).toMatchObject({ tagIds: [] });
+  });
+
+  it('cannot be taken off while it is unknown whether the record arrived', async () => {
+    // What went out is the queue's until the doubt is settled; editing it
+    // now would send a different record under the same id (spec 6.1).
+    api.tags = [{ id: 'tag-night', name: USER_CONTENT.tag, createdAt: 0 }];
+    api.loseNextResponse = true;
+    const user = openSignedIn('/add/bottle');
+    await user.type(await screen.findByLabelText(valueLabel('bottle')), '150');
+    await user.click(screen.getAllByTestId('tag-chip')[0] as HTMLElement);
+    await user.click(screen.getByTestId('submit'));
+    await screen.findByTestId('outcome-unknown');
+
+    // Deleted meanwhile, and this device has heard so.
+    closeApp();
+    api.tags = [];
+    openSignedIn('/add/bottle');
+
+    const gone = await screen.findByTestId('tag-missing');
+    expect(screen.getByTestId('outcome-unknown')).toBeInTheDocument();
+    expect(gone).toBeDisabled();
   });
 });
 

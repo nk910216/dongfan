@@ -213,6 +213,10 @@ export const zhTW = {
     noResults: '沒有符合的紀錄',
     more: '載入更多',
     failed: '讀不到紀錄',
+    /** A re-ask failed with the previous answer still on screen. */
+    staleList: '沒能重新讀取，下面是先前的結果',
+    /** Asks the list again from the first page. */
+    refresh: '重新整理',
     retry: '重試',
     /** The results are the server's, so a queued record is not among them. */
     unsynced: '此手機有 {count} 筆帶有所選標籤的紀錄尚未同步，還不在清單裡。',
@@ -300,6 +304,12 @@ export const zhTW = {
     tagsEmpty: '還沒有標籤',
     /** The queue takes event creations only, so a new tag needs a connection. */
     tagNeedsConnection: '新增標籤需要連線，已有的標籤離線時仍可選擇',
+    /*
+     * A tag on this record that the device no longer has: deleted since, or
+     * not synced yet. The server refuses it, so it has to be removable.
+     */
+    tagMissing: '已刪除或無法取得的標籤',
+    tagMissingRemove: '移除這個已刪除或無法取得的標籤',
     save: '儲存',
     saving: '儲存中…',
     cancel: '取消',

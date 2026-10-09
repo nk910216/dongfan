@@ -103,8 +103,19 @@ export function Tags(): React.JSX.Element {
   const key = keyOf(chosen, sort, from, to);
   const [results, setResults] = useState<Results | null>(null);
   const [loading, setLoading] = useState(false);
-  const [failure, setFailure] = useState<unknown>(null);
-  /** Bumped to ask again after a failure, since nothing else has changed. */
+  /**
+   * What failed, and **which request** it was.
+   *
+   * Two requests can fail on this screen and their retries are different
+   * operations: asking the list again from the top, and fetching the page
+   * after it. The retry used to be chosen by whether a list was already
+   * showing -- so a re-ask after a sync that failed, with yesterday's rows
+   * still on screen, was "retried" by fetching the *next* page. The error
+   * went away and the rows it was about were never asked for again. Found
+   * in review.
+   */
+  const [failure, setFailure] = useState<{ during: 'list' | 'more'; error: unknown } | null>(null);
+  /** Bumped to ask the list again from the top, since nothing else has changed. */
   const [attempt, setAttempt] = useState(0);
   /** The query on screen now, for answers that come back after it moved. */
   const current = useRef(key);
@@ -153,7 +164,7 @@ export function Tags(): React.JSX.Element {
       })
       .catch((error: unknown) => {
         if (current.current !== asking) return;
-        setFailure(error);
+        setFailure({ during: 'list', error });
         setLoading(false);
       });
     // `syncedAt` is not read in here. It is the signal that the app has
@@ -161,12 +172,23 @@ export function Tags(): React.JSX.Element {
     // the server's, so it is asked again (spec 6.1).
   }, [key, chosen.length, query, syncedAt, attempt]);
 
+  /**
+   * The list again, from the top, as long as what is showing.
+   *
+   * Both the retry after a failed re-ask and the refresh button. From the
+   * top because that is the only request that can bring back a record the
+   * offsets skipped.
+   */
+  const askAgain = (): void => setAttempt((n) => n + 1);
+
   const [more, setMore] = useState(false);
   const loadMore = async (): Promise<void> => {
     if (!results || results.key !== key || more) return;
     const asking = key;
     setMore(true);
-    setFailure(null);
+    // Only its own. A failed re-ask is still true of the rows above, and
+    // fetching more of them does not make them fresh.
+    setFailure((before) => (before?.during === 'more' ? null : before));
     try {
       const page = await query(results.consumed, TAG_FILTER_DEFAULT_LIMIT);
       if (current.current !== asking) return;
@@ -186,7 +208,7 @@ export function Tags(): React.JSX.Element {
         };
       });
     } catch (error) {
-      if (current.current === asking) setFailure(error);
+      if (current.current === asking) setFailure({ during: 'more', error });
     } finally {
       setMore(false);
     }
@@ -456,15 +478,36 @@ export function Tags(): React.JSX.Element {
 
             {showing === null ? (
               failure !== null && !loading ? (
-                <Failed failure={failure} onRetry={() => setAttempt((n) => n + 1)} />
+                <Failed failure={failure.error} onRetry={askAgain} />
               ) : (
                 <p className="py-6 text-center text-sm text-ink-dim" data-testid="tag-loading">…</p>
               )
             ) : (
               <>
-                <p className="mb-1 text-[12px] text-ink-faint" data-testid="tag-count">
-                  {interpolate(zhTW.tagPage.count, { count: showing.total })}
-                </p>
+                <div className="mb-1 flex items-center justify-between">
+                  <p className="text-[12px] text-ink-faint" data-testid="tag-count">
+                    {interpolate(zhTW.tagPage.count, { count: showing.total })}
+                  </p>
+                  {/* Spec 7.9's offsets can miss a record when one above the
+                      boundary is deleted between two pages, and nothing on
+                      screen can tell. Asking again from the top is the
+                      answer to that, offered rather than left to a sync. */}
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={askAgain}
+                    data-testid="tag-refresh"
+                    className="min-h-11 px-1 text-[12px] text-ink-dim disabled:opacity-60"
+                  >
+                    {zhTW.tagPage.refresh}
+                  </button>
+                </div>
+                {failure?.during === 'list' && !loading ? (
+                  // The rows below are from the last answer that came back.
+                  // Said, because a list that failed to refresh looks exactly
+                  // like one that did.
+                  <Failed failure={failure.error} onRetry={askAgain} stale />
+                ) : null}
                 {showing.events.length === 0 ? (
                   <EmptyDay title={zhTW.tagPage.noResults} />
                 ) : (
@@ -481,8 +524,8 @@ export function Tags(): React.JSX.Element {
                     ))}
                   </div>
                 )}
-                {failure !== null ? (
-                  <Failed failure={failure} onRetry={() => void loadMore()} />
+                {failure?.during === 'more' ? (
+                  <Failed failure={failure.error} onRetry={() => void loadMore()} />
                 ) : showing.hasMore ? (
                   <button
                     type="button"
@@ -524,10 +567,15 @@ export function Tags(): React.JSX.Element {
   );
 }
 
-function Failed({ failure, onRetry }: { failure: unknown; onRetry: () => void }): React.JSX.Element {
+function Failed({ failure, onRetry, stale = false }: {
+  failure: unknown;
+  onRetry: () => void;
+  /** Older rows are still showing underneath. */
+  stale?: boolean;
+}): React.JSX.Element {
   return (
     <div className="flex flex-col items-center gap-2 py-6" data-testid="tag-failed">
-      <p className="text-sm text-ink-muted">{zhTW.tagPage.failed}</p>
+      <p className="text-sm text-ink-muted">{stale ? zhTW.tagPage.staleList : zhTW.tagPage.failed}</p>
       <p className="text-xs text-ink-dim">{describeFailure(failure)}</p>
       <button
         type="button"

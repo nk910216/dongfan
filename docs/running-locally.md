@@ -642,13 +642,33 @@ is the phone's own copy, so it shows with the API stopped.
     connection is needed. The delete sheet says it cannot confirm the usage
     and does not offer the delete.
 
-### Known gap, not something to report
+16. With a list showing, stop the worker and press the refresh beside the
+    count. (Not the sync control: with the worker stopped the sync fails
+    first, and the list is only asked again after a sync that succeeded.)
+    The rows stay, with a line above them saying they are the previous
+    results. Start the worker again and press retry: the list is asked
+    again from the top and the line goes away.
+17. The refresh beside the count asks the list again from the first page.
+    It is the way back for the one case paging cannot see (below).
 
-A record written offline with a tag, sitting in this phone's queue, while
-that tag is deleted -- here or on the other phone -- is refused by the
-server when it is finally sent, because the tag no longer exists. The
-delete sheet warns when this phone holds such a record. What the server
-should do instead has not been decided; see AGENTS.md.
+**A record whose tag was deleted**
+
+18. Turn the phone's network off, write up a record with a tag, and leave
+    it waiting. On the other phone (or this one with the network back but
+    before the queue sends -- the first is easier), delete that tag.
+19. Bring the network back. The record is refused and appears in the list
+    of records that would not send. Open its correction: the deleted tag is
+    shown as "deleted or unavailable", with a cross.
+20. Tap it to take it off and save. The record arrives once, with its other
+    tags, amount and note as they were.
+
+### Known limit, not something to report
+
+The list is paged by position (spec 7.9). If the other phone deletes a
+record above the point where one page ends while you are between pages,
+one record slips past the boundary and is never shown by "more". Nothing on
+screen can tell. The refresh beside the count, which asks again from the
+top, brings it back. This was decided rather than overlooked; see AGENTS.md.
 
 ## What cannot be checked here
 

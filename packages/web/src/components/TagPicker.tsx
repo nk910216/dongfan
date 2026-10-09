@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Check, Plus } from 'lucide-react';
+import { Check, Plus, X } from 'lucide-react';
 import { zhTW } from '@dongfan/shared';
 import type { StoredTag } from '../lib/db.js';
 
@@ -14,11 +14,22 @@ import type { StoredTag } from '../lib/db.js';
  * one for the same word would make two tags. So the form offers what has
  * been synced and says plainly that a new one needs to be online.
  *
- * A tag the other parent deleted while this form was open stays selected
- * and simply has no chip to show for it. It is sent anyway and the server
- * drops it, which is the honest order of events: this device cannot know
- * the tag is gone until it syncs, and silently editing what somebody chose
- * would be worse than sending something that turns out not to exist.
+ * **A selected id this device has no tag for is drawn, and can be taken
+ * off.** It is a tag deleted -- by the other parent, or here -- since the
+ * record was written, and the server refuses it: `VALIDATION_FAILED`, not a
+ * quiet drop. Leaving it selected is still right, because this device
+ * cannot know it is gone until it syncs and silently editing what somebody
+ * chose is worse than sending something that turns out not to exist. But it
+ * used to have no chip at all, which made a queued record carrying one a
+ * dead end: refused for good, and its correction form had nothing to tap to
+ * remove the cause. Found in review.
+ *
+ * Removing it goes through `onChange` like any other choice, so the form's
+ * own rules apply unchanged -- frozen while an outcome is unknown, and the
+ * record keeps its id. What freezes it on the add form is the fieldset
+ * around the fields and the form's `writable()`; the chip's own `disabled`
+ * matches its neighbours but is not passed by any form today, so removing
+ * it passes every test and it is not counted as the guard.
  */
 export function TagPicker({ tags, selected, onChange, onCreate, disabled = false }: {
   tags: readonly StoredTag[];
@@ -65,6 +76,9 @@ export function TagPicker({ tags, selected, onChange, onCreate, disabled = false
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
+
+  /** Chosen, with no tag on this device to show for it. */
+  const missing = selected.filter((id) => !tags.some((tag) => tag.id === id));
 
   const toggle = (id: string): void => {
     onChange(selected.includes(id) ? selected.filter((one) => one !== id) : [...selected, id]);
@@ -124,7 +138,23 @@ export function TagPicker({ tags, selected, onChange, onCreate, disabled = false
           );
         })}
 
-        {tags.length === 0 && !adding ? (
+        {missing.map((id) => (
+          <button
+            key={id}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(selected.filter((one) => one !== id))}
+            aria-label={zhTW.addEvent.tagMissingRemove}
+            data-testid="tag-missing"
+            data-tag-id={id}
+            className="flex min-h-11 items-center gap-1 rounded-full border border-dashed border-warn/70 px-3 text-[13px] text-warn-soft"
+          >
+            {zhTW.addEvent.tagMissing}
+            <X size={13} aria-hidden />
+          </button>
+        ))}
+
+        {tags.length === 0 && missing.length === 0 && !adding ? (
           <span className="text-[13px] text-ink-dim">{zhTW.addEvent.tagsEmpty}</span>
         ) : null}
 
