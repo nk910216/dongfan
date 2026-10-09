@@ -901,7 +901,7 @@ describe('a temperature', () => {
     await user.click(screen.getByTestId('submit'));
 
     await waitFor(() => expect(api.events).toHaveLength(1));
-    expect(api.events[0]?.value).toBe(toStored(36.5, { unit: 'C', scale: 10, min: 34, max: 42 }));
+    expect(api.events[0]?.value).toBe(toStored(36.5, { unit: '°C', scale: 10, min: 34, max: 42 }));
   });
 });
 
@@ -2512,6 +2512,36 @@ describe('looking back at a trend', () => {
     expect(await screen.findByTestId('stats-empty')).toHaveTextContent(zhTW.stats.empty);
   });
 
+  it('draws a value axis in the unit the type is read in', async () => {
+    // Spec 7.7: values up the side. There was only the highest value in a
+    // corner, so a bar's height meant nothing until it was compared by eye.
+    api.statsValues = { [today()]: 830 };
+    await openStats();
+
+    await waitFor(() => expect(screen.getByTestId('chart-unit')).toHaveTextContent('ml'));
+    const ticks = [...screen.getByTestId('chart-bar').querySelectorAll('text[data-axis="value"]')];
+    expect(ticks.map((tick) => tick.textContent)).toEqual(['0', '250', '500', '750', '1000']);
+  });
+
+  it('lifts a line of weights off zero, and says so', async () => {
+    // From zero, 7000 g to 7400 g is a flat line. The owner chose to start
+    // near the lowest reading on condition that the screen says so.
+    api.statsValues = { [today()]: 7400, [addLocalDays(today(), -1)]: 7000 };
+    const user = await openStats();
+    fireEvent.change(screen.getByTestId('stats-type'), { target: { value: 'weight' } });
+    await user.click(screen.getByTestId('kind-line'));
+
+    await waitFor(() => expect(screen.getByTestId('chart-lifted'))
+      .toHaveTextContent(interpolate(zhTW.stats.liftedAxis, { from: '7000g' })));
+    const ticks = [...screen.getByTestId('chart-line').querySelectorAll('text[data-axis="value"]')];
+    expect(ticks[0]?.textContent).toBe('7000');
+
+    // The same readings as bars start at zero, and nothing needs saying.
+    await user.click(screen.getByTestId('kind-bar'));
+    await waitFor(() => expect(screen.queryByTestId('chart-lifted')).not.toBeInTheDocument());
+    expect(screen.getByTestId('chart-bar').querySelector('text[data-axis="value"]')?.textContent).toBe('0');
+  });
+
   it('places each reading on its own day, not evenly across the chart', async () => {
     // Three weighings on the 1st, the 2nd and the 30th are three points.
     // Spaced by their position in the list they draw a month of steady
@@ -2532,10 +2562,16 @@ describe('looking back at a trend', () => {
     expect(dots).toHaveLength(2);
     const [first, last] = dots.map((dot) => Number(dot.getAttribute('cx')));
 
-    // The 30th of a thirty-day window belongs at the far right. Counting
-    // list positions instead would put it around three quarters across.
-    expect(last as number).toBeGreaterThan(0.9 * 320);
-    expect(first as number).toBeLessThan(0.1 * 320);
+    // Each sits exactly over its own day's label: the 1st over "1", the
+    // 30th over "30" at the far right. Counting list positions instead
+    // would put the second one around three quarters across. Measured
+    // against the labels rather than the chart's edges, so the value axis
+    // on the left does not move the goalposts.
+    const dateLabels = [...screen.getByTestId('chart-line').querySelectorAll('text[data-axis="date"]')];
+    const at = (text: string): number =>
+      Number(dateLabels.find((label) => label.textContent === text)?.getAttribute('x'));
+    expect(first).toBeCloseTo(at('1'), 5);
+    expect(last).toBeCloseTo(at('30'), 5);
   });
 
   it('labels the months of the axis even when nothing was recorded on one', async () => {
@@ -2553,7 +2589,7 @@ describe('looking back at a trend', () => {
       expect(screen.getByTestId('chart-bar')).toHaveAttribute('aria-label', '1'));
 
     // 1, 5, 10, 15, 20, 25, 30 of a thirty-day window.
-    const labels = [...screen.getByTestId('chart-bar').querySelectorAll('text')];
+    const labels = [...screen.getByTestId('chart-bar').querySelectorAll('text[data-axis="date"]')];
     expect(labels.map((label) => label.textContent)).toEqual(['1', '5', '10', '15', '20', '25', '30']);
   });
 

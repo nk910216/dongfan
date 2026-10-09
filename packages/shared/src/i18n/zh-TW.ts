@@ -187,6 +187,12 @@ export const zhTW = {
     hoursMinutes: '{hours} 小時 {minutes} 分',
     minutesOnly: '{minutes} 分',
     times: '{count} 次',
+    /** The value axis's unit, said once above it (spec 7.7). */
+    unitTimes: '次',
+    unitMinutes: '分鐘',
+    unitHours: '小時',
+    /** A line of readings that starts near its lowest one, said in words. */
+    liftedAxis: '縱軸從 {from} 起，不是從 0',
   },
 
   tagPage: {

@@ -1,3 +1,4 @@
+import type { Axis } from '../lib/chart-axis.js';
 import { axisLabel, dayIndex, daysOf } from '../lib/stats-range.js';
 import type { Range } from '../lib/stats-range.js';
 import type { StatPointDto } from '@dongfan/shared';
@@ -18,36 +19,46 @@ import type { StatPointDto } from '@dongfan/shared';
  *
  * `viewBox` with no width does the scaling, so the drawing has no idea how
  * wide the screen is and nothing is recomputed when the phone turns.
+ *
+ * **The value axis is drawn, with its unit** (spec 7.7). The scale's top is
+ * the axis's last tick rather than the highest value, so a bar reaching a
+ * gridline means that value and not "the most there was".
  */
 
 const WIDTH = 320;
 const HEIGHT = 130;
-const PAD_LEFT = 4;
+/** The value labels' strip on the left. */
+const PAD_LEFT = 30;
+const PAD_RIGHT = 4;
+const PAD_TOP = 6;
 const PAD_BOTTOM = 16;
 
-export function Chart({ points, range, start, kind, color, format }: {
+export function Chart({ points, range, start, kind, color, axis, unit, lifted }: {
   points: readonly StatPointDto[];
   range: Range;
   /** The first day of the window; the axis runs from here. */
   start: string;
   kind: 'bar' | 'line';
   color: string;
-  /** Turns a stored integer into something readable, for the top label. */
-  format: (value: number) => string;
+  /** The value axis, from `axisFor`: its ticks, its top and how to label them. */
+  axis: Axis;
+  /** The axis's unit as words, said once above it. */
+  unit: string;
+  /** Said above the chart when the scale does not start at zero; null when it does. */
+  lifted: string | null;
 }): React.JSX.Element | null {
   const days = daysOf(range, start);
   if (points.length === 0 || days.length === 0) return null;
 
-  const highest = Math.max(...points.map((p) => p.value));
-  // A flat run of zeros still needs a baseline to sit on rather than a
-  // division by zero, and an all-zero chart is a real answer: nothing
-  // happened.
-  const top = highest === 0 ? 1 : highest;
+  // Never a zero span: an all-zero chart still has an axis from `axisFor`,
+  // whose top is one step, and that is a real answer -- nothing happened.
+  const bottom = axis.bottom;
+  const span = axis.top > bottom ? axis.top - bottom : 1;
 
   const plotHeight = HEIGHT - PAD_BOTTOM;
-  const step = (WIDTH - PAD_LEFT) / days.length;
+  const step = (WIDTH - PAD_LEFT - PAD_RIGHT) / days.length;
   const x = (date: string): number => PAD_LEFT + (dayIndex(start, date) + 0.5) * step;
-  const y = (value: number): number => plotHeight - (value / top) * (plotHeight - 4);
+  const y = (value: number): number => plotHeight - ((value - bottom) / span) * (plotHeight - PAD_TOP);
 
   const plotted = points.map((point) => ({ point, cx: x(point.date), cy: y(point.value) }));
 
@@ -64,8 +75,11 @@ export function Chart({ points, range, start, kind, color, format }: {
 
   return (
     <div className="mx-3.5 rounded-2xl border border-line bg-surface px-2 pt-2 pb-1">
-      <div className="mb-1 px-2 text-right font-numeric text-[11px] text-ink-faint">
-        {format(highest)}
+      <div className="mb-1 flex justify-between gap-2 px-1 text-[11px] text-ink-faint">
+        <span data-testid="chart-unit">{unit}</span>
+        {/* Said in words whenever the scale does not start at zero, because
+            a line that does not is read as one that does unless told. */}
+        {lifted ? <span className="text-ink-dim" data-testid="chart-lifted">{lifted}</span> : null}
       </div>
       <svg
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
@@ -74,7 +88,29 @@ export function Chart({ points, range, start, kind, color, format }: {
         data-testid={`chart-${kind}`}
         aria-label={`${points.length}`}
       >
-        <line x1={PAD_LEFT} y1={plotHeight} x2={WIDTH} y2={plotHeight} stroke="#2e2921" strokeWidth={1} />
+        {axis.ticks.map((tick) => (
+          <g key={tick}>
+            {/* The zero line is the baseline, drawn a shade stronger. */}
+            <line
+              x1={PAD_LEFT}
+              y1={y(tick)}
+              x2={WIDTH - PAD_RIGHT}
+              y2={y(tick)}
+              stroke={tick === 0 ? '#2e2921' : '#221e19'}
+              strokeWidth={1}
+            />
+            <text
+              x={PAD_LEFT - 4}
+              y={y(tick) + 3}
+              textAnchor="end"
+              fill="#776e62"
+              fontSize={9}
+              data-axis="value"
+            >
+              {axis.label(tick)}
+            </text>
+          </g>
+        ))}
 
         {kind === 'bar'
           ? plotted.map(({ point, cy }) => (
@@ -115,6 +151,7 @@ export function Chart({ points, range, start, kind, color, format }: {
               textAnchor="middle"
               fill="#776e62"
               fontSize={9}
+              data-axis="date"
             >
               {label}
             </text>

@@ -35,7 +35,7 @@ export type Aggregation =
  * with scale 10 (spec 3.2).
  */
 export type ValueSpec = {
-  /** Unit symbol, safe to render as-is: 'ml', 'g', 'mm', 'C'. */
+  /** Unit symbol, safe to render as-is: 'ml', 'g', 'mm', '°C' (spec 3.1). */
   readonly unit: string;
   readonly scale: number;
   /** Bounds expressed in displayed units, not stored units. */

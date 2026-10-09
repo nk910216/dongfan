@@ -1157,6 +1157,25 @@ the days of the range for the same reason: taken from the points, a month with
 no reading on its first loses its marker entirely. A line of one point has no
 line in it, so readings are drawn as dots as well.
 
+**The value axis is drawn, in the unit the type is read in** (spec 7.7).
+It first was not: only the highest value sat in a corner, so a bar's height
+meant nothing until compared with it by eye. Found on a phone.
+`lib/chart-axis.ts` picks the ticks in the unit a parent reads -- whole
+times for a count, degrees rather than the tenths a temperature is stored
+in, minutes turning into hours past two of them -- and converts back to
+stored numbers only to place them. The scale's top is the last tick, so a
+bar reaching a gridline means that value.
+
+**Where it starts is the owner's decision, recorded in spec 7.7.** Bars,
+counts, totals and durations start at zero. A line of readings -- weight,
+height, head size, temperature -- starts near its lowest one, because from
+zero a fever is invisible, **and the screen says so in words** whenever it
+does. The caption is the condition the decision was made on, and it has a
+test of its own.
+
+The temperature unit was `'C'` in the config while spec 3.1 says `'°C'`.
+It is `'°C'` now, everywhere it is shown.
+
 **The chart re-asks when the app catches up.** It watches `syncedAt` and the
 local events, because the figures are the server's: without that the header
 could say "just synced" with the unsynced notice gone while the chart was

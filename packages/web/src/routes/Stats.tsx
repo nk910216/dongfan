@@ -8,6 +8,8 @@ import { Chart } from '../components/Chart.js';
 import { ErrorLine, describeFailure } from '../components/FieldErrors.js';
 import { PageMenu } from '../components/PageMenu.js';
 import { SyncState } from '../components/SyncState.js';
+import { axisFor, mayLift } from '../lib/chart-axis.js';
+import type { AxisUnit } from '../lib/chart-axis.js';
 import { RANGES, startEndingToday, windowFor } from '../lib/stats-range.js';
 import type { Range } from '../lib/stats-range.js';
 import { useStore } from '../lib/store.js';
@@ -44,6 +46,15 @@ const RANGE_LABEL: Record<Range, string> = {
   halfYear: zhTW.stats.halfYear,
   year: zhTW.stats.year,
 };
+
+function unitName(unit: AxisUnit): string {
+  switch (unit.kind) {
+    case 'times': return zhTW.stats.unitTimes;
+    case 'minutes': return zhTW.stats.unitMinutes;
+    case 'hours': return zhTW.stats.unitHours;
+    case 'symbol': return unit.symbol;
+  }
+}
 
 export function Stats(): React.JSX.Element {
   const { baby, now, unsynced, syncedAt, events, loadStats } = useStore();
@@ -118,6 +129,24 @@ export function Stats(): React.JSX.Element {
     if (type?.value) return `${formatValue(value, type.value)}${type.value.unit}`;
     return interpolate(zhTW.stats.times, { count: value });
   };
+
+  /**
+   * The value axis, in the unit this type is read in. Taken from the series'
+   * own aggregation rather than the config's, because the series is what is
+   * being drawn.
+   */
+  const aggregation = series?.aggregation ?? type?.aggregation ?? 'count';
+  const axis = axisFor(
+    aggregation,
+    type?.value ?? null,
+    points.reduce((most, point) => Math.max(most, point.value), 0),
+    mayLift(aggregation, type?.value ?? null, kind) && points.length > 0
+      ? { lowest: Math.min(...points.map((point) => point.value)) }
+      : null,
+  );
+  const lifted = axis.bottom > 0
+    ? interpolate(zhTW.stats.liftedAxis, { from: `${axis.label(axis.bottom)}${unitName(axis.unit)}` })
+    : null;
 
   /** Adding up a weight or a temperature is meaningless; a total is not. */
   const totalsMakeSense = series !== null
@@ -249,7 +278,9 @@ export function Stats(): React.JSX.Element {
               start={start}
               kind={kind}
               color={type?.color ?? '#e8b15c'}
-              format={format}
+              axis={axis}
+              unit={unitName(axis.unit)}
+              lifted={lifted}
             />
 
             {totalsMakeSense ? (

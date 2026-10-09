@@ -256,7 +256,7 @@ export const EVENT_TYPES: readonly EventTypeConfig[] = [
     timerEnabled: false,
     allDay: false,
     // Stored in tenths of a degree, so 36.5 C is the integer 365.
-    value: { unit: 'C', scale: 10, min: 34, max: 42 },
+    value: { unit: '°C', scale: 10, min: 34, max: 42 },
     valueRequired: true,
     aggregation: 'max',
     quickAction: false,
