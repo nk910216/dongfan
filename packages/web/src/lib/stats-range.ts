@@ -73,6 +73,28 @@ export function startEndingToday(range: Range, now: number, timeZone: string): s
   return addLocalDays(toLocalDate(now, timeZone), -(DAYS[range] - 1));
 }
 
+/**
+ * The start of the window being shown: the one somebody picked, kept
+ * across a change of range, or the one that ends today if they have not
+ * picked one.
+ *
+ * Switching range used to throw the picked start away and end the window
+ * today, so choosing 1 October, looking at 30 days and coming back to 7
+ * landed on the last week instead of on 1 October. Found on a phone.
+ *
+ * **A window may not run past today**, which is why a picked start is kept
+ * but not always shown: from 1 October, 30 days would end in November, and
+ * spec 7.7 is explicit that days which have not happened are zero-filled
+ * and drag the daily average down. So the window is moved back until it
+ * ends today -- and the picked start is still there for the next range it
+ * fits in.
+ */
+export function startFor(range: Range, picked: string | null, now: number, timeZone: string): string {
+  const latest = startEndingToday(range, now, timeZone);
+  if (picked === null) return latest;
+  return picked < latest ? picked : latest;
+}
+
 /** Where a date sits on the axis: 0 for `from`, counting whole days. */
 export function dayIndex(from: string, date: string): number {
   return daysBetween(from, date) - 1;

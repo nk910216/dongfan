@@ -2512,6 +2512,20 @@ describe('looking back at a trend', () => {
     expect(await screen.findByTestId('stats-empty')).toHaveTextContent(zhTW.stats.empty);
   });
 
+  it('keeps the start somebody picked when the range is changed and changed back', async () => {
+    // Found on a phone: 7 days, 30, then 7 again landed on the last week,
+    // throwing away the start that had been chosen.
+    const user = await openStats();
+    const picked = addLocalDays(today(), -40);
+    fireEvent.change(screen.getByTestId('stats-start'), { target: { value: picked } });
+    await waitFor(() => expect(screen.getByTestId('stats-start')).toHaveValue(picked));
+
+    await user.click(screen.getByTestId('range-month'));
+    expect(screen.getByTestId('stats-start')).toHaveValue(picked);
+    await user.click(screen.getByTestId('range-week'));
+    expect(screen.getByTestId('stats-start')).toHaveValue(picked);
+  });
+
   it('draws a value axis in the unit the type is read in', async () => {
     // Spec 7.7: values up the side. There was only the highest value in a
     // corner, so a bar's height meant nothing until it was compared by eye.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { addLocalDays, daysBetween, localToUtc, startOfLocalDay, toLocalDate } from '@dongfan/shared';
 import {
-  RANGES, axisLabel, dayIndex, daysIn, daysOf, startEndingToday, windowFor,
+  RANGES, axisLabel, dayIndex, daysIn, daysOf, startEndingToday, startFor, windowFor,
 } from '../src/lib/stats-range.js';
 
 /**
@@ -143,5 +143,35 @@ describe('how dense the axis labels are', () => {
     // Otherwise a year from the 15th opens with a bare axis until the 1st.
     expect(axisLabel('year', '2026-06-15', 0)).toBe('6');
     expect(axisLabel('halfYear', '2026-06-15', 0)).toBe('6');
+  });
+});
+
+describe('the start a window is shown from', () => {
+  /** Noon in Taipei on 10 October 2026, a named day rather than now. */
+  const now = localToUtc({ year: 2026, month: 10, day: 10, hour: 12 }, TAIPEI);
+
+  it('ends today until somebody picks a start', () => {
+    expect(startFor('week', null, now, TAIPEI)).toBe('2026-10-04');
+    expect(startFor('month', null, now, TAIPEI)).toBe('2026-09-11');
+  });
+
+  it('keeps a picked start through a change of range and back', () => {
+    // Found on a phone: 7 days, then 30, then 7 again landed on the last
+    // week instead of on the day that had been chosen.
+    const picked = '2026-08-01';
+    expect(startFor('week', picked, now, TAIPEI)).toBe(picked);
+    expect(startFor('month', picked, now, TAIPEI)).toBe(picked);
+    expect(startFor('week', picked, now, TAIPEI)).toBe(picked);
+  });
+
+  it('moves back rather than run into days that have not happened', () => {
+    // From 1 October, 30 days would end in November, and the days after
+    // today would be zero-filled into the average (spec 7.7).
+    const picked = '2026-10-01';
+    expect(startFor('week', picked, now, TAIPEI)).toBe(picked);
+    const month = startFor('month', picked, now, TAIPEI);
+    expect(windowFor('month', month).to).toBe('2026-10-10');
+    // And the pick is still there for the next range it fits.
+    expect(startFor('week', picked, now, TAIPEI)).toBe(picked);
   });
 });

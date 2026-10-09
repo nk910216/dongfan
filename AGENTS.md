@@ -1176,6 +1176,14 @@ test of its own.
 The temperature unit was `'C'` in the config while spec 3.1 says `'°C'`.
 It is `'°C'` now, everywhere it is shown.
 
+**A picked start survives a change of range.** Switching range used to
+reset the start so the window ended today, so 7 days, 30, then 7 again lost
+the day somebody had chosen. `startFor` keeps the pick and moves the window
+back only as far as it must to end today, because days that have not
+happened would be zero-filled into the average (spec 7.7); the pick is still
+there for the next range it fits. Leaving the page still forgets it: it is
+state, not in the address.
+
 **The chart re-asks when the app catches up.** It watches `syncedAt` and the
 local events, because the figures are the server's: without that the header
 could say "just synced" with the unsynced notice gone while the chart was
@@ -1392,6 +1400,20 @@ insets and `env()` resolves to nothing. The one in `flow.test.tsx`
 asserts only that the shell still carries the treatment, and says so,
 because that is how this would come back: silently, on the one device
 nobody develops on.
+
+### A header title is centred by a spacer, never by a negative margin
+
+Six screens centred their title with `-ml-11`, pulling it 44px left over the
+back button beside it. The title comes later in the tree, so it lay on top
+of the button and took most taps meant for it: in Chromium, a tap on the
+button's right half or on its icon hit the title, and only its top-left
+corner reached the link. On a phone that read as "back sometimes does
+nothing". Found by the owner; confirmed by hit-testing both layouts in a
+real browser, because jsdom does no layout and no test here can see it.
+
+Every header now ends with a `size-11` spacer as wide as the back button,
+which centres the title without anything overlapping. Stats and Tags already
+did it that way.
 
 ### The phone acceptance, and what it actually proved
 

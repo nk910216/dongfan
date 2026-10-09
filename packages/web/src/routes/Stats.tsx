@@ -10,7 +10,7 @@ import { PageMenu } from '../components/PageMenu.js';
 import { SyncState } from '../components/SyncState.js';
 import { axisFor, mayLift } from '../lib/chart-axis.js';
 import type { AxisUnit } from '../lib/chart-axis.js';
-import { RANGES, startEndingToday, windowFor } from '../lib/stats-range.js';
+import { RANGES, startFor, windowFor } from '../lib/stats-range.js';
 import type { Range } from '../lib/stats-range.js';
 import { useStore } from '../lib/store.js';
 
@@ -62,7 +62,13 @@ export function Stats(): React.JSX.Element {
   const [typeId, setTypeId] = useState('bottle');
   const [range, setRange] = useState<Range>('week');
   const [kind, setKind] = useState<'bar' | 'line'>('bar');
-  const [start, setStart] = useState(() => startEndingToday('week', now, baby.timezone));
+  /**
+   * The start somebody chose, or null until they choose one. Kept apart
+   * from the start being shown, which also depends on the range and on
+   * today; see `startFor`.
+   */
+  const [picked, setPicked] = useState<string | null>(null);
+  const start = startFor(range, picked, now, baby.timezone);
 
   const [series, setSeries] = useState<StatSeriesDto | null>(null);
   const [loading, setLoading] = useState(true);
@@ -193,10 +199,9 @@ export function Stats(): React.JSX.Element {
               data-testid={`range-${option}`}
               aria-pressed={range === option}
               onClick={() => {
+                // The start somebody picked stays picked; `startFor` decides
+                // where this range can begin from it.
                 setRange(option);
-                // The window moves with the range, so switching from a week
-                // to a year does not leave the year starting last Monday.
-                setStart(startEndingToday(option, now, baby.timezone));
               }}
               className={`min-h-11 flex-1 rounded-xl border text-[13px] ${
                 range === option
@@ -218,7 +223,7 @@ export function Stats(): React.JSX.Element {
               data-testid="stats-start"
               value={start}
               onChange={(e) => {
-                if (isRealLocalDate(e.target.value)) setStart(e.target.value);
+                if (isRealLocalDate(e.target.value)) setPicked(e.target.value);
               }}
               className="block min-h-11 w-full rounded-xl border border-line bg-surface px-4 py-3 font-numeric text-base outline-none"
             />
