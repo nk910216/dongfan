@@ -141,7 +141,7 @@ function BabyDetails(): React.JSX.Element {
             aria-label={zhTW.baby.birthDate}
             value={birthDate}
             onChange={(e) => { setBirthDate(e.target.value); setSaved(false); }}
-            className="rounded-xl border border-line bg-surface px-4 py-3.5 text-base outline-none focus:border-ink-faint disabled:opacity-60"
+            className="min-h-12 rounded-xl border border-line bg-surface px-4 py-3.5 text-base outline-none focus:border-ink-faint disabled:opacity-60"
           />
         </label>
       </fieldset>

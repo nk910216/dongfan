@@ -181,7 +181,7 @@ export function Stats(): React.JSX.Element {
         </div>
 
         <div className="mb-3 flex items-end gap-2 px-3.5">
-          <label className="flex-1">
+          <label className="min-w-0 flex-1">
             <span className="mb-1.5 block text-xs tracking-wide text-ink-faint">{zhTW.stats.start}</span>
             <input
               type="date"
@@ -191,7 +191,7 @@ export function Stats(): React.JSX.Element {
               onChange={(e) => {
                 if (isRealLocalDate(e.target.value)) setStart(e.target.value);
               }}
-              className="w-full rounded-xl border border-line bg-surface px-4 py-3 font-numeric text-base outline-none"
+              className="block min-h-11 w-full rounded-xl border border-line bg-surface px-4 py-3 font-numeric text-base outline-none"
             />
           </label>
           <div className="flex gap-1" role="group" aria-label={zhTW.stats.chart}>

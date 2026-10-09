@@ -453,8 +453,11 @@ export function Tags(): React.JSX.Element {
               ))}
             </div>
 
-            <div className="mb-3 flex items-end gap-2">
-              <label className="min-w-0 flex-1 text-[12px] text-ink-muted">
+            {/* Two equal columns, and nothing else on the row. A date on an
+                iPhone is wide (the year, month and day spelled out), and the clear button beside
+                them took the width the second one needed. */}
+            <div className="mb-1 grid grid-cols-2 gap-2">
+              <label className="min-w-0 text-[12px] text-ink-muted">
                 {zhTW.tagPage.from}
                 <input
                   type="date"
@@ -465,7 +468,7 @@ export function Tags(): React.JSX.Element {
                   className="mt-1 block min-h-11 w-full rounded-xl border border-line bg-surface px-2 text-[14px] text-ink"
                 />
               </label>
-              <label className="min-w-0 flex-1 text-[12px] text-ink-muted">
+              <label className="min-w-0 text-[12px] text-ink-muted">
                 {zhTW.tagPage.to}
                 <input
                   type="date"
@@ -476,17 +479,20 @@ export function Tags(): React.JSX.Element {
                   className="mt-1 block min-h-11 w-full rounded-xl border border-line bg-surface px-2 text-[14px] text-ink"
                 />
               </label>
-              {from !== '' || to !== '' ? (
+            </div>
+            {from !== '' || to !== '' ? (
+              <div className="flex justify-end">
                 <button
                   type="button"
                   onClick={() => update((next) => { next.delete('from'); next.delete('to'); })}
                   data-testid="tag-clear-range"
-                  className="min-h-11 shrink-0 px-1 text-[12px] text-ink-dim"
+                  className="min-h-11 px-1 text-[12px] text-ink-dim"
                 >
                   {zhTW.tagPage.clearRange}
                 </button>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
+            <div className="mb-2" />
 
             {waiting > 0 ? (
               <p className="mb-2 text-[12px] text-warn-soft" data-testid="tag-unsynced">

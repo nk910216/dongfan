@@ -41,6 +41,35 @@ body {
   overscroll-behavior-y: none;
 }
 
+/*
+ * Date and time inputs on iOS Safari size themselves to their text.
+ *
+ * A Chinese-locale date and time, year, month, day and the time of day
+ * spelled out, is wider than half a phone, and WebKit gives the
+ * native control a minimum width from it that `width: 100%` does not
+ * override. So the field pushed past its column: the edit screen scrolled
+ * sideways, the tag page's start date ran under its end date, and the
+ * statistics page's start date ran under the chart buttons. Found on a
+ * real iPhone; no desktop browser and no test showed it.
+ *
+ * `min-width: 0` lets the box be the width it is given, and dropping the
+ * native appearance is what makes WebKit honour it. Without the native
+ * appearance an empty field has no height of its own, so every one of
+ * these carries a minimum height where it is used. The value inherits the
+ * field's alignment, because the calendar headers centre theirs.
+ */
+input[type='date'],
+input[type='datetime-local'],
+input[type='time'] {
+  min-width: 0;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+input::-webkit-date-and-time-value {
+  text-align: inherit;
+}
+
 /* Every interactive target is at least 44px; one hand is holding a baby. */
 button,
 a {

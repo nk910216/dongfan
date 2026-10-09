@@ -64,7 +64,7 @@ export function DateTimeField({
           const instant = fromLocalInput(typed, timeZone);
           if (instant !== null) onChange(instant);
         }}
-        className="w-full rounded-xl border border-line bg-surface px-4 py-3.5 text-base outline-none focus:border-ink-faint"
+        className="block min-h-12 w-full rounded-xl border border-line bg-surface px-4 py-3.5 text-base outline-none focus:border-ink-faint"
       />
 
       {value === null ? (
