@@ -154,6 +154,50 @@ export const syncQuery = z.object({
   limit: z.coerce.number().int().positive().max(1000).default(200),
 });
 
+/** The page size spec 7.9 sets for the tag page: 50 by default, 200 at most. */
+export const TAG_FILTER_DEFAULT_LIMIT = 50;
+export const TAG_FILTER_MAX_LIMIT = 200;
+
+/**
+ * `GET /babies/:id/events?tags=a,b&from=&to=&sort=&limit=&offset=` (spec 7.9).
+ *
+ * The presence of `tags` is what makes a request this rather than an
+ * incremental sync; the route decides that before parsing.
+ *
+ * `tags` is any of them (OR), deduplicated, and every one has to be a UUID.
+ * The list reaches SQL as **one** bound parameter, a JSON array read back
+ * with `json_each`, so its length never touches the hundred-parameter limit
+ * (spec 4.2). The cap is there to bound the request, not the statement: a
+ * family has a handful of tags, and a hundred is far past any of them.
+ *
+ * `from` and `to` are optional and closed when given (spec 7.9). Unlike the
+ * statistics range there is no width cap: the result is paged, so a wide
+ * range costs a longer list rather than a bigger response.
+ */
+export const tagFilterQuery = z
+  .object({
+    tags: z
+      .string()
+      .transform((raw) => [...new Set(raw.split(',').map((t) => t.trim()).filter((t) => t !== ''))])
+      .pipe(z.array(UUID).min(1).max(100)),
+    from: z.string().refine(isRealLocalDate, { message: 'not a real date' }).optional(),
+    to: z.string().refine(isRealLocalDate, { message: 'not a real date' }).optional(),
+    sort: z.enum(['recent', 'oldest']).default('recent'),
+    limit: z.coerce.number().int().positive().max(TAG_FILTER_MAX_LIMIT).default(TAG_FILTER_DEFAULT_LIMIT),
+    offset: z.coerce.number().int().nonnegative().default(0),
+  })
+  .superRefine((q, ctx) => {
+    // Re-checked, because a failed `.refine` above does not stop this one
+    // from running on the raw strings (see `statsQuery`).
+    if (q.from === undefined || q.to === undefined) return;
+    if (!isRealLocalDate(q.from) || !isRealLocalDate(q.to)) return;
+    if (q.from > q.to) {
+      ctx.addIssue({ code: 'custom', message: 'from is after to', path: ['from'] });
+    }
+  });
+
+export type TagFilterQuery = z.infer<typeof tagFilterQuery>;
+
 /**
  * `GET /babies/:id/stats?types=a,b&from=&to=`
  *

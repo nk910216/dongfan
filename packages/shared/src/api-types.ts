@@ -46,6 +46,19 @@ export type EventPageDto = {
 
 export type DayDto = { date: string; events: EventDto[] };
 
+/**
+ * One page of the tag page's results (spec 7.9).
+ *
+ * `total` and the page are read in one transaction, so they describe the
+ * same moment: `hasMore` is `offset + events.length < total` and cannot
+ * disagree with the rows beside it.
+ */
+export type TaggedEventsDto = {
+  events: EventDto[];
+  total: number;
+  hasMore: boolean;
+};
+
 export type TypeSummaryDto = {
   typeId: string;
   lastStartedAt: number;

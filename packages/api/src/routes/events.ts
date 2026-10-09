@@ -1,12 +1,12 @@
 import { Hono } from 'hono';
 import {
   MAX_EVENTS_PER_DAY,
-  createEventRequest, deleteEventRequest, statsQuery, syncQuery, updateEventRequest,
+  createEventRequest, deleteEventRequest, statsQuery, syncQuery, tagFilterQuery, updateEventRequest,
   getEventType, isRealLocalDate, resolveEventTimes, toLocalDate, validateEvent,
 } from '@dongfan/shared';
 import type { EventIntent, FieldError } from '@dongfan/shared';
 import {
-  NEXT_REV, babyTagIds, eventsOnDate, eventsSince, findEvent, loadEvent, parseMetadata,
+  NEXT_REV, babyTagIds, eventsOnDate, eventsSince, eventsWithTags, findEvent, loadEvent, parseMetadata,
   tagIdsFor, toEventResponse,
 } from '../lib/events.js';
 import type { EventRow } from '../lib/events.js';
@@ -252,9 +252,27 @@ async function hasRunningTimer(DB: D1Database, babyId: string, typeId: string): 
 
 // ---------------------------------------------------------------- reading
 
-/** Incremental sync. The cursor is a rev, never a timestamp (spec 5.4). */
+/**
+ * Incremental sync, or the tag page's filter (spec 5.4, 7.9).
+ *
+ * One path, two questions, told apart by `tags`. They do not mix: a sync
+ * cursor on a filtered request would be read by nobody and silently mean
+ * nothing, so sending both is refused rather than half-honoured.
+ */
 babyEventRoutes.get('/:babyId/events', requireBabyAccess(), async (c) => {
-  const parsed = syncQuery.safeParse(c.req.query());
+  const query = c.req.query();
+  if (query.tags !== undefined) {
+    if (query.since !== undefined) {
+      return failValidation(c, [{ field: 'since', code: 'UNKNOWN_FIELD', params: {} }]);
+    }
+    const filter = tagFilterQuery.safeParse(query);
+    if (!filter.success) return failValidation(c, zodToFieldErrors(filter.error.issues));
+    const { tags, ...rest } = filter.data;
+    return c.json(await eventsWithTags(c.env.DB, c.get('babyId'), { tagIds: tags, ...rest }));
+  }
+
+  /** The cursor is a rev, never a timestamp (spec 5.4). */
+  const parsed = syncQuery.safeParse(query);
   if (!parsed.success) return failValidation(c, zodToFieldErrors(parsed.error.issues));
 
   const page = await eventsSince(c.get('db'), c.get('babyId'), parsed.data.since, parsed.data.limit);
