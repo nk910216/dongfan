@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ChevronLeft } from 'lucide-react';
 import { interpolate, isPlausibleBirthDate, zhTW } from '@dongfan/shared';
 import type { InviteDto, MemberDto } from '@dongfan/shared';
+import { ExportData } from '../components/ExportData.js';
 import { ErrorLine } from '../components/FieldErrors.js';
 import { JoinBaby } from '../components/JoinBaby.js';
 import { useSession } from '../lib/session.js';
@@ -36,6 +37,9 @@ export function Settings(): React.JSX.Element {
         <BabyDetails />
         <Invite />
         <Members me={me?.user.id ?? ''} />
+        <Section title={zhTW.settings.exportSection}>
+          <ExportData />
+        </Section>
         <Section title={zhTW.settings.joinSection}>
           <JoinBaby />
         </Section>

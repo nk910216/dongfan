@@ -126,7 +126,7 @@ own rather than being folded into a screen.
 | 2 | Renaming and deleting a tag: the `rev` bump before the association goes (spec 7.9) | **done** |
 | 3 | Tags on an event, in the add and edit forms (spec 7.3) | **done** |
 | 4 | The tag page: filtering `GET /events` by tag, with paging (spec 7.9) | **done** |
-| 5 | Data export: the endpoint and the settings entry (spec 5.1, 12) | |
+| 5 | Data export: the endpoint and the settings entry (spec 5.9) | **done** |
 | 6 | The M4 acceptance: what is checkable locally, and the phone steps | |
 
 **Stage 2 is done.** See "A tag write is an event write" below.
@@ -140,8 +140,7 @@ it is about to delete. Renaming a tag and attaching or detaching one on an
 event carry the same rule.
 
 What exists already: `GET`, `POST`, `PATCH` and `DELETE` for tags, tags on
-the add and edit forms, and the tag page with its filter. The export is
-absent.
+the add and edit forms, the tag page with its filter, and the export.
 
 ### A tag write is an event write
 
@@ -440,6 +439,45 @@ no chip, so the form looks the same whether the sync happened or not.
 The rename also writes the new name into the stored list before that sync,
 so the screen is right at once. Not separately observable -- the sync
 straight after brings the same name -- and not counted as covered.
+
+### The export is a file that must not look complete when it is not
+
+Spec 5.9 has the format and the scope. What a reader of the code needs:
+
+**The API returns JSON only; the CSV is made in the web layer** from the same
+document. Every heading, type name and option label in a readable CSV is
+interface copy, and the API never returns text for a person (spec 13.1).
+
+**Every page is read in one `batch()`**, so the file is one moment. The page
+count comes from a count taken first plus one spare page, for whatever is
+written between that count and the batch; the batch counts again inside its
+transaction and the rows must equal it, or the answer is an error. A test
+writes rows between the two -- one more is absorbed, three more are refused.
+Past the ceiling the answer is `EXPORT_TOO_LARGE`, never the part that fits.
+
+**The ceiling is the query budget, counted, not estimated.** 24 pages of
+2,000: the handler spends four statements besides its pages and the session
+and permission check two more, which is thirty. It was 25 until the test
+that counts the whole request at the ceiling came to 31.
+
+**SQLite builds the JSON** (`json_object` per row) and the Worker joins
+strings, because of the 10 ms CPU limit. Locally, 20,000 records are 6.2 MB
+(about 310 bytes each), so the ceiling is roughly 14 MB. **No local number
+says anything about CPU**: the Workers runtime freezes `performance.now()`
+between I/O, so a timing taken here read 0 ms, which is the point. The
+export's CPU cost in a deployed Worker is unmeasured and outstanding, like
+the other CPU measurements.
+
+**The web checks the document again** -- format, and `events.length` against
+`eventCount` -- before any file exists, and a failure of any kind leaves no
+file and says so. Success says a file was made and handed to the browser,
+which is all a page can know.
+
+The CSV puts a byte-order mark first (without it Excel reads the Chinese as
+nonsense), ends lines CRLF, quotes per RFC 4180, and prefixes any field that
+starts with `=`, `+`, `-`, `@`, a tab or a carriage return with `'`, guarding
+before quoting. `Blob.text()` strips a byte-order mark while decoding, so
+the test for it reads bytes.
 
 ### Two days, one set of hours
 

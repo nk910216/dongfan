@@ -670,6 +670,56 @@ one record slips past the boundary and is never shown by "more". Nothing on
 screen can tell. The refresh beside the count, which asks again from the
 top, brings it back. This was decided rather than overlooked; see AGENTS.md.
 
+## Exporting the records
+
+The export is in settings, under its own heading. It needs the API, and no
+HTTPS. The main case is a computer, so check there first.
+
+```sh
+npm run dev:all
+```
+
+### On a computer
+
+1. Open `http://localhost:5180` in a desktop browser and sign in.
+2. Settings, the export section. It says the file is for reading, is not a
+   backup and cannot be imported.
+3. **Download CSV.** A file named `dongfan-<today>.csv` is saved, and the
+   page says a file was made with N records and handed to the browser.
+4. Open it in Excel, Numbers or Google Sheets:
+   - Chinese is readable, not mojibake -- type names, details, tags, notes.
+   - One record per row, oldest first; the count of rows matches N.
+   - Times are in Taiwan time; a night across midnight has its end on the
+     next day and its length in minutes.
+   - A temperature reads 36.5 with the degree sign, not 365.
+5. To check the escaping, write a record with the note `=1+1, "quoted"` and
+   a second line (shift-enter is not available in every field; any line
+   break will do). Export again: the note is one cell, shows the text as
+   typed with a `'` in front, and calculates nothing.
+6. **Download JSON.** A file named `dongfan-<today>.json`; its `eventCount`
+   equals the number of entries in `events`, and the note is as typed.
+
+### On a phone
+
+7. The same two buttons. On iOS the file opens in a preview with a share
+   button rather than going straight to Files; saving it from there is the
+   browser's doing, and the page cannot tell whether it happened -- which is
+   why it only says the file was handed over.
+
+### When it should fail
+
+8. Turn the network off (or stop the API) and press either button. It says
+   the export failed and why, offers a retry, and no file appears.
+9. With the network still off, record something so it waits in the queue,
+   then come back to settings: a line says that record is not in the export.
+
+### Not in this round
+
+No date range and no settings for the export: spec 5.9 keeps the first
+version to everything at once. The ceiling (a little under 46,000 records)
+and `EXPORT_TOO_LARGE` cannot reasonably be reached by hand; they are pinned
+by the API tests. The export's CPU cost in a deployed Worker is unmeasured.
+
 ## What cannot be checked here
 
 | | Why |

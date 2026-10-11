@@ -90,6 +90,34 @@ export type RequestOptions = {
 };
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const response = await send(path, options);
+  if (response.status === 204) return undefined as T;
+
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw toFailure(response.status, body);
+  return body as T;
+}
+
+/**
+ * The body as text, for a file that is handed over as the server wrote it
+ * (the export, spec 5.9). Failures are the same failures as everywhere else.
+ */
+export async function apiRequestText(path: string, options: RequestOptions = {}): Promise<string> {
+  const response = await send(path, options);
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null);
+    throw toFailure(response.status, body);
+  }
+  try {
+    return await response.text();
+  } catch (cause) {
+    // The headers arrived and the body did not: as unknown as any other
+    // request that never finished.
+    throw new NetworkFailure(cause);
+  }
+}
+
+async function send(path: string, options: RequestOptions): Promise<Response> {
   const headers = new Headers({ 'Content-Type': 'application/json' });
   if (options.token) headers.set('Authorization', `Bearer ${options.token}`);
 
@@ -107,10 +135,5 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     // and conflating them is what loses a record (spec 6.1).
     throw new NetworkFailure(cause);
   }
-
-  if (response.status === 204) return undefined as T;
-
-  const body: unknown = await response.json().catch(() => null);
-  if (!response.ok) throw toFailure(response.status, body);
-  return body as T;
+  return response;
 }

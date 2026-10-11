@@ -5528,6 +5528,145 @@ describe('an iPhone used from a Safari tab', () => {
   });
 });
 
+describe('exporting the records', () => {
+  const today = (): string => toLocalDate(Date.now(), BABY.timezone);
+
+  /**
+   * The files handed to the browser, read back. `URL.createObjectURL` is the
+   * browser's, not this app's, so stubbing it leaves everything of ours
+   * running; jsdom has none of its own.
+   */
+  let saved: { name: string; blob: Blob }[] = [];
+  let pending: Blob | null = null;
+
+  function captureDownloads(): void {
+    saved = [];
+    URL.createObjectURL = vi.fn((blob: Blob) => {
+      pending = blob;
+      return 'blob:test';
+    });
+    URL.revokeObjectURL = vi.fn();
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      if (pending) saved.push({ name: this.download, blob: pending });
+      pending = null;
+    });
+  }
+
+  async function openExport(): Promise<ReturnType<typeof userEvent.setup>> {
+    captureDownloads();
+    const user = openSignedIn('/settings');
+    await screen.findByTestId('export');
+    return user;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('downloads the JSON the server wrote, whole', async () => {
+    api.tags = [{ id: 'tag-night', name: USER_CONTENT.tag, createdAt: 0 }];
+    api.add({ typeId: 'bottle', value: 120, startedAt: earlierToday(2 * HOUR), note: USER_CONTENT.note, tagIds: ['tag-night'] });
+    api.add({ typeId: 'diaper', startedAt: earlierToday(HOUR) });
+    const user = await openExport();
+
+    await user.click(screen.getByTestId('export-json'));
+
+    expect(await screen.findByTestId('export-ready')).toHaveTextContent(
+      interpolate(zhTW.settings.exportReady, { name: `dongfan-${today()}.json`, count: 2 }),
+    );
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.name).toBe(`dongfan-${today()}.json`);
+    const body = JSON.parse(await saved[0]!.blob.text()) as { events: { note: string }[]; tags: { name: string }[] };
+    expect(body.events).toHaveLength(2);
+    expect(body.events[0]?.note).toBe(USER_CONTENT.note);
+    expect(body.tags[0]?.name).toBe(USER_CONTENT.tag);
+    // From the server, not from what this device happens to hold.
+    expect(api.requests.some((entry) => entry.method === 'GET' && entry.path.endsWith('/export'))).toBe(true);
+  });
+
+  it('downloads a spreadsheet of the same records', async () => {
+    api.add({ typeId: 'bottle', value: 120, startedAt: earlierToday(2 * HOUR), note: 'one, "two"' });
+    const user = await openExport();
+
+    await user.click(screen.getByTestId('export-csv'));
+
+    await screen.findByTestId('export-ready');
+    expect(saved[0]?.name).toBe(`dongfan-${today()}.csv`);
+    // The bytes, because decoding to text strips a byte-order mark -- which
+    // is exactly what Excel does not do on a file with none.
+    const bytes = new Uint8Array(await saved[0]!.blob.arrayBuffer());
+    expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    const csv = await saved[0]!.blob.text();
+    expect(csv).toContain(zhTW.exportCsv.note);
+    expect(csv).toContain('"one, ""two"""');
+  });
+
+  it('says that records waiting on this phone are not in the file', async () => {
+    api.nextFailure = { status: 429, code: 'DAILY_LIMIT_EXCEEDED' };
+    await queueAdd(api.userId, BABY.id, 'queued-1', {
+      typeId: 'bottle', intent: 'record', startedAt: earlierToday(HOUR), endedAt: null,
+      value: 100, note: '', metadata: {}, tagIds: [],
+    });
+    await openExport();
+
+    expect(await screen.findByTestId('export-unsynced'))
+      .toHaveTextContent(interpolate(zhTW.settings.exportUnsynced, { count: 1 }));
+  });
+
+  it('says it failed, saves nothing, and can try again', async () => {
+    api.exportFailure = { status: 500, code: 'INTERNAL' };
+    const user = await openExport();
+
+    await user.click(screen.getByTestId('export-json'));
+
+    const failed = await screen.findByTestId('export-failed');
+    expect(failed).toHaveTextContent(zhTW.settings.exportFailed);
+    expect(failed).toHaveTextContent(zhTW.error.INTERNAL);
+    expect(screen.queryByTestId('export-ready')).not.toBeInTheDocument();
+    expect(saved).toHaveLength(0);
+
+    api.exportFailure = null;
+    await user.click(screen.getByTestId('export-retry'));
+    await screen.findByTestId('export-ready');
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.name.endsWith('.json')).toBe(true);
+  });
+
+  it('says when there are too many records, rather than handing over part of them', async () => {
+    api.exportFailure = { status: 413, code: 'EXPORT_TOO_LARGE' };
+    const user = await openExport();
+
+    await user.click(screen.getByTestId('export-csv'));
+
+    expect(await screen.findByTestId('export-failed')).toHaveTextContent(zhTW.error.EXPORT_TOO_LARGE);
+    expect(saved).toHaveLength(0);
+  });
+
+  it('refuses a document that holds fewer records than it says', async () => {
+    // The server checks this as well. This is the last point before a file
+    // exists, and a short file looks exactly like a whole one.
+    api.add({ typeId: 'diaper', startedAt: earlierToday(HOUR) });
+    api.exportShort = true;
+    const user = await openExport();
+
+    await user.click(screen.getByTestId('export-json'));
+
+    expect(await screen.findByTestId('export-failed')).toHaveTextContent(zhTW.settings.exportIncomplete);
+    expect(saved).toHaveLength(0);
+  });
+
+  it('says it is offline, and asks nothing', async () => {
+    const user = await openExport();
+    goOffline();
+
+    await user.click(screen.getByTestId('export-csv'));
+
+    expect(await screen.findByTestId('export-failed')).toHaveTextContent(zhTW.error.offline);
+    expect(api.requests.some((entry) => entry.path.endsWith('/export'))).toBe(false);
+    expect(saved).toHaveLength(0);
+  });
+});
+
 describe('the settings page', () => {
   async function openSettings(): Promise<ReturnType<typeof userEvent.setup>> {
     const user = openSignedIn();

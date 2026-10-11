@@ -195,6 +195,24 @@ export const zhTW = {
     liftedAxis: '縱軸從 {from} 起，不是從 0',
   },
 
+  /** The export's spreadsheet columns, in order (spec 5.9). */
+  exportCsv: {
+    date: '日期',
+    startedAt: '開始時間',
+    endedAt: '結束時間',
+    type: '類型',
+    value: '數值',
+    unit: '單位',
+    minutes: '時長（分鐘）',
+    details: '詳細資料',
+    tags: '標籤',
+    note: '備註',
+    id: '紀錄 ID',
+    /** Between a detail's name and its value, and between items in one cell. */
+    detailSeparator: '：',
+    listSeparator: '、',
+  },
+
   tagPage: {
     title: '標籤',
     /** What tapping a tag does here, said once above the list. */
@@ -356,6 +374,24 @@ export const zhTW = {
     joinUnknown: '送出後沒有收到回應，不確定有沒有加入。請再按一次加入，它會先去確認。',
     switchBaby: '切換寶寶',
 
+    /* Spec 5.9. Not a backup, and the screen says so. */
+    exportSection: '匯出資料',
+    exportHint: '下載這個寶寶的全部紀錄。CSV 可以用試算表開啟，JSON 保留完整欄位。匯出檔是給人閱讀的，不是備份，也無法匯回 app。',
+    exportCsv: '下載 CSV',
+    exportJson: '下載 JSON',
+    exporting: '正在準備檔案…',
+    /** The records waiting on this phone are not on the server, so not in the file. */
+    exportUnsynced: '此手機有 {count} 筆紀錄尚未同步。匯出只包含伺服器已收到的資料，這幾筆不會在檔案裡。',
+    /*
+     * A web page cannot know whether the browser saved the file, so this says
+     * what happened and no more.
+     */
+    exportReady: '已產生 {name}（{count} 筆），已交給瀏覽器下載。',
+    exportFailed: '匯出失敗，沒有產生檔案。',
+    /** The file came back but did not hold what it said it held. */
+    exportIncomplete: '收到的資料不完整，沒有產生檔案。請再試一次。',
+    exportRetry: '重試',
+
     membersSection: '家庭成員',
     roleOwner: '建立者',
     roleMember: '家人',
@@ -445,6 +481,8 @@ export const zhTW = {
     ACTIVE_TIMER_EXISTS: '對方已經開始記錄這個項目',
     /** Renaming a tag to a name this baby already has (spec 7.9). */
     TAG_NAME_TAKEN: '已經有同名的標籤',
+    /** Spec 5.9: too many records to read in one request; never a partial file. */
+    EXPORT_TOO_LARGE: '紀錄太多，無法一次匯出',
     INTERNAL: '伺服器發生錯誤，請稍後再試',
     UNKNOWN: '發生未預期的錯誤，請稍後再試',
     offline: '目前離線，無法完成這個操作',

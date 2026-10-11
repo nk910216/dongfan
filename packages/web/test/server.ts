@@ -56,6 +56,13 @@ class Api {
   /** Makes the statistics endpoint refuse, for the failure state. */
   failStats = false;
   /**
+   * How the export answers, for the failures the settings page has to tell
+   * apart from success (spec 5.9): a refusal by code, or a document that
+   * says it holds more records than it does.
+   */
+  exportFailure: Failure | null = null;
+  exportShort = false;
+  /**
    * What the statistics endpoint reports for a date.
    *
    * Set by the tests rather than derived from `events`: the aggregation is
@@ -254,6 +261,8 @@ class Api {
     this.nextFailure = null;
     this.loseNextResponse = false;
     this.failStats = false;
+    this.exportFailure = null;
+    this.exportShort = false;
     this.statsValues = {};
     this.loginFails = false;
     this.gate = null;
@@ -638,6 +647,35 @@ export const server = setupServer(
    * integers in stored units, the aggregation named -- and the query
    * actually reaching the server.
    */
+  /**
+   * The export, in the shape the API suite proves against a real database:
+   * live records oldest first, the tags, the baby, and a count that matches.
+   */
+  http.get('/api/babies/:babyId/export', async ({ request }) => {
+    await record(request);
+    if (api.exportFailure) return refuse(api.exportFailure);
+
+    const live = api.events
+      .filter((event) => event.deletedAt === null)
+      .sort((a, b) => a.startedAt - b.startedAt || (a.id < b.id ? -1 : 1));
+    const events = live.map((event) => ({
+      id: event.id, typeId: event.typeId, startedAt: event.startedAt, endedAt: event.endedAt,
+      localDate: event.localDate, value: event.value, note: event.note, metadata: event.metadata,
+      active: event.active, tagIds: [...event.tagIds].sort(), createdBy: event.createdBy,
+      createdAt: event.createdAt, updatedAt: event.updatedAt,
+    }));
+    return HttpResponse.json({
+      format: 'dongfan-export',
+      formatVersion: 1,
+      exportedAt: Date.now(),
+      baby: { id: BABY.id, nickname: BABY.nickname, gender: BABY.gender, birthDate: BABY.birthDate, timezone: BABY.timezone },
+      types: {},
+      tags: api.tags,
+      eventCount: api.exportShort ? events.length + 1 : events.length,
+      events,
+    });
+  }),
+
   http.get('/api/babies/:babyId/stats', async ({ request }) => {
     await record(request);
     const url = new URL(request.url);

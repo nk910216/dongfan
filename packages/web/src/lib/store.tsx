@@ -3,10 +3,10 @@ import type { ReactNode } from 'react';
 import { getEventType, toLocalDate, zhTW } from '@dongfan/shared';
 import { Message } from '../components/Message.js';
 import type {
-  BabyDto, EventDto, InviteDto, MemberDto, MembersDto, StatsDto, SummaryDto, TaggedEventsDto,
+  BabyDto, EventDto, ExportDto, InviteDto, MemberDto, MembersDto, StatsDto, SummaryDto, TaggedEventsDto,
   TypeSummaryDto,
 } from '@dongfan/shared';
-import { ApiFailure, OfflineError, apiRequest, isOffline } from './api.js';
+import { ApiFailure, OfflineError, apiRequest, apiRequestText, isOffline } from './api.js';
 import * as local from './db.js';
 import {
   getQueued, keepDraft, listDrafts, listQueued, listTags, putTags, reconcileDrafts, removeDraft,
@@ -143,6 +143,13 @@ export type Store = {
    * hold all of is not something to assemble here.
    */
   loadTagged: (query: TaggedQuery) => Promise<TaggedEventsDto>;
+  /**
+   * Everything the server holds for this baby, as the server wrote it
+   * (spec 5.9). Thrown rather than returned when it cannot be had, or when
+   * what came back is not the whole of what it says it is -- a short file is
+   * the one result this must never hand over.
+   */
+  exportData: () => Promise<{ document: ExportDto; json: string }>;
   refresh: () => Promise<void>;
   /**
    * Sends one waiting add now, exactly as it stands, and resets its
@@ -221,6 +228,14 @@ export type Store = {
   removeMember: (userId: string) => Promise<void>;
   editBaby: (patch: { nickname?: string; gender?: string; birthDate?: string }) => Promise<void>;
 };
+
+/** The export arrived but is not what it claims to be. */
+export class ExportIncomplete extends Error {
+  constructor() {
+    super('The export did not hold what it said it held');
+    this.name = 'ExportIncomplete';
+  }
+}
 
 export type TaggedQuery = {
   tagIds: readonly string[];
@@ -894,17 +909,46 @@ export function StoreProvider({ baby, children }: { baby: BabyDto; children: Rea
     [call, baby.id],
   );
 
+  const exportData = useCallback(async (): Promise<{ document: ExportDto; json: string }> => {
+    if (isOffline()) throw new OfflineError();
+    let json: string;
+    try {
+      json = await apiRequestText(`/babies/${baby.id}/export`, { token: token ?? undefined });
+    } catch (error) {
+      if (error instanceof ApiFailure && error.status === 401) expire();
+      throw error;
+    }
+
+    let document: ExportDto;
+    try {
+      document = JSON.parse(json) as ExportDto;
+    } catch {
+      throw new ExportIncomplete();
+    }
+    // The server checks this too. Checked again here because this is the
+    // last point before a file exists, and whatever happened in between --
+    // a proxy, a cut connection that still parsed -- happened after it.
+    if (
+      document.format !== 'dongfan-export'
+      || !Array.isArray(document.events)
+      || document.events.length !== document.eventCount
+    ) {
+      throw new ExportIncomplete();
+    }
+    return { document, json };
+  }, [baby.id, token, expire]);
+
   const value = useMemo<Store>(
     () => ({
       baby, scope, events, summary: summary as SummaryDto, now, loading, stale, syncing, syncedAt,
-      unsynced, stopDrafts, tags, createTag, renameTag, deleteTag, loadTagged,
+      unsynced, stopDrafts, tags, createTag, renameTag, deleteTag, loadTagged, exportData,
       refresh: settle, findEvent, addEvent, updateEvent, stopTimer,
       loadStats,
       discardStop, removeEvent, retryUnsynced, correctUnsynced, abandonUnsynced,
       listMembers, createInvite, removeMember, editBaby,
     }),
     [baby, scope, events, summary, now, loading, stale, syncing, syncedAt, unsynced, stopDrafts,
-      tags, createTag, renameTag, deleteTag, loadTagged, settle,
+      tags, createTag, renameTag, deleteTag, loadTagged, exportData, settle,
       loadStats,
       findEvent, addEvent, updateEvent, stopTimer, discardStop, removeEvent, retryUnsynced,
       correctUnsynced, abandonUnsynced, listMembers, createInvite, removeMember, editBaby],
