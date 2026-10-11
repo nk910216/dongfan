@@ -6,6 +6,7 @@ import { requireSession } from './middleware/auth.js';
 import { authRoutes } from './routes/auth.js';
 import { babyRoutes } from './routes/babies.js';
 import { babyEventRoutes, eventRoutes } from './routes/events.js';
+import { exportRoutes } from './routes/export.js';
 import { meRoutes } from './routes/me.js';
 import { tagRoutes } from './routes/tags.js';
 import type { Env } from './lib/types.js';
@@ -35,6 +36,7 @@ app.route('/api/me', meRoutes);
 app.route('/api/babies', babyRoutes);
 app.route('/api/babies', babyEventRoutes);
 app.route('/api/babies', tagRoutes);
+app.route('/api/babies', exportRoutes);
 app.route('/api/events', eventRoutes);
 
 app.notFound((c) => (c.req.path.startsWith('/api/') ? fail(c, 'NOT_FOUND') : c.text('Not found', 404)));

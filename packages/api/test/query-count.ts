@@ -20,7 +20,7 @@ import app from '../src/index.js';
  */
 export const MAX_QUERIES_PER_REQUEST = 30;
 
-type Counter = { count: number };
+export type Counter = { count: number };
 
 /**
  * Wraps a D1 binding so every executed statement is counted.
@@ -35,7 +35,7 @@ type Counter = { count: number };
  * statement that is never executed costs nothing, and one bound and run
  * twice costs twice.
  */
-function counting(real: D1Database, counter: Counter): D1Database {
+export function counting(real: D1Database, counter: Counter): D1Database {
   const wrapStatement = (statement: D1PreparedStatement): D1PreparedStatement =>
     new Proxy(statement, {
       get(target, property, receiver) {

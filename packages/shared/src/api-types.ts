@@ -167,3 +167,37 @@ export type MembersDto = { members: MemberDto[] };
 export type InviteDto = { code: string; expiresAt: number };
 
 export type LoginDto = { token: string; user: UserDto };
+
+/**
+ * `GET /babies/:id/export` (spec 5.9). Not a backup and not importable.
+ *
+ * Values are stored integers and times are UTC epoch milliseconds, as
+ * everywhere in the API; `types` says how each type's values read.
+ */
+export type ExportEventDto = {
+  id: string;
+  typeId: string;
+  startedAt: number;
+  endedAt: number | null;
+  localDate: string;
+  value: number;
+  note: string;
+  metadata: Record<string, string>;
+  active: boolean;
+  tagIds: string[];
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type ExportDto = {
+  format: 'dongfan-export';
+  formatVersion: 1;
+  exportedAt: number;
+  baby: { id: string; nickname: string; gender: string; birthDate: string; timezone: string };
+  types: Record<string, { unit: string | null; scale: number | null; aggregation: string }>;
+  tags: TagDto[];
+  /** Equal to `events.length`; the client checks it before handing over a file. */
+  eventCount: number;
+  events: ExportEventDto[];
+};
